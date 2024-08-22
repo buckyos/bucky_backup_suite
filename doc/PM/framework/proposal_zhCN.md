@@ -155,7 +155,7 @@ engine.start_transfer_checkpoint(
     uncomplete_strategy
     ) {
 
-        let source_reader = make_source_reader(meta.source_interface_url, meta.task_unique_name, meta.source_session_id);
+        let source_reader = source_reader_from_url(meta.source_interface_url, meta.task_unique_name, meta.source_session_id);
         let target = select_target(meta.target_service_type, meta.target_service);
         let (last_complete_checkpoint, last_checkpoint, transfering_checkpoints) = target.get_last_checkpoint(meta.task_unique_name);
         let mut abort_checkpoints = vec![];
@@ -198,7 +198,7 @@ target.start_transfer_checkpoint(meta) {
     for space in spaces {
         space.write_header(make_header(space));
         for item in space.items() {
-            let source_reader = make_source_reader(meta, meta.get_item(item));
+            let source_reader = source_reader_from_url(meta, meta.get_item(item));
             let chunk = source_reader.read_chunk(item.path, item.offset, item.length);
             let chunk = crypto(chunk);
             space.write_chunk(chunk);
