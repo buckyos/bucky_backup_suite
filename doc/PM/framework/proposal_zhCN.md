@@ -17,9 +17,7 @@
 
 \*\* 各模块之间用 http 协议相互调用，以解除各扩展模块之间的依赖，提高扩展性和稳定性
 
-# Engine
-
-## Pseudo-Code
+# Pseudo-Code
 
 ```rust
 source.start_transfer_checkpoint(task_friendly_name,
@@ -249,5 +247,114 @@ engine.export() {
             toml.write_target_attributes(content);
         }
     }
+}
+```
+
+# CheckPointMeta
+
+```rust
+// All times should use UTC time. Unless otherwise stated, they should be accurate to the second.
+
+struct CheckPointMeta<ServiceItemMetaType, ServiceCheckPointMeta, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
+    task_friendly_name: String,
+    task_uuid: String,
+    version: CheckPointVersion,
+    prev_versions: Vec<CheckPointVersion>, // all versions this checkpoint depends on
+    create_time: SystemTime,
+    complete_time: SystemTime,
+
+    root: StorageItem<ServiceItemMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>,
+
+    // space size
+    occupied_size: u64, // The really size the data described by this object occupied in the storage.
+    consume_size: u64, // The size the data described by this object consumed in the storage, `consume_size` is greater than `occupied_size`, when the storage unit size is greater than 1 byte.
+    all_prev_version_occupied_size: u64,
+    all_prev_version_consume_size: u64,
+
+    // Special for services
+    service_meta: ServiceCheckPointMeta,
+}
+
+struct CheckPointVersion {
+    time: SystemTime,
+    seq: u64,
+}
+
+struct StorageItemAttributes {
+    create_time: SystemTime,
+    last_update_time: SystemTime,
+    owner: String,
+    group: String,
+    permissions: String,
+}
+
+// common meta
+macro_rules! storage_item_common_meta {
+    ($service_common_meta_type: ty) => {
+        name: String,
+        attributes: StorageItemAttributes,
+        parent: Option<Week<DirectoryMeta>>,
+        service_meta: $service_common_meta_type, // any service can add meta here.
+    }
+}
+
+enum StorageItem<ServiceMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
+    Dir<DirectoryMeta<ServiceMetaType, ServiceDirMetaType>>,
+    File<FileMeta<ServiceMetaType, ServiceFileMetaType>>,
+    Link<LinkMeta<ServiceMetaType, ServiceLinkMetaType>>,
+    Log<LogMeta<ServiceMetaType, ServiceLogMetaType>>
+}
+
+struct DirectoryMeta<ServiceMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
+    storage_item_common_meta!(ServiceMetaType)
+    children: Vec<StorageItem<ServiceMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>>,
+    service_meta: ServiceDirMetaType,
+}
+
+struct FileMeta<ServiceMetaType, ServiceFileMetaType> {
+    storage_item_common_meta!(ServiceMetaType)
+    hash: String,
+    size: u64,
+    service_meta: ServiceFileMetaType,
+}
+
+struct LinkMeta<ServiceMetaType, ServiceLinkMetaType> {
+    storage_item_common_meta!(ServiceMetaType)
+    target: String,
+    is_hard: bool,
+    service_meta: ServiceLinkMetaType,
+}
+
+enum LogAction {
+    Remove,
+    Recover,
+    MoveFrom(String),
+    MoveTo(String),
+    CopyFrom(String),
+    UpdateAttributes, // new attributes will be set in `attributes` field
+}
+
+struct LogMeta<ServiceMetaType, ServiceLogMetaType> {
+    storage_item_common_meta!(ServiceMetaType)
+    action: LogAction,
+    service_meta: ServiceLogMetaType,
+}
+
+// meta for DMC, sample.
+type ServiceMetaTypeDMC = ();
+type ServiceDirMetaTypeDMC = ();
+type ServiceLinkMetaTypeDMC = ();
+type ServiceLogMetaTypeDMC = ();
+
+struct ServiceFileMetaTypeDMC {
+    pos: u64, // Where this file storage in sector.
+    chunk_offset: u64, // If this file is too large, it will be cut into several chunks and stored in different sectors.
+        // the `offset` is the offset of the chunk in total file.
+    chunk_size: u64, //
+    sector_count: u32, // The sector count consumed by the total file.
+}
+
+struct ServiceCheckPointMetaDMC {
+    sectors: Vec<SectorId>, // Sectors this checkpoint consumed. Some checkpoint will consume several sectors.
 }
 ```
