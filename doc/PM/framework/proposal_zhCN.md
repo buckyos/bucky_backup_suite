@@ -346,12 +346,16 @@ type ServiceDirMetaTypeDMC = ();
 type ServiceLinkMetaTypeDMC = ();
 type ServiceLogMetaTypeDMC = ();
 
-struct ServiceFileMetaTypeDMC {
+struct FileChunkPositionDMC {
+    sector: SectorId,
     pos: u64, // Where this file storage in sector.
-    chunk_offset: u64, // If this file is too large, it will be cut into several chunks and stored in different sectors.
+    offset: u64, // If this file is too large, it will be cut into several chunks and stored in different sectors.
         // the `offset` is the offset of the chunk in total file.
-    chunk_size: u64, //
-    sector_count: u32, // The sector count consumed by the total file.
+    size: u64, //
+}
+
+struct ServiceFileMetaTypeDMC {
+    chunks: Vec<FileChunkPositionDMC>
 }
 
 struct ServiceCheckPointMetaDMC {
