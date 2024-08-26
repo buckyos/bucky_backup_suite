@@ -20,6 +20,109 @@
 # Pseudo-Code
 
 ```rust
+// Prepare the metadata before transfering the data to storage.
+// metadata should contain:
+// 1. data items should transfering,
+// 2. prev-checkpoint the new checkpoint depending on,
+// 3. measure the space size, it should be larger the consume really.
+// 4. do not write anything in this interface, maybe it will not recover the state when it abort unexpected.
+engine.prepare_checkpoint(
+    task_friendly_name,
+    task_uuid,
+    (target_service_type, target_service_name),
+    (source_type, source_interface_url, source_session_id),
+    is_delta,
+    ) -> CheckPointMeta {
+
+        let source_reader = source_reader_from_url(source_interface_url, task_uuid, source_session_id);
+        let target = select_target(target_service_type, target_service);
+        let (last_complete_checkpoint, last_checkpoint, transfering_checkpoints) = target.get_last_checkpoint(task_uuid);
+        let checkpoint_version = target.generate_checkpoint_version(task_uuid);
+        let mut meta_builder = MetaBuilder::new()
+            .task_uuid(task_uuid)
+            .task_friendly(task_friendly_name)
+            .target_service(target_service_type, target_service_name)
+            .checkpoint(checkpoint_version)
+            .source(source_type, souce_interface_url, source_session_id);
+
+        let prev_checkpoints = if is_delta {
+            meta_builder.prev_checkpoint(last_complete_checkpoint.version);
+
+            let mut prev_checkpoints = vec![last_complete_checkpoint];
+            let mut cur_checkpoints = &last_complete_checkpoint;
+            while let Some(prev_checkpoint_version) = cur_checkpoints.prev_checkpoint() {
+                let prev_checkpoint = target.get_checkpoint_by_version(prev_checkpoint_version);
+                prev_checkpoints.push(prev_checkpoint);
+            }
+        } else {
+            vec![]
+        };
+
+        while let Some(item) = source_reader.get_next_item() {
+            // * item may be a file/directory/link, we should process it separately.
+            if is_delta {
+                let last_stat = prev_checkpoints.get_stat(item.path);
+                if last_stat.is_none() {
+                    meta_builder.add_item(item);
+                } else if !last_stat.is_same_as(item.stat) {
+                    let diff = target.diff(last_stat, item);
+                    if diff.is_some() {
+                        meta_builder.add_item(diff);
+                    } else {
+                        meta_builder.add_item(item);
+                    }
+                }
+            } else {
+                meta_builder.add_item(item);
+            }
+        }
+
+        if is_delta {
+            while let Some(item) = prev_checkpoints.get_next_item() {
+                if !source_reader.is_exists(item.path) {
+                    meta_builder.add_log(Log::Remove(item.path));
+                }
+            }
+        }
+
+        meta_builder.build()
+}
+```
+
+-   The definition of `CheckPointMeta` is in [this page](./meta.md).
+
+```rust
+engine.start_transfer_checkpoint(
+    meta: CheckPointMeta,
+    uncomplete_strategy
+    ) {
+
+        let source_reader = source_reader_from_url(meta.source_interface_url, meta.task_unique_name, meta.source_session_id);
+        let target = select_target(meta.target_service_type, meta.target_service);
+        let (last_complete_checkpoint, last_checkpoint, transfering_checkpoints) = target.get_last_checkpoint(meta.task_unique_name);
+        let mut abort_checkpoints = vec![];
+
+        for transfering_checkpoint in transfering_checkpoints {
+            if uncomplete_strategy.check_abort(transfering_checkpoint, last_complete_checkpoint, REASON_TRANSFER_NEW_CHECKPOINT) {
+                // abort it when new checkpoint prepared.
+                abort_checkpoints.push(transfering_checkpoint);
+            }
+        }
+
+        local_meta_storage.begin_checkpoint(meta, abort_checkpoints);
+
+        target.start_transfer_checkpoint(meta);
+
+        for abort_checkpoint in abort_checkpoints {
+            abort_checkpoint.abort();
+            // remove when it's aborted by target
+            local_meta_storage.abort(abort_checkpoint);
+            target.abort(abort_checkpoint);
+        }
+}
+```
+
+```rust
 source.start_transfer_checkpoint(task_friendly_name,
     task_uuid,
     param,
@@ -85,100 +188,6 @@ local_file_source.check_point_complete(origin_stat, prepared_stat) {
 ```
 
 ```rust
-// Prepare the metadata before pushing the data to storage.
-// metadata should contain:
-// 1. data items should pushing up,
-// 2. prev-checkpoint the new checkpoint depending on,
-// 3. measure the space size, it should be larger the consume really.
-// 4. do not write anything in this interface, maybe it will not recover the state when it abort unexpected.
-engine.prepare_checkpoint(
-    task_friendly_name,
-    task_uuid,
-    (target_service_type, target_service_name),
-    (source_type, source_interface_url, source_session_id),
-    is_delta,
-    ) -> CheckPointMeta {
-
-        let source_reader = source_reader_from_url(source_interface_url, task_uuid, source_session_id);
-        let target = select_target(target_service_type, target_service);
-        let (last_complete_checkpoint, last_checkpoint, pushing_checkpoints) = target.get_last_checkpoint(task_uuid);
-        let checkpoint_version = target.generate_checkpoint_version(task_uuid);
-        let mut meta_builder = MetaBuilder::new()
-            .task_uuid(task_uuid)
-            .task_friendly(task_friendly_name)
-            .target_service(target_service_type, target_service_name)
-            .checkpoint(checkpoint_version)
-            .source(source_type, souce_interface_url, source_session_id);
-
-        let prev_checkpoints = if is_delta {
-            meta_builder.prev_checkpoint(last_complete_checkpoint.version);
-
-            let mut prev_checkpoints = vec![last_complete_checkpoint];
-            let mut cur_checkpoints = &last_complete_checkpoint;
-            while let Some(prev_checkpoint_version) = cur_checkpoints.prev_checkpoint() {
-                let prev_checkpoint = target.get_checkpoint_by_version(prev_checkpoint_version);
-                prev_checkpoints.push(prev_checkpoint);
-            }
-        } else {
-            vec![]
-        };
-
-        while let Some(item) = source_reader.get_next_item() {
-            // * item may be a file/directory/link, we should process it separately.
-            if is_delta {
-                let last_stat = prev_checkpoints.get_stat(item.path);
-                if !last_stat.is_same_as(item.stat) {
-                    meta_builder.add_item(item);
-                }
-            } else {
-                meta_builder.add_item(item);
-            }
-        }
-
-        if is_delta {
-            while let Some(item) = prev_checkpoints.get_next_item() {
-                if !source_reader.is_exists(item.path) {
-                    meta_builder.add_log(Log::Remove(item.path));
-                }
-            }
-        }
-
-        meta_builder.build()
-}
-```
-
-```rust
-engine.start_transfer_checkpoint(
-    meta: CheckPointMeta,
-    uncomplete_strategy
-    ) {
-
-        let source_reader = source_reader_from_url(meta.source_interface_url, meta.task_unique_name, meta.source_session_id);
-        let target = select_target(meta.target_service_type, meta.target_service);
-        let (last_complete_checkpoint, last_checkpoint, transfering_checkpoints) = target.get_last_checkpoint(meta.task_unique_name);
-        let mut abort_checkpoints = vec![];
-
-        for transfering_checkpoint in transfering_checkpoints {
-            if uncomplete_strategy.check_abort(transfering_checkpoint, last_complete_checkpoint, REASON_PUSH_NEW_CHECKPOINT) {
-                // abort it when new checkpoint prepared.
-                abort_checkpoints.push(transfering_checkpoint);
-            }
-        }
-
-        local_meta_storage.begin_checkpoint(meta, abort_checkpoints);
-
-        target.start_transfer_checkpoint(meta);
-
-        for abort_checkpoint in abort_checkpoints {
-            abort_checkpoint.abort();
-            // remove when it's aborted by target
-            local_meta_storage.abort(abort_checkpoint);
-            target.abort(abort_checkpoint);
-        }
-}
-```
-
-```rust
 // The following is just a schematic representation of the process for the `target` part.
 // Due to space management and interface differences, I do not want to create a highly abstract unified structure in the `target` module, as that could be quite challenging.
 // My current idea is to define only a few coarse-grained interfaces, pass in the metadata, and let `target` allocate and manage the storage space according to its own needs.
@@ -197,17 +206,17 @@ target.start_transfer_checkpoint(meta) {
         space.write_header(make_header(space));
         for item in space.items() {
             let source_reader = source_reader_from_url(meta, meta.get_item(item));
-            let chunk = source_reader.read_chunk(item.path, item.offset, item.length);
+            let chunk = source_reader.read_chunk(item.path, item.offset, item.length, item.meta);
             let chunk = crypto(chunk);
             space.write_chunk(chunk);
         }
         space.write_meta(crypto(space.meta));
 
-        local_storage.pre_push(space);
+        local_storage.pre_transfer(space);
 
-        space.push();
+        space.transfer();
 
-        local_storage.push_complete(space);
+        local_storage.transfer_complete(space);
     }
 
     // update status to complete;
@@ -247,118 +256,5 @@ engine.export() {
             toml.write_target_attributes(content);
         }
     }
-}
-```
-
-# CheckPointMeta
-
-```rust
-// All times should use UTC time. Unless otherwise stated, they should be accurate to the second.
-
-struct CheckPointMeta<ServiceItemMetaType, ServiceCheckPointMeta, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
-    task_friendly_name: String,
-    task_uuid: String,
-    version: CheckPointVersion,
-    prev_versions: Vec<CheckPointVersion>, // all versions this checkpoint depends on
-    create_time: SystemTime,
-    complete_time: SystemTime,
-
-    root: StorageItem<ServiceItemMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>,
-
-    // space size
-    occupied_size: u64, // The really size the data described by this object occupied in the storage.
-    consume_size: u64, // The size the data described by this object consumed in the storage, `consume_size` is greater than `occupied_size`, when the storage unit size is greater than 1 byte.
-    all_prev_version_occupied_size: u64,
-    all_prev_version_consume_size: u64,
-
-    // Special for services
-    service_meta: ServiceCheckPointMeta,
-}
-
-struct CheckPointVersion {
-    time: SystemTime,
-    seq: u64,
-}
-
-struct StorageItemAttributes {
-    create_time: SystemTime,
-    last_update_time: SystemTime,
-    owner: String,
-    group: String,
-    permissions: String,
-}
-
-// common meta
-macro_rules! storage_item_common_meta {
-    ($service_common_meta_type: ty) => {
-        name: String,
-        attributes: StorageItemAttributes,
-        parent: Option<Week<DirectoryMeta>>,
-        service_meta: $service_common_meta_type, // any service can add meta here.
-    }
-}
-
-enum StorageItem<ServiceMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
-    Dir<DirectoryMeta<ServiceMetaType, ServiceDirMetaType>>,
-    File<FileMeta<ServiceMetaType, ServiceFileMetaType>>,
-    Link<LinkMeta<ServiceMetaType, ServiceLinkMetaType>>,
-    Log<LogMeta<ServiceMetaType, ServiceLogMetaType>>
-}
-
-struct DirectoryMeta<ServiceMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
-    storage_item_common_meta!(ServiceMetaType)
-    children: Vec<StorageItem<ServiceMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>>,
-    service_meta: ServiceDirMetaType,
-}
-
-struct FileMeta<ServiceMetaType, ServiceFileMetaType> {
-    storage_item_common_meta!(ServiceMetaType)
-    hash: String,
-    size: u64,
-    service_meta: ServiceFileMetaType,
-}
-
-struct LinkMeta<ServiceMetaType, ServiceLinkMetaType> {
-    storage_item_common_meta!(ServiceMetaType)
-    target: String,
-    is_hard: bool,
-    service_meta: ServiceLinkMetaType,
-}
-
-enum LogAction {
-    Remove,
-    Recover,
-    MoveFrom(String),
-    MoveTo(String),
-    CopyFrom(String),
-    UpdateAttributes, // new attributes will be set in `attributes` field
-}
-
-struct LogMeta<ServiceMetaType, ServiceLogMetaType> {
-    storage_item_common_meta!(ServiceMetaType)
-    action: LogAction,
-    service_meta: ServiceLogMetaType,
-}
-
-// meta for DMC, sample.
-type ServiceMetaTypeDMC = ();
-type ServiceDirMetaTypeDMC = ();
-type ServiceLinkMetaTypeDMC = ();
-type ServiceLogMetaTypeDMC = ();
-
-struct FileChunkPositionDMC {
-    sector: SectorId,
-    pos: u64, // Where this file storage in sector.
-    offset: u64, // If this file is too large, it will be cut into several chunks and stored in different sectors.
-        // the `offset` is the offset of the chunk in total file.
-    size: u64, //
-}
-
-struct ServiceFileMetaTypeDMC {
-    chunks: Vec<FileChunkPositionDMC>
-}
-
-struct ServiceCheckPointMetaDMC {
-    sectors: Vec<SectorId>, // Sectors this checkpoint consumed. Some checkpoint will consume several sectors.
 }
 ```
