@@ -13,6 +13,20 @@
 
 ## Basic Architecture
 
-![backup](./draft.drawio.png)
+The entire process can be divided into 4 steps:
+
+1. **Prepare Data Source**: Ensure that the data source is read-only during the backup process. If any write operations are performed during this period, the original state should be restored upon completion or abnormal termination of the backup. Some exceptions may not be automatically recoverable, so users should be provided with the ability to trigger a state recovery.
+
+    ![preserve](./draft-preserve-state.drawio.png)
+
+2. **Construct Metadata**: During this phase, construct all the metadata for the data to be backed up according to the user's requirements. The output structure at this stage should clearly inform the user of what information will be backed up and the approximate space required.
+
+    ![prepare](./draft-prepare-meta.drawio.png)
+
+3. **Populate Metadata for Specific Backup `Target`**: Some `Targets` may need to record specific information in the metadata, such as the exact storage locations of files. This part of the metadata is parsed by the specific `Target`.
+
+4. **Transfer**: Complete the data transfer based on the metadata constructed in the previous steps.
+
+    ![transfer](./draft-transfer.drawio.png)
 
 \*\* Modules communicate with each other using HTTP protocol calls to decouple dependencies between extension modules, thereby enhancing scalability and stability.
