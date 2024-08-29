@@ -1,2 +1,5 @@
 .vscode
 .VSCodeCounter
+
+cargo.lock
+src/target/*
