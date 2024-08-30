@@ -46,24 +46,22 @@ macro_rules! storage_item_common_meta {
     }
 }
 
-enum StorageItem<ServiceMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
-    Dir<DirectoryMeta<ServiceMetaType, ServiceDirMetaType>>,
-    File<FileMeta<ServiceMetaType, ServiceFileMetaType>>,
-    Link<LinkMeta<ServiceMetaType, ServiceLinkMetaType>>,
-    Log<LogMeta<ServiceMetaType, ServiceLogMetaType>>
+enum StorageItem<ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
+    Dir<DirectoryMeta<ServiceDirMetaType>>,
+    File<FileMeta<ServiceFileMetaType>>,
+    Link<LinkMeta<ServiceLinkMetaType>>,
+    Log<LogMeta<ServiceLogMetaType>>
 }
 
-struct DirectoryMeta<ServiceMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
-    storage_item_common_meta!(ServiceMetaType)
-    children: Vec<StorageItem<ServiceMetaType, ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>>,
-    service_meta: ServiceDirMetaType,
+struct DirectoryMeta<ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType> {
+    storage_item_common_meta!(ServiceDirMetaType)
+    children: Vec<StorageItem<ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>>,
 }
 
-struct FileMeta<ServiceMetaType, ServiceFileMetaType> {
-    storage_item_common_meta!(ServiceMetaType)
+struct FileMeta<ServiceFileMetaType> {
+    storage_item_common_meta!(ServiceFileMetaType)
     hash: String,
     size: u64,
-    service_meta: ServiceFileMetaType,
 }
 
 // It will work with a chunk
@@ -74,19 +72,17 @@ struct FileDiffChunk {
     origin_length: u64, // the length of the original bytes will be instead.
 }
 
-struct FileDiffMeta<ServiceMetaType, ServiceDiffMetaType> {
-    storage_item_common_meta!(ServiceMetaType)
+struct FileDiffMeta<ServiceDiffMetaType> {
+    storage_item_common_meta!(ServiceDiffMetaType)
     hash: String,
     size: u64,
     diff_chunks: Vec<FileDiffChunk>,
-    service_meta: ServiceDiffMetaType,
 }
 
-struct LinkMeta<ServiceMetaType, ServiceLinkMetaType> {
-    storage_item_common_meta!(ServiceMetaType)
+struct LinkMeta<ServiceLinkMetaType> {
+    storage_item_common_meta!(ServiceLinkMetaType)
     target: String,
     is_hard: bool,
-    service_meta: ServiceLinkMetaType,
 }
 
 enum LogAction {
@@ -98,14 +94,12 @@ enum LogAction {
     UpdateAttributes, // new attributes will be set in `attributes` field
 }
 
-struct LogMeta<ServiceMetaType, ServiceLogMetaType> {
-    storage_item_common_meta!(ServiceMetaType)
+struct LogMeta<ServiceLogMetaType> {
+    storage_item_common_meta!(ServiceLogMetaType)
     action: LogAction,
-    service_meta: ServiceLogMetaType,
 }
 
 // meta for DMC, sample.
-type ServiceMetaTypeDMC = ();
 type ServiceDirMetaTypeDMC = ();
 type ServiceLinkMetaTypeDMC = ();
 type ServiceLogMetaTypeDMC = ();

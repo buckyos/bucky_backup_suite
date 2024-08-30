@@ -1,7 +1,8 @@
 use crate::{
+    checkpoint::CheckPoint,
     engine::{SourceId, TargetId},
     error::BackupResult,
-    meta::PreserveStateId,
+    meta::{CheckPointMetaEngine, PreserveStateId},
 };
 
 pub enum SourceState {
@@ -13,12 +14,12 @@ pub enum SourceState {
 pub struct TaskInfo {
     pub uuid: String,
     pub friendly_name: String,
-    description: String,
-    source_id: SourceId,
-    source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
-    target_id: String,
-    target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
-    attachment: String,   // The application can save any attachment with task.
+    pub description: String,
+    pub source_id: SourceId,
+    pub source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
+    pub target_id: String,
+    pub target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
+    pub attachment: String,   // The application can save any attachment with task.
 }
 
 #[async_trait::async_trait]
@@ -33,4 +34,10 @@ pub trait PreserveSourceState {
 }
 
 #[async_trait::async_trait]
-pub trait Task: PreserveSourceState {}
+pub trait Task: PreserveSourceState {
+    async fn update(&self, task_info: &TaskInfo) -> BackupResult<()>;
+    async fn prepare_checkpoint(
+        &self,
+        preserved_source_state_id: PreserveStateId,
+    ) -> BackupResult<Box<dyn CheckPoint>>;
+}
