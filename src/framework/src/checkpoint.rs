@@ -1,3 +1,5 @@
+use std::{collections::HashMap, time::SystemTime};
+
 use crate::{
     error::{BackupError, BackupResult},
     meta::{PreserveStateId, StorageItemAttributes},
@@ -16,6 +18,7 @@ pub struct CheckPointInfo<MetaType> {
     pub target_meta: Option<Vec<String>>,
     pub preserved_source_state_id: PreserveStateId,
     pub status: CheckPointStatus,
+    pub last_status_changed_time: SystemTime,
 }
 
 #[async_trait::async_trait]
@@ -30,6 +33,18 @@ pub trait CheckPoint {
     async fn stat(&self, path: &[u8]) -> BackupResult<StorageItemAttributes>;
     async fn target_meta(&self) -> BackupResult<Option<Vec<u8>>>;
 
+    async fn transfer_map_by_item_path(
+        &self,
+        paths: Option<Vec<&[u8]>>,
+    ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>>; // <item-path, target-address, ItemTransferInfo>
+
+    async fn transfer_map_to_target_address(
+        &self,
+        target_addresses: Option<Vec<&str>>,
+    ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>>; // <target-address, <item-path, ItemTransferInfo>>
+
+    async fn get_all_transfer_target_address(&self) -> BackupResult<Vec<Vec<u8>>>;
+
     async fn status(&self) -> BackupResult<CheckPointStatus>;
 }
 
@@ -43,13 +58,17 @@ pub trait CheckPointObserver {
         &self,
         item_path: &[u8],
         offset: u64,
-        length: u32,
+        length: u64,
+        target_address: Option<&[u8]>, // specific target address
+        detail: Option<&[u8]>,
     ) -> BackupResult<()>;
     async fn on_item_transfer_done(
         &self,
         item_path: &[u8],
         offset: u64,
-        length: u32,
+        length: u64,
+        target_address: Option<&[u8]>, // specific target address
+        detail: Option<&[u8]>,
     ) -> BackupResult<()>;
     /*
        Save values for key to avoid some status loss.
@@ -100,4 +119,12 @@ pub trait DirReader {
 pub struct LinkInfo {
     pub target: Vec<u8>,
     pub is_hard: bool,
+}
+
+pub struct ItemTransferMap {
+    pub begin_time: SystemTime,
+    pub finish_time: Option<SystemTime>,
+    pub offset: u64,
+    pub length: u64,
+    pub detail: Option<Vec<u8>>, // special parse for different target.
 }

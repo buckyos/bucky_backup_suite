@@ -65,6 +65,7 @@ pub trait TaskMgr {
         target_id: String,
         target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
         attachment: String,   // The application can save any attachment with task.
+        flag: u64, // Save any flags for the task. it will be filterd when list the tasks.
     ) -> BackupResult<Box<dyn Task>>;
 
     async fn remove_task(&self, by: FindTaskBy) -> BackupResult<()>;
@@ -150,10 +151,10 @@ impl From<u64> for TaskId {
     }
 }
 
-pub enum ListTaskFilter {
-    All,
-    SourceId(SourceId),
-    TargetId(TargetId),
+pub struct ListTaskFilter {
+    pub source_id: Option<Vec<SourceId>>,
+    pub target_id: Option<Vec<TargetId>>,
+    pub flag: Option<Vec<u64>>,
 }
 
 pub enum FindTaskBy {

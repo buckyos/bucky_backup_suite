@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use crate::{
-    checkpoint::{self, CheckPointInfo, CheckPointStatus},
+    checkpoint::{self, CheckPointInfo, CheckPointStatus, ItemTransferMap},
     engine::{
         FindTaskBy, ListOffset, ListTaskFilter, SourceId, SourceInfo, SourceQueryBy, TargetId,
         TargetInfo, TargetQueryBy,
@@ -110,7 +112,7 @@ pub trait MetaStorageCheckPointMgr {
     async fn create_checkpoint(
         &self,
         task_uuid: &str,
-        preserved_source_id: PreserveStateId,
+        preserved_source_id: Option<PreserveStateId>, // It will be lost for `None`
         meta: &CheckPointMetaEngine,
     ) -> BackupResult<CheckPointVersion>;
 
@@ -157,40 +159,37 @@ pub trait MetaStorageCheckPointMgr {
     ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>>;
 }
 
+pub struct QueryTransferMapFilterItem<'a> {
+    pub path: &'a [u8],
+    pub offset: u64,
+    pub length: u64,
+}
+
+pub struct QueryTransferMapFilter<'a> {
+    pub items: Option<Vec<QueryTransferMapFilter<'a>>>,
+    pub target_addresses: Option<Vec<&'a [u8]>>,
+}
+
 #[async_trait::async_trait]
-pub trait MetaStorageCheckPointItemMgr {
-    async fn add_transfer_scope(
+pub trait MetaStorageCheckPointTransferMapMgr {
+    // target_address: Where this chunk has been transferred to. users can get it from here.
+    // but it should be parsed by the `target` for specific protocol.
+    // the developer should remove the conflicting scope to update the transfer map.
+    async fn add_transfer_map(
         &self,
         task_uuid: &str,
         version: CheckPointVersion,
         item_path: &[u8],
-        offset: u64,
-        length: u64,
+        target_address: Option<&[u8]>,
+        info: &ItemTransferMap,
     ) -> BackupResult<()>;
 
-    async fn query_transfer_bytes_in_scope(
+    async fn query_transfer_map<'a>(
         &self,
         task_uuid: &str,
         version: CheckPointVersion,
-        item_path: &[u8],
-        offset: u64,
-        length: u64,
-    ) -> BackupResult<u64>;
-
-    async fn set_item_target_meta(
-        &self,
-        task_uuid: &str,
-        version: CheckPointVersion,
-        item_path: &[u8],
-        meta: &[&str],
-    ) -> BackupResult<()>;
-
-    async fn get_item_target_meta(
-        &self,
-        task_uuid: &str,
-        version: CheckPointVersion,
-        item_path: &[u8],
-    ) -> BackupResult<Vec<String>>;
+        filter: QueryTransferMapFilter<'a>,
+    ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>>; // <target-address, <item-path, ItemTransferMap>>
 }
 
 #[async_trait::async_trait]
@@ -291,7 +290,7 @@ where
     async fn create_checkpoint(
         &self,
         task_uuid: &str,
-        preserved_source_id: PreserveStateId,
+        preserved_source_id: Option<PreserveStateId>,
         meta: &CheckPointMetaEngine,
     ) -> BackupResult<CheckPointVersion> {
         self.start_transaction().await?;
