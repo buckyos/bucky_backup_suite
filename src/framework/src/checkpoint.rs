@@ -20,7 +20,9 @@ pub struct CheckPointInfo<MetaType> {
 
 #[async_trait::async_trait]
 pub trait CheckPoint {
-    async fn restore(&self) -> BackupResult<()>;
+    async fn transfer(&self) -> BackupResult<()>;
+    async fn stop(&self) -> BackupResult<()>;
+    async fn cancel(&self) -> BackupResult<()>;
 
     async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>>;
     async fn read_file(&self, path: &[u8], offset: u64, length: u32) -> BackupResult<Vec<u8>>;
@@ -29,6 +31,48 @@ pub trait CheckPoint {
     async fn target_meta(&self) -> BackupResult<Option<Vec<u8>>>;
 
     async fn status(&self) -> BackupResult<CheckPointStatus>;
+}
+
+// The targets will call these interfaces to notify the new status.
+#[async_trait::async_trait]
+pub trait CheckPointObserver {
+    async fn on_success(&self) -> BackupResult<()>;
+    async fn on_stop(&self) -> BackupResult<()>;
+    async fn on_failed(&self, err: BackupError) -> BackupResult<()>;
+    async fn on_pre_transfer_item(
+        &self,
+        item_path: &[u8],
+        offset: u64,
+        length: u32,
+    ) -> BackupResult<()>;
+    async fn on_item_transfer_done(
+        &self,
+        item_path: &[u8],
+        offset: u64,
+        length: u32,
+    ) -> BackupResult<()>;
+    /*
+       Save values for key to avoid some status loss.
+
+       examples:
+       let value = checkpoint.get_key_value("my-key").await?;
+       let value = match value {
+           Some(v) => {
+               v
+           }
+           None => {
+               let value = generate_value();
+               checkpoint.save_key_value("my-key", &value, true).await?;
+               value
+           }
+       };
+
+       // We can reuse the `value` next time for the `consume_value` failed or crashed.
+       // Otherwise, we may not know if the value is consumed success or not when the `consume_value` timeout or crashed.
+       let result = consume_value(value).await?;
+    */
+    async fn save_key_value(&self, key: &str, value: &[u8], is_replace: bool) -> BackupResult<()>;
+    async fn get_key_value(&self, key: &str) -> BackupResult<Option<Vec<u8>>>;
 }
 
 pub enum DirChildType {

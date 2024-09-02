@@ -62,9 +62,12 @@ pub struct ListCheckPointFilter {
 pub trait Task: PreserveSourceState {
     async fn task_info(&self) -> TaskInfo;
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()>;
+    async fn history_strategy(&self) -> HistoryStrategy;
+    async fn set_history_strategy(&self, strategy: HistoryStrategy) -> BackupResult<()>;
     async fn prepare_checkpoint(
         &self,
         preserved_source_state_id: PreserveStateId,
+        is_delta: bool,
     ) -> BackupResult<Box<dyn CheckPoint>>;
     async fn list_checkpoints(
         &self,
@@ -81,4 +84,21 @@ pub trait Task: PreserveSourceState {
         &self,
         filter: ListCheckPointFilter,
     ) -> BackupResult<()>;
+}
+
+#[derive(Debug, Clone)]
+pub struct HistoryStrategy {
+    reserve_history_limit: u32,
+    continuous_abort_incomplete_limit: u32,
+    continuous_abort_seconds_limit: u32,
+}
+
+impl Default for HistoryStrategy {
+    fn default() -> Self {
+        HistoryStrategy {
+            reserve_history_limit: 1,
+            continuous_abort_incomplete_limit: 3,
+            continuous_abort_seconds_limit: 3600 * 24 * 7, // 1 week
+        }
+    }
 }

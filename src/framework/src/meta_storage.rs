@@ -194,6 +194,24 @@ pub trait MetaStorageCheckPointItemMgr {
 }
 
 #[async_trait::async_trait]
+pub trait MetaStorageCheckPointKeyValueMgr {
+    async fn add_value(
+        &self,
+        task_uuid: &str,
+        version: CheckPointVersion,
+        key: &str,
+        value: &[u8],
+        is_replace: bool,
+    ) -> BackupResult<()>;
+    async fn get_value(
+        &self,
+        task_uuid: &str,
+        version: CheckPointVersion,
+        key: &str,
+    ) -> BackupResult<Option<Vec<u8>>>;
+}
+
+#[async_trait::async_trait]
 pub trait MetaStorageCheckPointMgrSql: Send + Sync {
     async fn create_checkpoint(
         &self,
