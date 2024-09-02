@@ -71,7 +71,7 @@ pub trait TaskMgr {
 
     async fn list_task(
         &self,
-        by: ListTaskBy,
+        filter: ListTaskFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<Box<dyn Task>>>;
@@ -150,7 +150,7 @@ impl From<u64> for TaskId {
     }
 }
 
-pub enum ListTaskBy {
+pub enum ListTaskFilter {
     All,
     SourceId(SourceId),
     TargetId(TargetId),

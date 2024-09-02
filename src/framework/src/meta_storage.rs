@@ -1,12 +1,12 @@
 use crate::{
-    checkpoint::{self, CheckPointStatus},
+    checkpoint::{self, CheckPointInfo, CheckPointStatus},
     engine::{
-        FindTaskBy, ListOffset, ListTaskBy, SourceId, SourceInfo, SourceQueryBy, TargetId,
+        FindTaskBy, ListOffset, ListTaskFilter, SourceId, SourceInfo, SourceQueryBy, TargetId,
         TargetInfo, TargetQueryBy,
     },
     error::BackupResult,
     meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
-    task::{SourceState, TaskInfo},
+    task::{ListCheckPointFilter, SourceState, TaskInfo},
 };
 
 #[async_trait::async_trait]
@@ -73,7 +73,7 @@ pub trait MetaStorageTaskMgr {
 
     async fn list_task(
         &self,
-        by: ListTaskBy,
+        filter: ListTaskFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<TaskInfo>>;
@@ -142,29 +142,19 @@ pub trait MetaStorageCheckPointMgr {
         meta: &[&str],
     ) -> BackupResult<()>;
 
-    async fn load_meta(
+    async fn list_checkpoints(
         &self,
         task_uuid: &str,
-        version: CheckPointVersion,
-    ) -> BackupResult<CheckPointMetaEngine>;
+        filter: ListCheckPointFilter,
+        offset: ListOffset,
+        limit: u32,
+    ) -> BackupResult<Vec<CheckPointInfo<CheckPointMetaEngine>>>;
 
-    async fn load_target_meta(
+    async fn query_checkpoint(
         &self,
         task_uuid: &str,
         version: CheckPointVersion,
-    ) -> BackupResult<Vec<String>>;
-
-    async fn preserved_source_id(
-        &self,
-        task_uuid: &str,
-        version: CheckPointVersion,
-    ) -> BackupResult<PreserveStateId>;
-
-    async fn status(
-        &self,
-        task_uuid: &str,
-        version: CheckPointVersion,
-    ) -> BackupResult<CheckPointStatus>;
+    ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>>;
 }
 
 #[async_trait::async_trait]
@@ -239,29 +229,19 @@ pub trait MetaStorageCheckPointMgrSql: Send + Sync {
         meta: &[&str],
     ) -> BackupResult<()>;
 
-    async fn load_meta(
+    async fn list_checkpoints(
         &self,
         task_uuid: &str,
-        version: CheckPointVersion,
-    ) -> BackupResult<CheckPointMetaEngine>;
+        filter: ListCheckPointFilter,
+        offset: ListOffset,
+        limit: u32,
+    ) -> BackupResult<Vec<CheckPointInfo<CheckPointMetaEngine>>>;
 
-    async fn load_target_meta(
+    async fn query_checkpoint(
         &self,
         task_uuid: &str,
         version: CheckPointVersion,
-    ) -> BackupResult<Vec<String>>;
-
-    async fn preserved_source_id(
-        &self,
-        task_uuid: &str,
-        version: CheckPointVersion,
-    ) -> BackupResult<PreserveStateId>;
-
-    async fn status(
-        &self,
-        task_uuid: &str,
-        version: CheckPointVersion,
-    ) -> BackupResult<CheckPointStatus>;
+    ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>>;
 }
 
 #[async_trait::async_trait]
@@ -346,35 +326,21 @@ where
         MetaStorageCheckPointMgrSql::save_target_meta(self, task_uuid, version, meta).await
     }
 
-    async fn load_meta(
+    async fn list_checkpoints(
         &self,
         task_uuid: &str,
-        version: CheckPointVersion,
-    ) -> BackupResult<CheckPointMetaEngine> {
-        MetaStorageCheckPointMgrSql::load_meta(self, task_uuid, version).await
+        filter: ListCheckPointFilter,
+        offset: ListOffset,
+        limit: u32,
+    ) -> BackupResult<Vec<CheckPointInfo<CheckPointMetaEngine>>> {
+        MetaStorageCheckPointMgrSql::list_checkpoints(self, task_uuid, filter, offset, limit).await
     }
 
-    async fn load_target_meta(
+    async fn query_checkpoint(
         &self,
         task_uuid: &str,
         version: CheckPointVersion,
-    ) -> BackupResult<Vec<String>> {
-        MetaStorageCheckPointMgrSql::load_target_meta(self, task_uuid, version).await
-    }
-
-    async fn preserved_source_id(
-        &self,
-        task_uuid: &str,
-        version: CheckPointVersion,
-    ) -> BackupResult<PreserveStateId> {
-        MetaStorageCheckPointMgrSql::preserved_source_id(self, task_uuid, version).await
-    }
-
-    async fn status(
-        &self,
-        task_uuid: &str,
-        version: CheckPointVersion,
-    ) -> BackupResult<CheckPointStatus> {
-        MetaStorageCheckPointMgrSql::status(self, task_uuid, version).await
+    ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>> {
+        MetaStorageCheckPointMgrSql::query_checkpoint(self, task_uuid, version).await
     }
 }
