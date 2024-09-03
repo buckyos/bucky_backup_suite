@@ -21,8 +21,9 @@ pub struct TaskInfo {
     pub source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
     pub target_id: String,
     pub target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
-    pub attachment: String,   // The application can save any attachment with task.
-    pub flag: u64, // Save any flags for the task. it will be filterd when list the tasks.
+    pub priority: u32,
+    pub attachment: String, // The application can save any attachment with task.
+    pub flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
 }
 
 pub struct ListPreservedSourceStateFilter {

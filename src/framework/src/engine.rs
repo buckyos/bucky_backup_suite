@@ -1,10 +1,14 @@
-use crate::{error::BackupResult, task::Task};
+use crate::{
+    error::BackupResult,
+    task::{HistoryStrategy, Task},
+};
 
 pub trait SourceMgr {
     async fn register(
         &self,
         classify: String,
         url: String,
+        config: Option<String>,
         description: String,
     ) -> BackupResult<SourceId>;
 
@@ -12,7 +16,7 @@ pub trait SourceMgr {
 
     async fn list(
         &self,
-        classify: Option<String>,
+        filter: ListSourceFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<SourceInfo>>;
@@ -23,6 +27,8 @@ pub trait SourceMgr {
         &self,
         by: SourceQueryBy,
         url: Option<String>,
+        friendly_name: Option<String>,
+        config: Option<String>,
         description: Option<String>,
     ) -> BackupResult<()>;
 }
@@ -32,6 +38,7 @@ pub trait TargetMgr {
         &self,
         classify: String,
         url: String,
+        config: Option<String>,
         description: String,
     ) -> BackupResult<TargetId>;
 
@@ -39,7 +46,7 @@ pub trait TargetMgr {
 
     async fn list(
         &self,
-        classify: Option<String>,
+        filter: ListTargetFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<TargetInfo>>;
@@ -50,8 +57,13 @@ pub trait TargetMgr {
         &self,
         by: TargetQueryBy,
         url: Option<String>,
+        friendly_name: Option<String>,
+        config: Option<String>,
         description: Option<String>,
     ) -> BackupResult<()>;
+
+    async fn get_config(&self) -> BackupResult<EngineConfig>;
+    async fn set_config(&self, config: EngineConfig) -> BackupResult<()>;
 }
 
 #[async_trait::async_trait]
@@ -64,8 +76,10 @@ pub trait TaskMgr {
         source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
         target_id: String,
         target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
-        attachment: String,   // The application can save any attachment with task.
-        flag: u64, // Save any flags for the task. it will be filterd when list the tasks.
+        history_strategy: HistoryStrategy,
+        priority: u32,
+        attachment: String, // The application can save any attachment with task.
+        flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
     ) -> BackupResult<Box<dyn Task>>;
 
     async fn remove_task(&self, by: FindTaskBy) -> BackupResult<()>;
@@ -97,8 +111,14 @@ impl From<u64> for SourceId {
 pub struct SourceInfo {
     pub id: SourceId,
     pub classify: String,
+    pub friendly_name: String,
     pub url: String,
+    pub config: String,
     pub description: String,
+}
+
+pub struct ListSourceFilter {
+    pub classify: Option<String>,
 }
 
 pub enum SourceQueryBy {
@@ -123,8 +143,14 @@ impl From<u64> for TargetId {
 pub struct TargetInfo {
     pub id: SourceId,
     pub classify: String,
+    pub friendly_name: String,
     pub url: String,
+    pub config: String,
     pub description: String,
+}
+
+pub struct ListTargetFilter {
+    pub classify: Option<String>,
 }
 
 pub enum TargetQueryBy {
@@ -159,4 +185,18 @@ pub struct ListTaskFilter {
 
 pub enum FindTaskBy {
     TaskId(TaskId),
+}
+
+pub struct EngineConfig {
+    pub transfering_task_limit: u32, // max count of the tasks transfering, they will be push in a queue if there are more tasks.
+    pub timeout_secs: u32, // if there is no transfering progress in this time, the task will be pause, and other tasks will be scheduled.
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            transfering_task_limit: 4,
+            timeout_secs: 16,
+        }
+    }
 }

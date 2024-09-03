@@ -11,6 +11,17 @@ use crate::{
     task::{ListCheckPointFilter, SourceState, TaskInfo},
 };
 
+pub trait MetaStorage:
+    MetaStorageSourceMgr
+    + MetaStorageTargetMgr
+    + MetaStorageTaskMgr
+    + MetaStorageSourceStateMgr
+    + MetaStorageCheckPointMgr
+    + MetaStorageCheckPointTransferMapMgr
+    + MetaStorageCheckPointKeyValueMgr
+{
+}
+
 #[async_trait::async_trait]
 pub trait MetaStorageSourceMgr {
     async fn register(

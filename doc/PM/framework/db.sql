@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS targets (
 --     pub source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
 --     pub target_id: String,
 --     pub target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
+--     pub priority: u32,
 --     pub attachment: String,   // The application can save any attachment with task.
 --     pub history_strategy: String,
 --     pub flag: u64, // Save any flags for the task. it will be filterd when list the tasks.
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     target_id INTEGER NOT NULL,
     target_param TEXT DEFAULT NULL,
     attachment TEXT DEFAULT NULL,
+    priority INTEGER NOT NULL,
     history_strategy TEXT DEFAULT NULL,
     flag: INTEGER DEFAULT 0,
     FOREIGN KEY (source_id) REFERENCES sources (id),
