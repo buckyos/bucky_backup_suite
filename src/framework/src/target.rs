@@ -1,4 +1,28 @@
-use crate::{error::BackupResult, meta::CheckPointMeta};
+use crate::{error::BackupResult, meta::CheckPointMeta, task::TaskInfo};
+
+#[async_trait::async_trait]
+pub trait TargetFactory<
+    ServiceCheckPointMeta,
+    ServiceDirMetaType,
+    ServiceFileMetaType,
+    ServiceLinkMetaType,
+    ServiceLogMetaType,
+>
+{
+    async fn from_task(
+        task_info: TaskInfo,
+    ) -> BackupResult<
+        Box<
+            dyn Target<
+                ServiceCheckPointMeta,
+                ServiceDirMetaType,
+                ServiceFileMetaType,
+                ServiceLinkMetaType,
+                ServiceLogMetaType,
+            >,
+        >,
+    >;
+}
 
 #[async_trait::async_trait]
 pub trait Target<
