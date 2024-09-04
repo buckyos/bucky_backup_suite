@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{
     error::BackupResult,
     task::{HistoryStrategy, Task},
@@ -14,20 +16,20 @@ pub trait SourceMgr {
         description: String,
     ) -> BackupResult<SourceId>;
 
-    async fn unregister(&self, by: SourceId) -> BackupResult<()>;
+    async fn unregister(&self, by: &SourceQueryBy) -> BackupResult<()>;
 
     async fn list(
         &self,
-        filter: ListSourceFilter,
+        filter: &ListSourceFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<SourceInfo>>;
 
-    async fn query_by(&self, by: SourceQueryBy) -> BackupResult<Option<SourceInfo>>;
+    async fn query_by(&self, by: &SourceQueryBy) -> BackupResult<Option<SourceInfo>>;
 
     async fn update(
         &self,
-        by: SourceQueryBy,
+        by: &SourceQueryBy,
         url: Option<String>,
         friendly_name: Option<String>,
         config: Option<String>,
@@ -46,20 +48,20 @@ pub trait TargetMgr {
         description: String,
     ) -> BackupResult<TargetId>;
 
-    async fn unregister(&self, by: TargetQueryBy) -> BackupResult<()>;
+    async fn unregister(&self, by: &TargetQueryBy) -> BackupResult<()>;
 
     async fn list(
         &self,
-        filter: ListTargetFilter,
+        filter: &ListTargetFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<TargetInfo>>;
 
-    async fn query_by(&self, by: TargetQueryBy) -> BackupResult<Option<TargetInfo>>;
+    async fn query_by(&self, by: &TargetQueryBy) -> BackupResult<Option<TargetInfo>>;
 
     async fn update(
         &self,
-        by: TargetQueryBy,
+        by: &TargetQueryBy,
         url: Option<String>,
         friendly_name: Option<String>,
         config: Option<String>,
@@ -87,20 +89,21 @@ pub trait TaskMgr {
         priority: u32,
         attachment: String, // The application can save any attachment with task.
         flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
-    ) -> BackupResult<Box<dyn Task>>;
+    ) -> BackupResult<Arc<dyn Task>>;
 
-    async fn remove_task(&self, by: FindTaskBy) -> BackupResult<()>;
+    async fn remove_task(&self, by: &FindTaskBy) -> BackupResult<()>;
 
     async fn list_task(
         &self,
-        filter: ListTaskFilter,
+        filter: &ListTaskFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Box<dyn Task>>>;
+    ) -> BackupResult<Vec<Arc<dyn Task>>>;
 
-    async fn find_task(&self, by: FindTaskBy) -> BackupResult<Box<dyn Task>>;
+    async fn find_task(&self, by: &FindTaskBy) -> BackupResult<Option<Arc<dyn Task>>>;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceId(u64);
 
 impl Into<u64> for SourceId {
@@ -115,6 +118,7 @@ impl From<u64> for SourceId {
     }
 }
 
+#[derive(Clone)]
 pub struct SourceInfo {
     pub id: SourceId,
     pub classify: String,
@@ -124,15 +128,18 @@ pub struct SourceInfo {
     pub description: String,
 }
 
+#[derive(Debug, Clone)]
 pub struct ListSourceFilter {
     pub classify: Option<String>,
 }
 
+#[derive(Debug, Clone)]
 pub enum SourceQueryBy {
     Id(SourceId),
     Url(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TargetId(u64);
 
 impl Into<u64> for TargetId {
@@ -147,8 +154,9 @@ impl From<u64> for TargetId {
     }
 }
 
+#[derive(Clone)]
 pub struct TargetInfo {
-    pub id: SourceId,
+    pub id: TargetId,
     pub classify: String,
     pub friendly_name: String,
     pub url: String,
@@ -156,32 +164,21 @@ pub struct TargetInfo {
     pub description: String,
 }
 
+#[derive(Debug, Clone)]
 pub struct ListTargetFilter {
     pub classify: Option<String>,
 }
 
+#[derive(Debug, Clone)]
 pub enum TargetQueryBy {
     Id(TargetId),
     Url(String),
 }
 
+#[derive(Debug, Clone)]
 pub enum ListOffset {
     First(u64),
     Last(u64),
-}
-
-pub struct TaskId(u64);
-
-impl Into<u64> for TaskId {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
-
-impl From<u64> for TaskId {
-    fn from(id: u64) -> Self {
-        Self(id)
-    }
 }
 
 pub struct ListTaskFilter {
@@ -191,9 +188,10 @@ pub struct ListTaskFilter {
 }
 
 pub enum FindTaskBy {
-    TaskId(TaskId),
+    TaskUuid(String),
 }
 
+#[derive(Debug, Clone)]
 pub struct EngineConfig {
     pub transfering_task_limit: u32, // max count of the tasks transfering, they will be push in a queue if there are more tasks.
     pub timeout_secs: u32, // if there is no transfering progress in this time, the task will be pause, and other tasks will be scheduled.

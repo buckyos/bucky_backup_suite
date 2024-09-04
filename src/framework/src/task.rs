@@ -32,7 +32,7 @@ pub struct ListPreservedSourceStateFilter {
 }
 
 #[async_trait::async_trait]
-pub trait PreserveSourceState {
+pub trait PreserveSourceState: Send + Sync {
     async fn preserve(&self) -> BackupResult<PreserveStateId>;
     async fn state(&self, state_id: PreserveStateId) -> BackupResult<SourceState>;
 
@@ -61,10 +61,10 @@ pub struct ListCheckPointFilter {
 }
 
 #[async_trait::async_trait]
-pub trait Task: PreserveSourceState {
-    async fn task_info(&self) -> TaskInfo;
+pub trait Task: PreserveSourceState + Send + Sync {
+    async fn task_info(&self) -> BackupResult<TaskInfo>;
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()>;
-    async fn history_strategy(&self) -> HistoryStrategy;
+    async fn history_strategy(&self) -> BackupResult<HistoryStrategy>;
     async fn set_history_strategy(&self, strategy: HistoryStrategy) -> BackupResult<()>;
     async fn prepare_checkpoint(
         &self,
@@ -73,7 +73,7 @@ pub trait Task: PreserveSourceState {
     ) -> BackupResult<Box<dyn CheckPoint>>;
     async fn list_checkpoints(
         &self,
-        filter: ListCheckPointFilter,
+        filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<Box<dyn CheckPoint>>>;
@@ -84,7 +84,7 @@ pub trait Task: PreserveSourceState {
     async fn remove_checkpoint(&self, version: CheckPointVersion) -> BackupResult<()>;
     async fn remove_checkpoints_in_condition(
         &self,
-        filter: ListCheckPointFilter,
+        filter: &ListCheckPointFilter,
     ) -> BackupResult<()>;
 }
 

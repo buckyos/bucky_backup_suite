@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::{
     checkpoint::{self, CheckPointInfo, CheckPointStatus, ItemTransferMap},
     engine::{
-        FindTaskBy, ListOffset, ListTaskFilter, SourceId, SourceInfo, SourceQueryBy, TargetId,
-        TargetInfo, TargetQueryBy,
+        EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter, ListTaskFilter,
+        SourceId, SourceInfo, SourceQueryBy, TargetId, TargetInfo, TargetQueryBy,
     },
     error::BackupResult,
     meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
@@ -19,11 +19,12 @@ pub trait MetaStorage:
     + MetaStorageCheckPointMgr
     + MetaStorageCheckPointTransferMapMgr
     + MetaStorageCheckPointKeyValueMgr
+    + MetaStorageConfig
 {
 }
 
 #[async_trait::async_trait]
-pub trait MetaStorageSourceMgr {
+pub trait MetaStorageSourceMgr: Send + Sync {
     async fn register(
         &self,
         classify: &str,
@@ -33,20 +34,20 @@ pub trait MetaStorageSourceMgr {
         description: &str,
     ) -> BackupResult<SourceId>;
 
-    async fn unregister(&self, by: SourceId) -> BackupResult<()>;
+    async fn unregister(&self, by: &SourceQueryBy) -> BackupResult<()>;
 
     async fn list(
         &self,
-        classify: Option<&str>,
+        filter: &ListSourceFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<SourceInfo>>;
 
-    async fn query_by(&self, by: SourceQueryBy) -> BackupResult<Option<SourceInfo>>;
+    async fn query_by(&self, by: &SourceQueryBy) -> BackupResult<Option<SourceInfo>>;
 
     async fn update(
         &self,
-        by: SourceQueryBy,
+        by: &SourceQueryBy,
         url: Option<&str>,
         friendly_name: Option<&str>,
         config: Option<&str>,
@@ -55,7 +56,7 @@ pub trait MetaStorageSourceMgr {
 }
 
 #[async_trait::async_trait]
-pub trait MetaStorageTargetMgr {
+pub trait MetaStorageTargetMgr: Send + Sync {
     async fn register(
         &self,
         classify: &str,
@@ -65,20 +66,20 @@ pub trait MetaStorageTargetMgr {
         description: &str,
     ) -> BackupResult<TargetId>;
 
-    async fn unregister(&self, by: TargetQueryBy) -> BackupResult<()>;
+    async fn unregister(&self, by: &TargetQueryBy) -> BackupResult<()>;
 
     async fn list(
         &self,
-        classify: Option<&str>,
+        filter: &ListTargetFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<TargetInfo>>;
 
-    async fn query_by(&self, by: TargetQueryBy) -> BackupResult<Option<TargetInfo>>;
+    async fn query_by(&self, by: &TargetQueryBy) -> BackupResult<Option<TargetInfo>>;
 
     async fn update(
         &self,
-        by: TargetQueryBy,
+        by: &TargetQueryBy,
         url: Option<&str>,
         friendly_name: Option<&str>,
         config: Option<&str>,
@@ -87,25 +88,32 @@ pub trait MetaStorageTargetMgr {
 }
 
 #[async_trait::async_trait]
-pub trait MetaStorageTaskMgr {
+pub trait MetaStorageTaskMgr: Send + Sync {
     async fn create_task(&self, task_info: &TaskInfo) -> BackupResult<()>;
 
-    async fn delete_task(&self, by: FindTaskBy) -> BackupResult<()>;
+    async fn delete_task(&self, by: &FindTaskBy) -> BackupResult<()>;
 
     async fn list_task(
         &self,
-        filter: ListTaskFilter,
+        filter: &ListTaskFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<TaskInfo>>;
 
-    async fn query_task(&self, by: FindTaskBy) -> BackupResult<TaskInfo>;
+    async fn query_task(&self, by: &FindTaskBy) -> BackupResult<TaskInfo>;
 
     async fn update_task(&self, task_info: &TaskInfo) -> BackupResult<()>;
 }
 
 #[async_trait::async_trait]
-pub trait MetaStorageSourceStateMgr {
+pub trait MetaStorageConfig: Send + Sync {
+    async fn get_config(&self) -> BackupResult<Option<EngineConfig>>;
+
+    async fn set_config(&self, config: &EngineConfig) -> BackupResult<()>;
+}
+
+#[async_trait::async_trait]
+pub trait MetaStorageSourceStateMgr: Send + Sync {
     async fn new_state(
         &self,
         task_uuid: &str,
@@ -127,7 +135,7 @@ pub trait MetaStorageSourceStateMgr {
 }
 
 #[async_trait::async_trait]
-pub trait MetaStorageCheckPointMgr {
+pub trait MetaStorageCheckPointMgr: Send + Sync {
     async fn create_checkpoint(
         &self,
         task_uuid: &str,
@@ -166,7 +174,7 @@ pub trait MetaStorageCheckPointMgr {
     async fn list_checkpoints(
         &self,
         task_uuid: &str,
-        filter: ListCheckPointFilter,
+        filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<CheckPointInfo<CheckPointMetaEngine>>>;
@@ -190,7 +198,7 @@ pub struct QueryTransferMapFilter<'a> {
 }
 
 #[async_trait::async_trait]
-pub trait MetaStorageCheckPointTransferMapMgr {
+pub trait MetaStorageCheckPointTransferMapMgr: Send + Sync {
     // target_address: Where this chunk has been transferred to. users can get it from here.
     // but it should be parsed by the `target` for specific protocol.
     // the developer should remove the conflicting scope to update the transfer map.
@@ -212,7 +220,7 @@ pub trait MetaStorageCheckPointTransferMapMgr {
 }
 
 #[async_trait::async_trait]
-pub trait MetaStorageCheckPointKeyValueMgr {
+pub trait MetaStorageCheckPointKeyValueMgr: Send + Sync {
     async fn add_value(
         &self,
         task_uuid: &str,
@@ -268,7 +276,7 @@ pub trait MetaStorageCheckPointMgrSql: Send + Sync {
     async fn list_checkpoints(
         &self,
         task_uuid: &str,
-        filter: ListCheckPointFilter,
+        filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<CheckPointInfo<CheckPointMetaEngine>>>;
@@ -365,7 +373,7 @@ where
     async fn list_checkpoints(
         &self,
         task_uuid: &str,
-        filter: ListCheckPointFilter,
+        filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<CheckPointInfo<CheckPointMetaEngine>>> {
