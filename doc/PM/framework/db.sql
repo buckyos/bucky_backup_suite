@@ -34,6 +34,14 @@ CREATE TABLE IF NOT EXISTS targets (
     description TEXT DEFAULT NULL
 );
 
+-- create table `config` with the following columns:
+-- category: String, // constraint: unique
+-- config: String
+CREATE TABLE IF NOT EXISTS config (
+    category TEXT PRIMARY KEY,
+    config TEXT NOT NULL
+);
+
 -- create table `tasks` with the following columns:
 -- pub struct TaskInfo {
 --     pub uuid: String,

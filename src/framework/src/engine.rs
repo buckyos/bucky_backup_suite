@@ -3,6 +3,7 @@ use crate::{
     task::{HistoryStrategy, Task},
 };
 
+#[async_trait::async_trait]
 pub trait SourceMgr {
     async fn register(
         &self,
@@ -34,6 +35,7 @@ pub trait SourceMgr {
     ) -> BackupResult<()>;
 }
 
+#[async_trait::async_trait]
 pub trait TargetMgr {
     async fn register(
         &self,
@@ -63,7 +65,10 @@ pub trait TargetMgr {
         config: Option<String>,
         description: Option<String>,
     ) -> BackupResult<()>;
+}
 
+#[async_trait::async_trait]
+pub trait Config {
     async fn get_config(&self) -> BackupResult<EngineConfig>;
     async fn set_config(&self, config: EngineConfig) -> BackupResult<()>;
 }
