@@ -3,12 +3,16 @@
 --     pub id: SourceId,
 --     pub classify: String,
 --     pub url: String,
+--     pub friendly_name: String
+--     pub config: String
 --     pub description: String,
 -- }
 CREATE TABLE IF NOT EXISTS sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     classify TEXT NOT NULL,
     url TEXT NOT NULL,
+    friendly_name TEXT NOT NULL,
+    config TEXT NOT NULL,
     description TEXT DEFAULT NULL
 );
 
@@ -17,12 +21,16 @@ CREATE TABLE IF NOT EXISTS sources (
 --    pub id: SourceId,
 --    pub classify: String,
 --    pub url: String,
+--    pub friendly_name: String
+--    pub config: String
 --    pub description: String,
 -- }
 CREATE TABLE IF NOT EXISTS targets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     classify TEXT NOT NULL,
     url TEXT NOT NULL,
+    friendly_name TEXT NOT NULL,
+    config TEXT NOT NULL,
     description TEXT DEFAULT NULL
 );
 

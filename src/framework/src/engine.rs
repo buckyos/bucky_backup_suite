@@ -8,7 +8,8 @@ pub trait SourceMgr {
         &self,
         classify: String,
         url: String,
-        config: Option<String>,
+        friendly_name: String,
+        config: String,
         description: String,
     ) -> BackupResult<SourceId>;
 
@@ -38,7 +39,8 @@ pub trait TargetMgr {
         &self,
         classify: String,
         url: String,
-        config: Option<String>,
+        friendly_name: String,
+        config: String,
         description: String,
     ) -> BackupResult<TargetId>;
 

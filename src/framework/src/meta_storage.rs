@@ -28,6 +28,8 @@ pub trait MetaStorageSourceMgr {
         &self,
         classify: &str,
         url: &str,
+        friendly_name: String,
+        config: String,
         description: &str,
     ) -> BackupResult<SourceId>;
 
@@ -46,6 +48,8 @@ pub trait MetaStorageSourceMgr {
         &self,
         by: SourceQueryBy,
         url: Option<&str>,
+        friendly_name: Option<String>,
+        config: Option<String>,
         description: Option<&str>,
     ) -> BackupResult<()>;
 }
@@ -56,6 +60,8 @@ pub trait MetaStorageTargetMgr {
         &self,
         classify: &str,
         url: &str,
+        friendly_name: String,
+        config: String,
         description: &str,
     ) -> BackupResult<TargetId>;
 
@@ -74,6 +80,8 @@ pub trait MetaStorageTargetMgr {
         &self,
         by: TargetQueryBy,
         url: Option<&str>,
+        friendly_name: Option<String>,
+        config: Option<String>,
         description: Option<&str>,
     ) -> BackupResult<()>;
 }
