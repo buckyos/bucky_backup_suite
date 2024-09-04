@@ -2,7 +2,7 @@
 -- pub struct SourceInfo {
 --     pub id: SourceId,
 --     pub classify: String,
---     pub url: String,
+--     pub url: String, // url is unique key
 --     pub friendly_name: String
 --     pub config: String
 --     pub description: String,
@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS sources (
     url TEXT NOT NULL,
     friendly_name TEXT NOT NULL,
     config TEXT NOT NULL,
-    description TEXT DEFAULT NULL
+    description TEXT DEFAULT NULL,
+    UNIQUE(url)
 );
 
 -- create table `targets` with the following columns:
@@ -31,7 +32,8 @@ CREATE TABLE IF NOT EXISTS targets (
     url TEXT NOT NULL,
     friendly_name TEXT NOT NULL,
     config TEXT NOT NULL,
-    description TEXT DEFAULT NULL
+    description TEXT DEFAULT NULL,
+    UNIQUE(url)
 );
 
 -- create table `config` with the following columns:
