@@ -91,6 +91,9 @@ pub trait MetaStorageTargetMgr: Send + Sync {
 pub trait MetaStorageTaskMgr: Send + Sync {
     async fn create_task(&self, task_info: &TaskInfo) -> BackupResult<()>;
 
+    async fn set_delete_flag(&self, by: &FindTaskBy, is_delete_on_target: bool)
+        -> BackupResult<()>;
+
     async fn delete_task(&self, by: &FindTaskBy) -> BackupResult<()>;
 
     async fn list_task(
@@ -100,7 +103,7 @@ pub trait MetaStorageTaskMgr: Send + Sync {
         limit: u32,
     ) -> BackupResult<Vec<TaskInfo>>;
 
-    async fn query_task(&self, by: &FindTaskBy) -> BackupResult<TaskInfo>;
+    async fn query_task(&self, by: &FindTaskBy) -> BackupResult<Option<TaskInfo>>;
 
     async fn update_task(&self, task_info: &TaskInfo) -> BackupResult<()>;
 }
@@ -142,6 +145,13 @@ pub trait MetaStorageCheckPointMgr: Send + Sync {
         preserved_source_id: Option<PreserveStateId>, // It will be lost for `None`
         meta: &CheckPointMetaEngine,
     ) -> BackupResult<CheckPointVersion>;
+
+    async fn set_delete_flag(
+        &self,
+        task_uuid: &str,
+        version: CheckPointVersion,
+        is_delete_on_target: bool,
+    ) -> BackupResult<()>;
 
     async fn delete_checkpoint(
         &self,
@@ -246,11 +256,19 @@ pub trait MetaStorageCheckPointMgrSql: Send + Sync {
         meta: &str,
     ) -> BackupResult<CheckPointVersion>;
 
+    async fn set_delete_flag(
+        &self,
+        task_uuid: &str,
+        version: CheckPointVersion,
+        is_delete_on_target: bool,
+    ) -> BackupResult<()>;
+
     async fn delete_checkpoint(
         &self,
         task_uuid: &str,
         version: CheckPointVersion,
     ) -> BackupResult<()>;
+
     async fn start_checkpoint_only_once_per_preserved_source(
         &self,
         task_uuid: &str,
@@ -325,6 +343,16 @@ where
         // insert items
         self.commit_transaction().await?;
         unimplemented!()
+    }
+
+    async fn set_delete_flag(
+        &self,
+        task_uuid: &str,
+        version: CheckPointVersion,
+        is_delete_on_target: bool,
+    ) -> BackupResult<()> {
+        MetaStorageCheckPointMgrSql::set_delete_flag(self, task_uuid, version, is_delete_on_target)
+            .await
     }
 
     async fn delete_checkpoint(

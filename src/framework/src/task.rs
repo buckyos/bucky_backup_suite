@@ -2,7 +2,7 @@ use std::time::SystemTime;
 
 use crate::{
     checkpoint::{CheckPoint, CheckPointStatus},
-    engine::{ListOffset, SourceId, TargetId},
+    engine::{ListOffset, SourceId, TargetId, TaskUuid},
     error::BackupResult,
     meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
 };
@@ -13,8 +13,9 @@ pub enum SourceState {
     Preserved((Option<String>, Option<String>)), // <original, preserved>
 }
 
+#[derive(Debug)]
 pub struct TaskInfo {
-    pub uuid: String,
+    pub uuid: TaskUuid,
     pub friendly_name: String,
     pub description: String,
     pub source_id: SourceId,
@@ -22,6 +23,7 @@ pub struct TaskInfo {
     pub target_id: String,
     pub target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
     pub priority: u32,
+    pub history_strategy: HistoryStrategy,
     pub attachment: String, // The application can save any attachment with task.
     pub flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
 }
@@ -62,6 +64,7 @@ pub struct ListCheckPointFilter {
 
 #[async_trait::async_trait]
 pub trait Task: PreserveSourceState + Send + Sync {
+    fn uuid(&self) -> &TaskUuid;
     async fn task_info(&self) -> BackupResult<TaskInfo>;
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()>;
     async fn history_strategy(&self) -> BackupResult<HistoryStrategy>;

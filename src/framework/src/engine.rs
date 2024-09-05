@@ -91,7 +91,7 @@ pub trait TaskMgr {
         flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
     ) -> BackupResult<Arc<dyn Task>>;
 
-    async fn remove_task(&self, by: &FindTaskBy) -> BackupResult<()>;
+    async fn remove_task(&self, by: &FindTaskBy, is_remove_on_target: bool) -> BackupResult<()>;
 
     async fn list_task(
         &self,
@@ -175,20 +175,40 @@ pub enum TargetQueryBy {
     Url(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum ListOffset {
     First(u64),
     Last(u64),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TaskUuid([u8; 22], u8);
+
+impl<T: AsRef<[u8]>> From<T> for TaskUuid {
+    fn from(id: T) -> Self {
+        let len = std::cmp::min(id.as_ref().len(), 22);
+        let mut bytes: [u8; 22] = [0; 22];
+        bytes[0..len].copy_from_slice(id.as_ref());
+        Self(bytes, len as u8)
+    }
+}
+
+impl std::fmt::Display for TaskUuid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", String::from_utf8_lossy(&self.0[..self.1 as usize]))
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ListTaskFilter {
     pub source_id: Option<Vec<SourceId>>,
     pub target_id: Option<Vec<TargetId>>,
     pub flag: Option<Vec<u64>>,
 }
 
+#[derive(Debug, Clone)]
 pub enum FindTaskBy {
-    TaskUuid(String),
+    Uuid(TaskUuid),
 }
 
 #[derive(Debug, Clone)]

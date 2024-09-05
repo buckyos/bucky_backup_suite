@@ -6,21 +6,22 @@ use crate::{
     engine::{
         Config, EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter,
         ListTaskFilter, SourceId, SourceInfo, SourceMgr, SourceQueryBy, TargetId, TargetInfo,
-        TargetMgr, TargetQueryBy, TaskId, TaskMgr,
+        TargetMgr, TargetQueryBy, TaskMgr, TaskUuid,
     },
     error::BackupResult,
     handle_error,
     meta_storage::{MetaStorage, MetaStorageSourceMgr, MetaStorageTargetMgr},
-    task::{HistoryStrategy, Task},
-    task_impl::TaskImpl,
+    task::{HistoryStrategy, Task, TaskInfo},
+    task_impl::{TaskImpl, TaskWrapper},
 };
 
+#[derive(Clone)]
 pub struct Engine {
     meta_storage: Arc<Box<dyn MetaStorage>>,
     sources: Arc<RwLock<HashMap<SourceId, SourceInfo>>>,
     targets: Arc<RwLock<HashMap<TargetId, TargetInfo>>>,
     config: Arc<RwLock<Option<EngineConfig>>>,
-    tasks: Arc<RwLock<HashMap<TaskId, Arc<dyn Task>>>>,
+    tasks: Arc<RwLock<HashMap<TaskUuid, Arc<TaskImpl>>>>,
 }
 
 impl Engine {
@@ -76,7 +77,7 @@ impl SourceMgr for Engine {
                 by
             ))?;
 
-        let cache = self.sources.write().await;
+        let mut cache = self.sources.write().await;
         match by {
             SourceQueryBy::Id(id) => {
                 cache.remove(id);
@@ -189,7 +190,7 @@ impl SourceMgr for Engine {
 
         {
             // update fields in cache.
-            let cache = self.sources.write().await;
+            let mut cache = self.sources.write().await;
             let source = match &by {
                 SourceQueryBy::Id(id) => cache.get_mut(id),
                 SourceQueryBy::Url(url) => cache.values_mut().find(|s| s.url == *url),
@@ -258,7 +259,7 @@ impl TargetMgr for Engine {
                 by
             ))?;
 
-        let cache = self.targets.write().await;
+        let mut cache = self.targets.write().await;
         match by {
             TargetQueryBy::Id(id) => {
                 cache.remove(id);
@@ -370,7 +371,7 @@ impl TargetMgr for Engine {
 
         {
             // update fields in cache.
-            let cache = self.targets.write().await;
+            let mut cache = self.targets.write().await;
             let target = match &by {
                 TargetQueryBy::Id(id) => cache.get_mut(id),
                 TargetQueryBy::Url(url) => cache.values_mut().find(|t| t.url == *url),
@@ -450,9 +451,44 @@ impl TaskMgr for Engine {
         attachment: String, // The application can save any attachment with task.
         flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
     ) -> BackupResult<Arc<dyn Task>> {
+        let uuid = TaskUuid::from(uuid::Uuid::new_v4());
+
+        let task_info = TaskInfo {
+            uuid,
+            friendly_name,
+            description,
+            source_id,
+            source_param,
+            target_id,
+            target_param,
+            priority,
+            history_strategy,
+            attachment,
+            flag,
+        };
+
+        self.meta_storage
+            .create_task(&task_info)
+            .await
+            .map_err(handle_error!(
+                "create task failed, task_info: {:?}",
+                task_info
+            ))?;
+
+        let task = Arc::new(TaskImpl::new(task_info));
+        self.tasks.write().await.insert(uuid, task);
+
+        Ok(Arc::new(TaskWrapper::new(self.clone(), uuid)))
     }
 
-    async fn remove_task(&self, by: &FindTaskBy) -> BackupResult<()> {}
+    async fn remove_task(&self, by: &FindTaskBy, is_remove_on_target: bool) -> BackupResult<()> {
+        // 1. remove all checkpoints of the task.
+        //      1.1 set remove flag on `meta_storage`.
+        //      1.2 remove all storage on the target.
+        //      1.3 remove all checkpoints from `meta_storage`.
+        // 2. remove the task from `meta_storage`.
+        todo!()
+    }
 
     async fn list_task(
         &self,
@@ -460,11 +496,67 @@ impl TaskMgr for Engine {
         offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<Arc<dyn Task>>> {
+        let task_infos = self
+            .meta_storage
+            .list_task(filter, offset, limit)
+            .await
+            .map_err(handle_error!(
+                "list task failed, filter: {:?}, offset: {:?}, limit: {}",
+                filter,
+                offset,
+                limit
+            ))?;
+
+        let mut task_cache = self.tasks.write().await;
+        Ok(task_infos
+            .into_iter()
+            .map(|task_info| {
+                let uuid = task_info.uuid;
+                task_cache
+                    .entry(task_info.uuid)
+                    .or_insert_with(|| Arc::new(TaskImpl::new(task_info)));
+                Arc::new(TaskWrapper::new(self.clone(), uuid)) as Arc<dyn Task>
+            })
+            .collect())
     }
 
-    async fn find_task(&self, by: &FindTaskBy) -> BackupResult<Option<Arc<dyn Task>>> {}
+    async fn find_task(&self, by: &FindTaskBy) -> BackupResult<Option<Arc<dyn Task>>> {
+        self.get_task(by).await.map(|t| {
+            t.map(|t| Arc::new(TaskWrapper::new(self.clone(), *t.uuid())) as Arc<dyn Task>)
+        })
+    }
 }
 
 impl Engine {
-    pub(crate) fn get_task(&self, uuid: &str) -> BackupResult<Option<Arc<TaskImpl>>> {}
+    pub(crate) async fn get_task(&self, by: &FindTaskBy) -> BackupResult<Option<Arc<TaskImpl>>> {
+        {
+            let cache = self.tasks.read().await;
+            let task = match by {
+                FindTaskBy::Uuid(uuid) => cache.get(uuid),
+            };
+
+            if let Some(task) = task {
+                return Ok(Some(task.clone()));
+            }
+        }
+
+        let task_info = self
+            .meta_storage
+            .query_task(by)
+            .await
+            .map_err(handle_error!("find task failed, by: {:?}", by))?;
+
+        if let Some(task_info) = task_info {
+            let task = self
+                .tasks
+                .write()
+                .await
+                .entry(task_info.uuid)
+                .or_insert_with(|| Arc::new(TaskImpl::new(task_info)))
+                .clone();
+            Ok(Some(task))
+        } else {
+            Ok(None)
+        }
+    }
 }
