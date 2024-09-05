@@ -11,6 +11,10 @@ use crate::{
     error::BackupResult,
     handle_error,
     meta_storage::{MetaStorage, MetaStorageSourceMgr, MetaStorageTargetMgr},
+    source::{Source, SourceEngine, SourceFactory, SourceFactoryEngine},
+    source_wrapper::SourceWrapper,
+    target::{self, Target, TargetEngine, TargetFactory, TargetFactoryEngine},
+    target_wrapper::TargetWrapper,
     task::{HistoryStrategy, Task, TaskInfo},
     task_impl::{TaskImpl, TaskWrapper},
 };
@@ -18,21 +22,153 @@ use crate::{
 #[derive(Clone)]
 pub struct Engine {
     meta_storage: Arc<Box<dyn MetaStorage>>,
-    sources: Arc<RwLock<HashMap<SourceId, SourceInfo>>>,
-    targets: Arc<RwLock<HashMap<TargetId, TargetInfo>>>,
+    source_factory: Arc<Box<dyn SourceFactory<String, String, String, String, String>>>,
+    target_factory: Arc<Box<dyn TargetFactory<String, String, String, String, String>>>,
+    sources: Arc<
+        RwLock<HashMap<SourceId, Arc<Box<dyn Source<String, String, String, String, String>>>>>,
+    >,
+    targets: Arc<
+        RwLock<HashMap<TargetId, Arc<Box<dyn Target<String, String, String, String, String>>>>>,
+    >,
     config: Arc<RwLock<Option<EngineConfig>>>,
     tasks: Arc<RwLock<HashMap<TaskUuid, Arc<TaskImpl>>>>,
 }
 
 impl Engine {
-    pub fn new(meta_storage: Box<dyn MetaStorage>) -> Self {
+    pub fn new(
+        meta_storage: Box<dyn MetaStorage>,
+        source_factory: Box<dyn SourceFactory<String, String, String, String, String>>,
+        target_factory: Box<dyn TargetFactory<String, String, String, String, String>>,
+    ) -> Self {
         Self {
             meta_storage: Arc::new(meta_storage),
+            source_factory: Arc::new(source_factory),
+            target_factory: Arc::new(target_factory),
             sources: Arc::new(RwLock::new(HashMap::new())),
             targets: Arc::new(RwLock::new(HashMap::new())),
             config: Arc::new(RwLock::new(None)),
             tasks: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub(crate) async fn get_task(&self, by: &FindTaskBy) -> BackupResult<Option<Arc<TaskImpl>>> {
+        {
+            let cache = self.tasks.read().await;
+            let task = match by {
+                FindTaskBy::Uuid(uuid) => cache.get(uuid),
+            };
+
+            if let Some(task) = task {
+                return Ok(Some(task.clone()));
+            }
+        }
+
+        let task_info = self
+            .meta_storage
+            .query_task(by)
+            .await
+            .map_err(handle_error!("find task failed, by: {:?}", by))?;
+
+        if let Some(task_info) = task_info {
+            let task = self
+                .tasks
+                .write()
+                .await
+                .entry(task_info.uuid)
+                .or_insert_with(|| Arc::new(TaskImpl::new(task_info, self.clone())))
+                .clone();
+            Ok(Some(task))
+        } else {
+            Ok(None)
+        }
+    }
+
+    // should never call this function directly, use `SourceMgr::query_by` instead.
+    pub(crate) async fn get_source(
+        &self,
+        by: &SourceQueryBy,
+    ) -> BackupResult<Option<Arc<Box<dyn Source<String, String, String, String, String>>>>> {
+        {
+            let cache = self.sources.read().await;
+            match by {
+                SourceQueryBy::Id(id) => {
+                    if let Some(s) = cache.get(id) {
+                        return Ok(Some(s.clone()));
+                    }
+                }
+                SourceQueryBy::Url(url) => {
+                    for (id, s) in cache.iter() {
+                        if let Ok(u) = s.source_info().await {
+                            if u.url == *url {
+                                return Ok(Some(s.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let source = MetaStorageSourceMgr::query_by(self.meta_storage.as_ref().as_ref(), by)
+            .await
+            .map_err(handle_error!("query source failed, by: {:?}", by))?;
+
+        if let Some(source) = source {
+            if let std::collections::hash_map::Entry::Vacant(v) =
+                self.sources.write().await.entry(source.id)
+            {
+                let source = Arc::new(self.source_factory.from_source_info(source).await?);
+                v.insert(source.clone());
+                return Ok(Some(source));
+            }
+        }
+
+        Ok(None)
+    }
+
+    // should never call this function directly, use `TargetMgr::query_by` instead.
+    pub(crate) async fn get_target(
+        &self,
+        by: &TargetQueryBy,
+    ) -> BackupResult<Option<Arc<Box<dyn Target<String, String, String, String, String>>>>> {
+        {
+            let cache = self.targets.read().await;
+            match by {
+                TargetQueryBy::Id(id) => {
+                    if let Some(t) = cache.get(id) {
+                        return Ok(Some(t.clone()));
+                    }
+                }
+                TargetQueryBy::Url(url) => {
+                    for (id, t) in cache.iter() {
+                        if let Ok(u) = t.target_info().await {
+                            if u.url == *url {
+                                return Ok(Some(t.clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let target = MetaStorageTargetMgr::query_by(self.meta_storage.as_ref().as_ref(), by)
+            .await
+            .map_err(handle_error!("query target failed, by: {:?}", by))?;
+
+        if let Some(target) = target {
+            if let std::collections::hash_map::Entry::Vacant(v) =
+                self.targets.write().await.entry(target.id)
+            {
+                let target = Arc::new(self.target_factory.from_target_info(target).await?);
+                v.insert(target.clone());
+                return Ok(Some(target));
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub(crate) async fn meta_storage(&self) -> Arc<Box<dyn MetaStorage>> {
+        self.meta_storage.clone()
     }
 }
 
@@ -65,7 +201,11 @@ impl SourceMgr for Engine {
             description,
         };
 
-        self.sources.write().await.insert(source_id, source_info);
+        let source = self.source_factory.from_source_info(source_info).await?;
+        self.sources
+            .write()
+            .await
+            .insert(source_id, Arc::new(source));
         Ok(source_id)
     }
 
@@ -83,9 +223,18 @@ impl SourceMgr for Engine {
                 cache.remove(id);
             }
             SourceQueryBy::Url(url) => {
-                let source_id = cache.iter().find(|(_, s)| s.url == *url).map(|(id, _)| *id);
-                if let Some(source_id) = source_id {
-                    cache.remove(&source_id);
+                let mut found_id = None;
+                for (id, s) in cache.iter() {
+                    if let Ok(u) = s.source_info().await {
+                        if u.url == *url {
+                            found_id = Some(*id);
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(id) = found_id {
+                    cache.remove(&id);
                 }
             }
         }
@@ -97,8 +246,8 @@ impl SourceMgr for Engine {
         filter: &ListSourceFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<SourceInfo>> {
-        let sources =
+    ) -> BackupResult<Vec<Arc<dyn SourceEngine>>> {
+        let source_infos =
             MetaStorageSourceMgr::list(self.meta_storage.as_ref().as_ref(), filter, offset, limit)
                 .await
                 .map_err(handle_error!(
@@ -109,41 +258,28 @@ impl SourceMgr for Engine {
                 ))?;
 
         let mut cache_sources = self.sources.write().await;
-        sources.iter().for_each(|s| {
-            cache_sources.entry(s.id).or_insert(s.clone());
-        });
+        let mut sources = vec![];
+        for source_info in source_infos {
+            let id = source_info.id;
+            if let std::collections::hash_map::Entry::Vacant(v) =
+                cache_sources.entry(source_info.id)
+            {
+                v.insert(Arc::new(
+                    self.source_factory.from_source_info(source_info).await?,
+                ));
+            }
+            sources.push(Arc::new(SourceWrapper::new(id, self.clone())) as Arc<dyn SourceEngine>);
+        }
 
         Ok(sources)
     }
 
-    async fn query_by(&self, by: &SourceQueryBy) -> BackupResult<Option<SourceInfo>> {
-        {
-            let cache = self.sources.read().await;
-            let source = match by {
-                SourceQueryBy::Id(id) => cache.get(id),
-                SourceQueryBy::Url(url) => {
-                    cache.iter().find(|(_, s)| s.url == *url).map(|(_, s)| s)
-                }
-            };
-
-            if let Some(source) = source {
-                return Ok(Some(source.clone()));
-            }
-        }
-
-        let source = MetaStorageSourceMgr::query_by(self.meta_storage.as_ref().as_ref(), by)
-            .await
-            .map_err(handle_error!("query source failed, by: {:?}", by))?;
-
-        if let Some(source) = &source {
-            self.sources
-                .write()
-                .await
-                .entry(source.id)
-                .or_insert(source.clone());
-        }
-
-        Ok(source)
+    async fn query_by(&self, by: &SourceQueryBy) -> BackupResult<Option<Arc<dyn SourceEngine>>> {
+        self.get_source(by).await.map(|s| {
+            s.map(|s| {
+                Arc::new(SourceWrapper::new(s.source_id(), self.clone())) as Arc<dyn SourceEngine>
+            })
+        })
     }
 
     async fn update(
@@ -154,28 +290,6 @@ impl SourceMgr for Engine {
         config: Option<String>,
         description: Option<String>,
     ) -> BackupResult<()> {
-        {
-            // try find it in cache first.
-            let cache = self.sources.read().await;
-            let source = match &by {
-                SourceQueryBy::Id(id) => cache.get(id),
-                SourceQueryBy::Url(url) => cache.values().find(|s| s.url == *url),
-            };
-
-            // check which fields are being updated, return Ok() if no fields are updated.
-            if let Some(source) = source {
-                if (url.is_none() || &source.url == url.as_ref().unwrap())
-                    && (friendly_name.is_none()
-                        || &source.friendly_name == friendly_name.as_ref().unwrap())
-                    && (config.is_none() || &source.config == config.as_ref().unwrap())
-                    && (description.is_none()
-                        || &source.description == description.as_ref().unwrap())
-                {
-                    return Ok(());
-                }
-            }
-        }
-
         MetaStorageSourceMgr::update(self
                 .meta_storage.as_ref().as_ref(), by, url.as_deref(), friendly_name.as_deref(), config.as_deref(), description.as_deref())
             .await
@@ -189,26 +303,26 @@ impl SourceMgr for Engine {
             ))?;
 
         {
-            // update fields in cache.
+            // remove it in cache. it will be reloaded when it's queried next time.
             let mut cache = self.sources.write().await;
-            let source = match &by {
-                SourceQueryBy::Id(id) => cache.get_mut(id),
-                SourceQueryBy::Url(url) => cache.values_mut().find(|s| s.url == *url),
-            };
+            match &by {
+                SourceQueryBy::Id(id) => {
+                    cache.remove(id);
+                }
+                SourceQueryBy::Url(url) => {
+                    let mut found_id = None;
+                    for (id, s) in cache.iter() {
+                        if let Ok(u) = s.source_info().await {
+                            if u.url == *url {
+                                found_id = Some(*id);
+                                break;
+                            }
+                        }
+                    }
 
-            // update fields in cache if it's updated.
-            if let Some(source) = source {
-                if let Some(url) = url {
-                    source.url = url;
-                }
-                if let Some(friendly_name) = friendly_name {
-                    source.friendly_name = friendly_name;
-                }
-                if let Some(config) = config {
-                    source.config = config;
-                }
-                if let Some(description) = description {
-                    source.description = description;
+                    if let Some(id) = found_id {
+                        cache.remove(&id);
+                    }
                 }
             }
         }
@@ -247,7 +361,11 @@ impl TargetMgr for Engine {
             description,
         };
 
-        self.targets.write().await.insert(target_id, target_info);
+        let target = self.target_factory.from_target_info(target_info).await?;
+        self.targets
+            .write()
+            .await
+            .insert(target_id, Arc::new(target));
         Ok(target_id)
     }
 
@@ -265,9 +383,18 @@ impl TargetMgr for Engine {
                 cache.remove(id);
             }
             TargetQueryBy::Url(url) => {
-                let target_id = cache.iter().find(|(_, t)| t.url == *url).map(|(id, _)| *id);
-                if let Some(target_id) = target_id {
-                    cache.remove(&target_id);
+                let mut found_id = None;
+                for (id, t) in cache.iter() {
+                    if let Ok(u) = t.target_info().await {
+                        if u.url == *url {
+                            found_id = Some(*id);
+                            break;
+                        }
+                    }
+                }
+
+                if let Some(id) = found_id {
+                    cache.remove(&id);
                 }
             }
         }
@@ -279,8 +406,8 @@ impl TargetMgr for Engine {
         filter: &ListTargetFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<TargetInfo>> {
-        let targets =
+    ) -> BackupResult<Vec<Arc<dyn TargetEngine>>> {
+        let target_infos =
             MetaStorageTargetMgr::list(self.meta_storage.as_ref().as_ref(), filter, offset, limit)
                 .await
                 .map_err(handle_error!(
@@ -291,41 +418,28 @@ impl TargetMgr for Engine {
                 ))?;
 
         let mut cache_targets = self.targets.write().await;
-        targets.iter().for_each(|t| {
-            cache_targets.entry(t.id).or_insert(t.clone());
-        });
+        let mut targets = vec![];
+        for target_info in target_infos {
+            let id = target_info.id;
+            if let std::collections::hash_map::Entry::Vacant(v) =
+                cache_targets.entry(target_info.id)
+            {
+                v.insert(Arc::new(
+                    self.target_factory.from_target_info(target_info).await?,
+                ));
+            }
+            targets.push(Arc::new(TargetWrapper::new(id, self.clone())) as Arc<dyn TargetEngine>);
+        }
 
         Ok(targets)
     }
 
-    async fn query_by(&self, by: &TargetQueryBy) -> BackupResult<Option<TargetInfo>> {
-        {
-            let cache = self.targets.read().await;
-            let target = match by {
-                TargetQueryBy::Id(id) => cache.get(id),
-                TargetQueryBy::Url(url) => {
-                    cache.iter().find(|(_, t)| t.url == *url).map(|(_, t)| t)
-                }
-            };
-
-            if let Some(target) = target {
-                return Ok(Some(target.clone()));
-            }
-        }
-
-        let target = MetaStorageTargetMgr::query_by(self.meta_storage.as_ref().as_ref(), by)
-            .await
-            .map_err(handle_error!("query target failed, by: {:?}", by))?;
-
-        if let Some(target) = &target {
-            self.targets
-                .write()
-                .await
-                .entry(target.id)
-                .or_insert(target.clone());
-        }
-
-        Ok(target)
+    async fn query_by(&self, by: &TargetQueryBy) -> BackupResult<Option<Arc<dyn TargetEngine>>> {
+        self.get_target(by).await.map(|t| {
+            t.map(|t| {
+                Arc::new(TargetWrapper::new(t.target_id(), self.clone())) as Arc<dyn TargetEngine>
+            })
+        })
     }
 
     async fn update(
@@ -336,29 +450,8 @@ impl TargetMgr for Engine {
         config: Option<String>,
         description: Option<String>,
     ) -> BackupResult<()> {
-        {
-            // try find it in cache first.
-            let cache = self.targets.read().await;
-            let target = match &by {
-                TargetQueryBy::Id(id) => cache.get(id),
-                TargetQueryBy::Url(url) => cache.values().find(|t| t.url == *url),
-            };
-
-            // check which fields are being updated, return Ok() if no fields are updated.
-            if let Some(target) = target {
-                if (url.is_none() || &target.url == url.as_ref().unwrap())
-                    && (friendly_name.is_none()
-                        || &target.friendly_name == friendly_name.as_ref().unwrap())
-                    && (config.is_none() || &target.config == config.as_ref().unwrap())
-                    && (description.is_none()
-                        || &target.description == description.as_ref().unwrap())
-                {
-                    return Ok(());
-                }
-            }
-        }
-
-        MetaStorageTargetMgr::update(self.meta_storage.as_ref().as_ref(), by, url.as_deref(), friendly_name.as_deref(), config.as_deref(), description.as_deref())
+        MetaStorageTargetMgr::update(self
+                .meta_storage.as_ref().as_ref(), by, url.as_deref(), friendly_name.as_deref(), config.as_deref(), description.as_deref())
             .await
             .map_err(handle_error!(
                 "update target failed, by: {:?}, url: {:?}, friendly_name: {:?}, config: {:?}, description: {:?}",
@@ -370,26 +463,26 @@ impl TargetMgr for Engine {
             ))?;
 
         {
-            // update fields in cache.
+            // remove it in cache. it will be reloaded when it's queried next time.
             let mut cache = self.targets.write().await;
-            let target = match &by {
-                TargetQueryBy::Id(id) => cache.get_mut(id),
-                TargetQueryBy::Url(url) => cache.values_mut().find(|t| t.url == *url),
-            };
+            match &by {
+                TargetQueryBy::Id(id) => {
+                    cache.remove(id);
+                }
+                TargetQueryBy::Url(url) => {
+                    let mut found_id = None;
+                    for (id, t) in cache.iter() {
+                        if let Ok(u) = t.target_info().await {
+                            if u.url == *url {
+                                found_id = Some(*id);
+                                break;
+                            }
+                        }
+                    }
 
-            // update fields in cache if it's updated.
-            if let Some(target) = target {
-                if let Some(url) = url {
-                    target.url = url;
-                }
-                if let Some(friendly_name) = friendly_name {
-                    target.friendly_name = friendly_name;
-                }
-                if let Some(config) = config {
-                    target.config = config;
-                }
-                if let Some(description) = description {
-                    target.description = description;
+                    if let Some(id) = found_id {
+                        cache.remove(&id);
+                    }
                 }
             }
         }
@@ -475,7 +568,7 @@ impl TaskMgr for Engine {
                 task_info
             ))?;
 
-        let task = Arc::new(TaskImpl::new(task_info));
+        let task = Arc::new(TaskImpl::new(task_info, self.clone()));
         self.tasks.write().await.insert(uuid, task);
 
         Ok(Arc::new(TaskWrapper::new(self.clone(), uuid)))
@@ -514,7 +607,7 @@ impl TaskMgr for Engine {
                 let uuid = task_info.uuid;
                 task_cache
                     .entry(task_info.uuid)
-                    .or_insert_with(|| Arc::new(TaskImpl::new(task_info)));
+                    .or_insert_with(|| Arc::new(TaskImpl::new(task_info, self.clone())));
                 Arc::new(TaskWrapper::new(self.clone(), uuid)) as Arc<dyn Task>
             })
             .collect())
@@ -524,39 +617,5 @@ impl TaskMgr for Engine {
         self.get_task(by).await.map(|t| {
             t.map(|t| Arc::new(TaskWrapper::new(self.clone(), *t.uuid())) as Arc<dyn Task>)
         })
-    }
-}
-
-impl Engine {
-    pub(crate) async fn get_task(&self, by: &FindTaskBy) -> BackupResult<Option<Arc<TaskImpl>>> {
-        {
-            let cache = self.tasks.read().await;
-            let task = match by {
-                FindTaskBy::Uuid(uuid) => cache.get(uuid),
-            };
-
-            if let Some(task) = task {
-                return Ok(Some(task.clone()));
-            }
-        }
-
-        let task_info = self
-            .meta_storage
-            .query_task(by)
-            .await
-            .map_err(handle_error!("find task failed, by: {:?}", by))?;
-
-        if let Some(task_info) = task_info {
-            let task = self
-                .tasks
-                .write()
-                .await
-                .entry(task_info.uuid)
-                .or_insert_with(|| Arc::new(TaskImpl::new(task_info)))
-                .clone();
-            Ok(Some(task))
-        } else {
-            Ok(None)
-        }
     }
 }

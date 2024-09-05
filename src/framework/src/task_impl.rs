@@ -1,6 +1,6 @@
 use crate::{
     checkpoint::CheckPoint,
-    engine::{FindTaskBy, ListOffset, TaskUuid},
+    engine::{self, FindTaskBy, ListOffset, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
     meta::{CheckPointVersion, PreserveStateId},
@@ -12,11 +12,15 @@ use crate::{
 
 pub(crate) struct TaskImpl {
     info: TaskInfo,
+    egnine: Engine,
 }
 
 impl TaskImpl {
-    pub fn new(task_info: TaskInfo) -> Self {
-        TaskImpl { info: task_info }
+    pub fn new(task_info: TaskInfo, engine: Engine) -> Self {
+        TaskImpl {
+            info: task_info,
+            egnine: engine,
+        }
     }
 }
 
