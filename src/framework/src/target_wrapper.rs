@@ -2,7 +2,7 @@ use crate::{
     engine::{TargetId, TargetInfo, TargetQueryBy},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
-    target::{Target, TargetTaskSession},
+    target::{Target, TargetTask},
     task::TaskInfo,
 };
 
@@ -40,13 +40,13 @@ impl Target<String, String, String, String, String> for TargetWrapper {
         }
     }
 
-    async fn task_session(
+    async fn target_task(
         &self,
         task_info: TaskInfo,
-    ) -> BackupResult<Box<dyn TargetTaskSession<String, String, String, String, String>>> {
+    ) -> BackupResult<Box<dyn TargetTask<String, String, String, String, String>>> {
         let t = self.engine.get_target(&self.target_id).await?;
         match t {
-            Some(t) => t.task_session(task_info).await,
+            Some(t) => t.target_task(task_info).await,
             None => Err(BackupError::ErrorState(format!(
                 "target({:?}) has been removed.",
                 self.target_id()

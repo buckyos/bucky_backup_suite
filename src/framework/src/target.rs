@@ -42,12 +42,12 @@ pub trait Target<
 {
     fn target_id(&self) -> TargetId;
     async fn target_info(&self) -> BackupResult<TargetInfo>;
-    async fn task_session(
+    async fn target_task(
         &self,
         task_info: TaskInfo,
     ) -> BackupResult<
         Box<
-            dyn TargetTaskSession<
+            dyn TargetTask<
                 ServiceCheckPointMeta,
                 ServiceDirMetaType,
                 ServiceFileMetaType,
@@ -61,7 +61,7 @@ pub trait Target<
 }
 
 #[async_trait::async_trait]
-pub trait TargetTaskSession<
+pub trait TargetTask<
     ServiceCheckPointMeta,
     ServiceDirMetaType,
     ServiceFileMetaType,
@@ -79,9 +79,9 @@ pub trait TargetTaskSession<
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
-    ) -> BackupResult<(Vec<String>, Box<dyn TargetCheckPointSession>)>;
+    ) -> BackupResult<(Vec<String>, Box<dyn TargetCheckPoint>)>;
 
-    async fn checkpoint_session_from_filled_meta(
+    async fn target_checkpoint_from_filled_meta(
         &self,
         meta: &CheckPointMeta<
             ServiceCheckPointMeta,
@@ -91,11 +91,11 @@ pub trait TargetTaskSession<
             ServiceLogMetaType,
         >,
         target_meta: &[String],
-    ) -> BackupResult<Box<dyn TargetCheckPointSession>>;
+    ) -> BackupResult<Box<dyn TargetCheckPoint>>;
 }
 
 #[async_trait::async_trait]
-pub trait TargetCheckPointSession: Send + Sync {
+pub trait TargetCheckPoint: Send + Sync {
     fn checkpoint_version(&self) -> CheckPointVersion;
     async fn transfer(&self) -> BackupResult<()>;
 
@@ -111,8 +111,5 @@ impl<T: TargetFactory<String, String, String, String, String>> TargetFactoryEngi
 pub trait TargetEngine: Target<String, String, String, String, String> {}
 impl<T: Target<String, String, String, String, String>> TargetEngine for T {}
 
-pub trait TargetTaskSessionEngine:
-    TargetTaskSession<String, String, String, String, String>
-{
-}
-impl<T: TargetTaskSession<String, String, String, String, String>> TargetTaskSessionEngine for T {}
+pub trait TargetTaskEngine: TargetTask<String, String, String, String, String> {}
+impl<T: TargetTask<String, String, String, String, String>> TargetTaskEngine for T {}

@@ -42,12 +42,12 @@ pub trait Source<
 {
     fn source_id(&self) -> SourceId;
     async fn source_info(&self) -> BackupResult<SourceInfo>;
-    async fn task_session(
+    async fn source_task(
         &self,
         task_info: TaskInfo,
     ) -> BackupResult<
         Box<
-            dyn SourceTaskSession<
+            dyn SourceTask<
                 ServiceCheckPointMeta,
                 ServiceDirMetaType,
                 ServiceFileMetaType,
@@ -61,7 +61,7 @@ pub trait Source<
 }
 
 #[async_trait::async_trait]
-pub trait SourceTaskSession<
+pub trait SourceTask<
     ServiceCheckPointMeta,
     ServiceDirMetaType,
     ServiceFileMetaType,
@@ -75,7 +75,7 @@ pub trait SourceTaskSession<
     async fn preserved_state(&self) -> BackupResult<Option<String>>;
     async fn restore_state(&self, original_state: String) -> BackupResult<()>;
 
-    async fn checkpoint_session(
+    async fn source_checkpoint(
         &self,
         meta: CheckPointMeta<
             ServiceCheckPointMeta,
@@ -84,11 +84,11 @@ pub trait SourceTaskSession<
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
-    ) -> BackupResult<Box<dyn SourceCheckPointSession>>;
+    ) -> BackupResult<Box<dyn SourceCheckPoint>>;
 }
 
 #[async_trait::async_trait]
-pub trait SourceCheckPointSession: Send + Sync {
+pub trait SourceCheckPoint: Send + Sync {
     fn checkpoint_version(&self) -> CheckPointVersion;
     // for checkpoint
     async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>>;
@@ -103,8 +103,5 @@ impl<T: SourceFactory<String, String, String, String, String>> SourceFactoryEngi
 pub trait SourceEngine: Source<String, String, String, String, String> {}
 impl<T: Source<String, String, String, String, String>> SourceEngine for T {}
 
-pub trait SourceTaskSessionEngine:
-    SourceTaskSession<String, String, String, String, String>
-{
-}
-impl<T: SourceTaskSession<String, String, String, String, String>> SourceTaskSessionEngine for T {}
+pub trait SourceTaskEngine: SourceTask<String, String, String, String, String> {}
+impl<T: SourceTask<String, String, String, String, String>> SourceTaskEngine for T {}

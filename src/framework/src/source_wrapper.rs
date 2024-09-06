@@ -2,7 +2,7 @@ use crate::{
     engine::{SourceId, SourceInfo, SourceQueryBy},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
-    source::{Source, SourceTaskSession},
+    source::{Source, SourceTask},
     task::TaskInfo,
 };
 
@@ -40,13 +40,13 @@ impl Source<String, String, String, String, String> for SourceWrapper {
         }
     }
 
-    async fn task_session(
+    async fn source_task(
         &self,
         task_info: TaskInfo,
-    ) -> BackupResult<Box<dyn SourceTaskSession<String, String, String, String, String>>> {
+    ) -> BackupResult<Box<dyn SourceTask<String, String, String, String, String>>> {
         let s = self.engine.get_source(&self.source_id).await?;
         match s {
-            Some(s) => s.task_session(task_info).await,
+            Some(s) => s.source_task(task_info).await,
             None => Err(BackupError::ErrorState(format!(
                 "source({:?}) has been removed.",
                 self.source_id()
