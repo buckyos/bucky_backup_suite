@@ -30,7 +30,7 @@ impl Target<String, String, String, String, String> for TargetWrapper {
     }
 
     async fn target_info(&self) -> BackupResult<TargetInfo> {
-        let t = self.engine.get_target(&self.target_id).await?;
+        let t = self.engine.get_target_impl(&self.target_id).await?;
         match t {
             Some(t) => t.target_info().await,
             None => Err(BackupError::ErrorState(format!(
@@ -44,7 +44,7 @@ impl Target<String, String, String, String, String> for TargetWrapper {
         &self,
         task_info: TaskInfo,
     ) -> BackupResult<Box<dyn TargetTask<String, String, String, String, String>>> {
-        let t = self.engine.get_target(&self.target_id).await?;
+        let t = self.engine.get_target_impl(&self.target_id).await?;
         match t {
             Some(t) => t.target_task(task_info).await,
             None => Err(BackupError::ErrorState(format!(
@@ -55,7 +55,7 @@ impl Target<String, String, String, String, String> for TargetWrapper {
     }
 
     async fn update_config(&self, config: &str) -> BackupResult<()> {
-        let t = self.engine.get_target(&self.target_id).await?;
+        let t = self.engine.get_target_impl(&self.target_id).await?;
         match t {
             Some(t) => t.update_config(config).await,
             None => Err(BackupError::ErrorState(format!(

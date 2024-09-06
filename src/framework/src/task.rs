@@ -3,14 +3,14 @@ use std::time::SystemTime;
 use crate::{
     checkpoint::{CheckPoint, CheckPointStatus},
     engine::{ListOffset, SourceId, TargetId, TaskUuid},
-    error::BackupResult,
+    error::{BackupError, BackupResult},
     meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
 };
 
 pub enum SourceState {
     None,
     Original(Option<String>), // None if nothing for restore.
-    Preserved((Option<String>, Option<String>)), // <original, preserved>
+    Preserved(Option<String>, Option<String>), // <original, preserved>
 }
 
 #[derive(Debug)]
@@ -29,8 +29,8 @@ pub struct TaskInfo {
 }
 
 pub struct ListPreservedSourceStateFilter {
-    time: (Option<SystemTime>, Option<SystemTime>),
-    idle: Option<bool>,
+    pub time: (Option<SystemTime>, Option<SystemTime>),
+    pub idle: Option<bool>,
 }
 
 #[async_trait::async_trait]
@@ -42,12 +42,12 @@ pub trait PreserveSourceState: Send + Sync {
     // But it should be restored by the application when no transfering start, because the engine is uncertain whether the user will use it to initiate the transfer task.
     // It will fail when a transfer task is valid, you should wait it done or cancel it.
     async fn restore(&self, state_id: PreserveStateId) -> BackupResult<()>;
-    async fn restore_all_idle(&self) -> BackupResult<usize>;
+    async fn restore_all_idle(&self) -> Result<usize, (BackupError, usize)>;
 
     async fn list_preserved_source_states(
         &self,
         filter: ListPreservedSourceStateFilter,
-        offset: u32,
+        offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<(PreserveStateId, SourceState)>>;
 }

@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PreserveStateId(u64);
 
 impl Into<u64> for PreserveStateId {

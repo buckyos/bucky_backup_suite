@@ -73,7 +73,7 @@ pub trait SourceTask<
     // preserve
     async fn original_state(&self) -> BackupResult<Option<String>>;
     async fn preserved_state(&self) -> BackupResult<Option<String>>;
-    async fn restore_state(&self, original_state: String) -> BackupResult<()>;
+    async fn restore_state(&self, original_state: &str) -> BackupResult<()>;
 
     async fn source_checkpoint(
         &self,

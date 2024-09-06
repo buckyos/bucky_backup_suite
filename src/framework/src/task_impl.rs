@@ -1,9 +1,11 @@
 use crate::{
     checkpoint::CheckPoint,
-    engine::{self, FindTaskBy, ListOffset, TaskUuid},
+    engine::{FindTaskBy, ListOffset, SourceQueryBy, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
     meta::{CheckPointVersion, PreserveStateId},
+    source::SourceTask,
+    source_wrapper::SourceTaskWrapper,
     task::{
         HistoryStrategy, ListCheckPointFilter, ListPreservedSourceStateFilter, PreserveSourceState,
         SourceState, Task, TaskInfo,
@@ -13,13 +15,17 @@ use crate::{
 pub(crate) struct TaskImpl {
     info: TaskInfo,
     egnine: Engine,
+    source: SourceTaskWrapper,
 }
 
 impl TaskImpl {
     pub fn new(task_info: TaskInfo, engine: Engine) -> Self {
+        let uuid = task_info.uuid;
+        let source_id = task_info.source_id;
         TaskImpl {
             info: task_info,
-            egnine: engine,
+            egnine: engine.clone(),
+            source: SourceTaskWrapper::new(source_id, uuid, engine),
         }
     }
 }
@@ -27,31 +33,99 @@ impl TaskImpl {
 #[async_trait::async_trait]
 impl PreserveSourceState for TaskImpl {
     async fn preserve(&self) -> BackupResult<PreserveStateId> {
-        unimplemented!()
+        let org_state = self.source.original_state().await?;
+        let state_id = self
+            .egnine
+            .save_source_original_state(&self.info.uuid, org_state.as_deref())
+            .await?;
+        let preserved_state = self.source.preserved_state().await?;
+        self.egnine
+            .save_source_preserved_state(state_id, preserved_state.as_deref())
+            .await?;
+        Ok(state_id)
     }
 
     async fn state(&self, state_id: PreserveStateId) -> BackupResult<SourceState> {
-        unimplemented!()
+        self.egnine.load_source_preserved_state(state_id).await
     }
 
     // Any preserved state for backup by source will be restored automatically when it done(success/fail/cancel).
     // But it should be restored by the application when no transfering start, because the engine is uncertain whether the user will use it to initiate the transfer task.
     // It will fail when a transfer task is valid, you should wait it done or cancel it.
     async fn restore(&self, state_id: PreserveStateId) -> BackupResult<()> {
-        unimplemented!()
+        todo!("check it's idle");
+        let state = self.egnine.load_source_preserved_state(state_id).await?;
+        let original_state = match state {
+            SourceState::None => return Ok(()),
+            SourceState::Original(original_state) => original_state,
+            SourceState::Preserved(original_state, _) => original_state,
+        };
+
+        if let Some(original_state) = &original_state {
+            self.source.restore_state(original_state.as_str()).await?;
+        }
+        self.egnine.delete_source_preserved_state(state_id).await
     }
 
-    async fn restore_all_idle(&self) -> BackupResult<usize> {
-        unimplemented!()
+    async fn restore_all_idle(&self) -> Result<usize, (BackupError, usize)> {
+        let mut success_count = 0;
+        let mut first_err = None;
+        let mut offset = 0;
+        loop {
+            let states = self
+                .egnine
+                .list_preserved_source_states(
+                    &self.info.uuid,
+                    ListPreservedSourceStateFilter {
+                        time: (None, None),
+                        idle: Some(true),
+                    },
+                    ListOffset::First(offset),
+                    16,
+                )
+                .await
+                .map_err(|e| (e, success_count))?;
+
+            if states.is_empty() {
+                return match first_err {
+                    Some(err) => Err((err, success_count)),
+                    None => Ok(success_count),
+                };
+            }
+
+            for (state_id, state) in states {
+                let original_state = match state {
+                    SourceState::None => None,
+                    SourceState::Original(original_state) => original_state,
+                    SourceState::Preserved(original_state, _) => original_state,
+                };
+
+                if let Some(original_state) = &original_state {
+                    if let Err(err) = self.source.restore_state(original_state.as_str()).await {
+                        if first_err.is_none() {
+                            first_err = Some(err);
+                        }
+                    } else {
+                        success_count += 1;
+                    }
+                }
+                self.egnine
+                    .delete_source_preserved_state(state_id)
+                    .await
+                    .map_err(|err| (err, success_count))?; // remove the preserved state.
+            }
+        }
     }
 
     async fn list_preserved_source_states(
         &self,
         filter: ListPreservedSourceStateFilter,
-        offset: u32,
+        offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<(PreserveStateId, SourceState)>> {
-        unimplemented!()
+        self.egnine
+            .list_preserved_source_states(&self.info.uuid, filter, offset, limit)
+            .await
     }
 }
 
@@ -169,21 +243,25 @@ impl PreserveSourceState for TaskWrapper {
         }
     }
 
-    async fn restore_all_idle(&self) -> BackupResult<usize> {
-        let t = self.engine.get_task(&self.uuid).await?;
+    async fn restore_all_idle(&self) -> Result<usize, (BackupError, usize)> {
+        let t = self
+            .engine
+            .get_task(&self.uuid)
+            .await
+            .map_err(|err| (err, 0))?;
         match t {
             Some(t) => t.restore_all_idle().await,
-            None => Err(BackupError::ErrorState(format!(
-                "task({:?}) has been removed.",
-                self.uuid()
-            ))),
+            None => Err((
+                BackupError::ErrorState(format!("task({:?}) has been removed.", self.uuid())),
+                0,
+            )),
         }
     }
 
     async fn list_preserved_source_states(
         &self,
         filter: ListPreservedSourceStateFilter,
-        offset: u32,
+        offset: ListOffset,
         limit: u32,
     ) -> BackupResult<Vec<(PreserveStateId, SourceState)>> {
         let t = self.engine.get_task(&self.uuid).await?;

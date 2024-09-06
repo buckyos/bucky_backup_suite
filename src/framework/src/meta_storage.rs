@@ -4,11 +4,11 @@ use crate::{
     checkpoint::{self, CheckPointInfo, CheckPointStatus, ItemTransferMap},
     engine::{
         EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter, ListTaskFilter,
-        SourceId, SourceInfo, SourceQueryBy, TargetId, TargetInfo, TargetQueryBy,
+        SourceId, SourceInfo, SourceQueryBy, TargetId, TargetInfo, TargetQueryBy, TaskUuid,
     },
     error::BackupResult,
     meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
-    task::{ListCheckPointFilter, SourceState, TaskInfo},
+    task::{ListCheckPointFilter, ListPreservedSourceStateFilter, SourceState, TaskInfo},
 };
 
 pub trait MetaStorage:
@@ -119,20 +119,25 @@ pub trait MetaStorageConfig: Send + Sync {
 pub trait MetaStorageSourceStateMgr: Send + Sync {
     async fn new_state(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         original_state: Option<&str>,
     ) -> BackupResult<PreserveStateId>;
 
     async fn preserved_state(
         &self,
         state_id: PreserveStateId,
-        preserved_state: &str,
+        preserved_state: Option<&str>,
     ) -> BackupResult<()>;
 
     async fn state(&self, state_id: PreserveStateId) -> BackupResult<SourceState>;
 
-    async fn list_preserved_source_states(&self, task_uuid: &str)
-        -> BackupResult<Vec<SourceState>>;
+    async fn list_preserved_source_states(
+        &self,
+        task_uuid: &TaskUuid,
+        filter: ListPreservedSourceStateFilter,
+        offset: ListOffset,
+        limit: u32,
+    ) -> BackupResult<Vec<(PreserveStateId, SourceState)>>;
 
     async fn delete_source_state(&self, state_id: PreserveStateId) -> BackupResult<()>;
 }
