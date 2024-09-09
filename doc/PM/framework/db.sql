@@ -2,14 +2,19 @@
 -- pub struct SourceInfo {
 --     pub id: SourceId,
 --     pub classify: String,
---     pub url: String,
+--     pub url: String, // url is unique key
+--     pub friendly_name: String
+--     pub config: String
 --     pub description: String,
 -- }
 CREATE TABLE IF NOT EXISTS sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     classify TEXT NOT NULL,
     url TEXT NOT NULL,
-    description TEXT DEFAULT NULL
+    friendly_name TEXT NOT NULL,
+    config TEXT NOT NULL,
+    description TEXT DEFAULT NULL,
+    UNIQUE(url)
 );
 
 -- create table `targets` with the following columns:
@@ -17,13 +22,26 @@ CREATE TABLE IF NOT EXISTS sources (
 --    pub id: SourceId,
 --    pub classify: String,
 --    pub url: String,
+--    pub friendly_name: String
+--    pub config: String
 --    pub description: String,
 -- }
 CREATE TABLE IF NOT EXISTS targets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     classify TEXT NOT NULL,
     url TEXT NOT NULL,
-    description TEXT DEFAULT NULL
+    friendly_name TEXT NOT NULL,
+    config TEXT NOT NULL,
+    description TEXT DEFAULT NULL,
+    UNIQUE(url)
+);
+
+-- create table `config` with the following columns:
+-- category: String, // constraint: unique
+-- config: String
+CREATE TABLE IF NOT EXISTS config (
+    category TEXT PRIMARY KEY,
+    config TEXT NOT NULL
 );
 
 -- create table `tasks` with the following columns:
@@ -35,6 +53,7 @@ CREATE TABLE IF NOT EXISTS targets (
 --     pub source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
 --     pub target_id: String,
 --     pub target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
+--     pub priority: u32,
 --     pub attachment: String,   // The application can save any attachment with task.
 --     pub history_strategy: String,
 --     pub flag: u64, // Save any flags for the task. it will be filterd when list the tasks.
@@ -48,6 +67,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     target_id INTEGER NOT NULL,
     target_param TEXT DEFAULT NULL,
     attachment TEXT DEFAULT NULL,
+    priority INTEGER NOT NULL,
     history_strategy TEXT DEFAULT NULL,
     flag: INTEGER DEFAULT 0,
     FOREIGN KEY (source_id) REFERENCES sources (id),
@@ -80,6 +100,7 @@ CREATE TABLE IF NOT EXISTS task_source_state (
 -- status: u64,
 -- error_msg: Option<String>,
 -- (task_uuid, seq, create_time) is primary key
+-- (task_uuid, seq) is unique key
 CREATE TABLE IF NOT EXISTS checkpoints (
     task_uuid TEXT NOT NULL,
     seq INTEGER NOT NULL,
@@ -92,7 +113,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     error_msg TEXT DEFAULT NULL,
     PRIMARY KEY (task_uuid, seq, create_time),
     FOREIGN KEY (task_uuid) REFERENCES tasks (uuid),
-    FOREIGN KEY (preserved_source_state_id) REFERENCES task_source_state (id)
+    FOREIGN KEY (preserved_source_state_id) REFERENCES task_source_state (id),
+    UNIQUE(task_uuid, seq)
 );
 
 -- create table `checkpoint_transfer_map` with the following columns:
