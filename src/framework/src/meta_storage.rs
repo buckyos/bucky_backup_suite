@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    checkpoint::{self, CheckPointInfo, CheckPointStatus, ItemTransferMap},
+    checkpoint::{CheckPointInfo, CheckPointStatus, ItemTransferMap},
     engine::{
         EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter, ListTaskFilter,
         SourceId, SourceInfo, SourceQueryBy, TargetId, TargetInfo, TargetQueryBy, TaskUuid,
@@ -146,33 +146,33 @@ pub trait MetaStorageSourceStateMgr: Send + Sync {
 pub trait MetaStorageCheckPointMgr: Send + Sync {
     async fn create_checkpoint(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         preserved_source_id: Option<PreserveStateId>, // It will be lost for `None`
         meta: &CheckPointMetaEngine,
     ) -> BackupResult<CheckPointVersion>;
 
     async fn set_delete_flag(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         is_delete_on_target: bool,
     ) -> BackupResult<()>;
 
     async fn delete_checkpoint(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<()>;
 
     async fn start_checkpoint_only_once_per_preserved_source(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<()>;
 
     async fn update_status(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         status: CheckPointStatus,
     ) -> BackupResult<()>;
@@ -181,14 +181,14 @@ pub trait MetaStorageCheckPointMgr: Send + Sync {
     // Save in string to avoid it changed by encode/decode.
     async fn save_target_meta(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         meta: &[&str],
     ) -> BackupResult<()>;
 
     async fn list_checkpoints(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
@@ -196,7 +196,7 @@ pub trait MetaStorageCheckPointMgr: Send + Sync {
 
     async fn query_checkpoint(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>>;
 }
@@ -219,7 +219,7 @@ pub trait MetaStorageCheckPointTransferMapMgr: Send + Sync {
     // the developer should remove the conflicting scope to update the transfer map.
     async fn add_transfer_map(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         item_path: &[u8],
         target_address: Option<&[u8]>,
@@ -228,7 +228,7 @@ pub trait MetaStorageCheckPointTransferMapMgr: Send + Sync {
 
     async fn query_transfer_map<'a>(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         filter: QueryTransferMapFilter<'a>,
     ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>>; // <target-address, <item-path, ItemTransferMap>>
@@ -238,7 +238,7 @@ pub trait MetaStorageCheckPointTransferMapMgr: Send + Sync {
 pub trait MetaStorageCheckPointKeyValueMgr: Send + Sync {
     async fn add_value(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         key: &str,
         value: &[u8],
@@ -246,7 +246,7 @@ pub trait MetaStorageCheckPointKeyValueMgr: Send + Sync {
     ) -> BackupResult<()>;
     async fn get_value(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         key: &str,
     ) -> BackupResult<Option<Vec<u8>>>;
@@ -256,33 +256,33 @@ pub trait MetaStorageCheckPointKeyValueMgr: Send + Sync {
 pub trait MetaStorageCheckPointMgrSql: Send + Sync {
     async fn create_checkpoint(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         preserved_source_id: PreserveStateId,
         meta: &str,
     ) -> BackupResult<CheckPointVersion>;
 
     async fn set_delete_flag(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         is_delete_on_target: bool,
     ) -> BackupResult<()>;
 
     async fn delete_checkpoint(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<()>;
 
     async fn start_checkpoint_only_once_per_preserved_source(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<()>;
 
     async fn update_status(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         status: CheckPointStatus,
     ) -> BackupResult<()>;
@@ -291,14 +291,14 @@ pub trait MetaStorageCheckPointMgrSql: Send + Sync {
     // Save in string to avoid it changed by encode/decode.
     async fn save_target_meta(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         meta: &[&str],
     ) -> BackupResult<()>;
 
     async fn list_checkpoints(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
@@ -306,7 +306,7 @@ pub trait MetaStorageCheckPointMgrSql: Send + Sync {
 
     async fn query_checkpoint(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>>;
 }
@@ -315,13 +315,13 @@ pub trait MetaStorageCheckPointMgrSql: Send + Sync {
 pub trait MetaStorageCheckPointItemMgrSql: Send + Sync {
     async fn insert_item(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         item_path: &[u8],
     ) -> BackupResult<()>;
     async fn remove_items(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<usize>;
 }
@@ -339,7 +339,7 @@ where
 {
     async fn create_checkpoint(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         preserved_source_id: Option<PreserveStateId>,
         meta: &CheckPointMetaEngine,
     ) -> BackupResult<CheckPointVersion> {
@@ -352,7 +352,7 @@ where
 
     async fn set_delete_flag(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         is_delete_on_target: bool,
     ) -> BackupResult<()> {
@@ -362,7 +362,7 @@ where
 
     async fn delete_checkpoint(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<()> {
         self.start_transaction().await?;
@@ -374,7 +374,7 @@ where
 
     async fn start_checkpoint_only_once_per_preserved_source(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<()> {
         MetaStorageCheckPointMgrSql::start_checkpoint_only_once_per_preserved_source(
@@ -385,7 +385,7 @@ where
 
     async fn update_status(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         status: CheckPointStatus,
     ) -> BackupResult<()> {
@@ -396,7 +396,7 @@ where
     // Save in string to avoid it changed by encode/decode.
     async fn save_target_meta(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
         meta: &[&str],
     ) -> BackupResult<()> {
@@ -405,7 +405,7 @@ where
 
     async fn list_checkpoints(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
@@ -415,7 +415,7 @@ where
 
     async fn query_checkpoint(
         &self,
-        task_uuid: &str,
+        task_uuid: &TaskUuid,
         version: CheckPointVersion,
     ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>> {
         MetaStorageCheckPointMgrSql::query_checkpoint(self, task_uuid, version).await

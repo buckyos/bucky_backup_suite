@@ -1,6 +1,8 @@
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+use crate::engine::TaskUuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PreserveStateId(u64);
 
 impl Into<u64> for PreserveStateId {
@@ -17,15 +19,20 @@ impl From<u64> for PreserveStateId {
 
 // All times should use UTC time. Unless otherwise stated, they should be accurate to the second.
 
+pub trait MetaBound: Clone {}
+
+impl<T> MetaBound for T where T: Clone {}
+
+#[derive(Clone)]
 pub struct CheckPointMeta<
-    ServiceCheckPointMeta,
-    ServiceDirMetaType,
-    ServiceFileMetaType,
-    ServiceLinkMetaType,
-    ServiceLogMetaType,
+    ServiceCheckPointMeta: MetaBound,
+    ServiceDirMetaType: MetaBound,
+    ServiceFileMetaType: MetaBound,
+    ServiceLinkMetaType: MetaBound,
+    ServiceLogMetaType: MetaBound,
 > {
     pub task_friendly_name: String,
-    pub task_uuid: String,
+    pub task_uuid: TaskUuid,
     pub version: CheckPointVersion,
     pub prev_versions: Vec<CheckPointVersion>, // all versions this checkpoint depends on
     pub create_time: SystemTime,
@@ -48,11 +55,13 @@ pub struct CheckPointMeta<
     pub service_meta: Option<ServiceCheckPointMeta>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CheckPointVersion {
     pub time: SystemTime,
     pub seq: u64,
 }
 
+#[derive(Clone)]
 pub struct StorageItemAttributes {
     pub create_time: SystemTime,
     pub last_update_time: SystemTime,
@@ -62,12 +71,12 @@ pub struct StorageItemAttributes {
 }
 
 // common meta
-
+#[derive(Clone)]
 pub enum StorageItem<
-    ServiceDirMetaType,
-    ServiceFileMetaType,
-    ServiceLinkMetaType,
-    ServiceLogMetaType,
+    ServiceDirMetaType: MetaBound,
+    ServiceFileMetaType: MetaBound,
+    ServiceLinkMetaType: MetaBound,
+    ServiceLogMetaType: MetaBound,
 > {
     Dir(
         DirectoryMeta<
@@ -82,11 +91,12 @@ pub enum StorageItem<
     Log(LogMeta<ServiceLogMetaType>),
 }
 
+#[derive(Clone)]
 pub struct DirectoryMeta<
-    ServiceDirMetaType,
-    ServiceFileMetaType,
-    ServiceLinkMetaType,
-    ServiceLogMetaType,
+    ServiceDirMetaType: MetaBound,
+    ServiceFileMetaType: MetaBound,
+    ServiceLinkMetaType: MetaBound,
+    ServiceLogMetaType: MetaBound,
 > {
     pub name: Vec<u8>,
     pub attributes: StorageItemAttributes,
@@ -101,7 +111,8 @@ pub struct DirectoryMeta<
     >,
 }
 
-pub struct FileMeta<ServiceFileMetaType> {
+#[derive(Clone)]
+pub struct FileMeta<ServiceFileMetaType: MetaBound> {
     pub name: Vec<u8>,
     pub attributes: StorageItemAttributes,
     pub service_meta: Option<ServiceFileMetaType>,
@@ -111,6 +122,7 @@ pub struct FileMeta<ServiceFileMetaType> {
 }
 
 // It will work with a chunk
+#[derive(Clone)]
 pub struct FileDiffChunk {
     pub pos: u64,           // position of the bytes stored in the chunk
     pub length: u64,        // length of the bytes
@@ -119,7 +131,8 @@ pub struct FileDiffChunk {
     pub upload_bytes: u64,
 }
 
-pub struct FileDiffMeta<ServiceDiffMetaType> {
+#[derive(Clone)]
+pub struct FileDiffMeta<ServiceDiffMetaType: MetaBound> {
     pub name: Vec<u8>,
     pub attributes: StorageItemAttributes,
     pub service_meta: Option<ServiceDiffMetaType>,
@@ -128,7 +141,8 @@ pub struct FileDiffMeta<ServiceDiffMetaType> {
     pub diff_chunks: Vec<FileDiffChunk>,
 }
 
-pub struct LinkMeta<ServiceLinkMetaType> {
+#[derive(Clone)]
+pub struct LinkMeta<ServiceLinkMetaType: MetaBound> {
     pub name: Vec<u8>,
     pub attributes: StorageItemAttributes,
     pub service_meta: Option<ServiceLinkMetaType>,
@@ -136,6 +150,7 @@ pub struct LinkMeta<ServiceLinkMetaType> {
     pub is_hard: bool,
 }
 
+#[derive(Clone)]
 pub enum LogAction {
     Remove,
     Recover,
@@ -145,7 +160,8 @@ pub enum LogAction {
     UpdateAttributes, // new attributes will be set in `attributes` field
 }
 
-pub struct LogMeta<ServiceLogMetaType> {
+#[derive(Clone)]
+pub struct LogMeta<ServiceLogMetaType: MetaBound> {
     pub name: Vec<u8>,
     pub attributes: StorageItemAttributes,
     pub service_meta: Option<ServiceLogMetaType>,

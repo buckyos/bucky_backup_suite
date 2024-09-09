@@ -1,5 +1,9 @@
+use std::sync::{atomic::AtomicU64, Arc};
+
 use crate::{
-    checkpoint::CheckPoint,
+    build_meta::{meta_from_delta, meta_from_reader},
+    checkpoint::{CheckPoint, CheckPointStatus},
+    checkpoint_impl::CheckPointWrapper,
     engine::{FindTaskBy, ListOffset, SourceQueryBy, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
@@ -7,8 +11,8 @@ use crate::{
     source::SourceTask,
     source_wrapper::SourceTaskWrapper,
     task::{
-        HistoryStrategy, ListCheckPointFilter, ListPreservedSourceStateFilter, PreserveSourceState,
-        SourceState, Task, TaskInfo,
+        HistoryStrategy, ListCheckPointFilter, ListCheckPointFilterTime,
+        ListPreservedSourceStateFilter, PreserveSourceState, SourceState, Task, TaskInfo,
     },
 };
 
@@ -135,44 +139,99 @@ impl Task for TaskImpl {
         &self.info.uuid
     }
     async fn task_info(&self) -> BackupResult<TaskInfo> {
-        unimplemented!()
+        Ok(self.info.clone())
     }
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()> {
-        unimplemented!()
-    }
-    async fn history_strategy(&self) -> BackupResult<HistoryStrategy> {
-        unimplemented!()
-    }
-    async fn set_history_strategy(&self, strategy: HistoryStrategy) -> BackupResult<()> {
-        unimplemented!()
+        self.egnine.update_task_info(task_info).await
     }
     async fn prepare_checkpoint(
         &self,
         preserved_source_state_id: PreserveStateId,
         is_delta: bool,
-    ) -> BackupResult<Box<dyn CheckPoint>> {
-        unimplemented!()
+    ) -> BackupResult<Arc<dyn CheckPoint>> {
+        let last_finish_checkpoint = self
+            .list_checkpoints(
+                &ListCheckPointFilter {
+                    time: ListCheckPointFilterTime::CompleteTime(None, None),
+                    status: Some(vec![CheckPointStatus::Success]),
+                },
+                ListOffset::Last(0),
+                1,
+            )
+            .await?
+            .pop();
+
+        let source_preserved = self
+            .egnine
+            .get_source_preserved(
+                self.info.source_id,
+                &self.info.uuid,
+                preserved_source_state_id,
+            )
+            .await?;
+
+        let mut checkpoint_meta = loop {
+            if is_delta {
+                if let Some(last_checkpoint) = last_finish_checkpoint {
+                    let last_target_checkpoint = self
+                        .egnine
+                        .get_target_checkpoint(
+                            self.info.target_id,
+                            &self.info.uuid,
+                            last_checkpoint.version(),
+                        )
+                        .await?;
+                    break meta_from_delta(
+                        last_target_checkpoint.as_ref(),
+                        source_preserved.as_ref(),
+                    )
+                    .await?;
+                }
+            }
+
+            break meta_from_reader(source_preserved.as_ref()).await?;
+        };
+
+        self.egnine
+            .create_checkpoint(
+                &self.info.uuid,
+                Some(preserved_source_state_id),
+                &mut checkpoint_meta,
+            )
+            .await
+            .map(|cp| cp as Arc<dyn CheckPoint>)
     }
     async fn list_checkpoints(
         &self,
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Box<dyn CheckPoint>>> {
-        unimplemented!()
+    ) -> BackupResult<Vec<Arc<dyn CheckPoint>>> {
+        let checkpoints = self
+            .egnine
+            .list_checkpoints(&self.info.uuid, filter, offset, limit)
+            .await?;
+        let checkpoints = checkpoints
+            .into_iter()
+            .map(|cp| cp as Arc<dyn CheckPoint>)
+            .collect();
+        Ok(checkpoints)
     }
     async fn query_checkpoint(
         &self,
         version: CheckPointVersion,
-    ) -> BackupResult<Option<Box<dyn CheckPoint>>> {
-        unimplemented!()
+    ) -> BackupResult<Option<Arc<dyn CheckPoint>>> {
+        self.egnine
+            .get_checkpoint(&self.info.uuid, version)
+            .await
+            .map(|cp| cp.map(|cp| cp as Arc<dyn CheckPoint>))
     }
-    async fn remove_checkpoint(&self, version: CheckPointVersion) -> BackupResult<()> {
-        unimplemented!()
-    }
-    async fn remove_checkpoints_in_condition(
+
+    // the checkpoint should be stopped first if it's transfering.
+    async fn remove_checkpoint(
         &self,
-        filter: &ListCheckPointFilter,
+        version: CheckPointVersion,
+        is_remove_on_target: bool,
     ) -> BackupResult<()> {
         unimplemented!()
     }
@@ -199,7 +258,7 @@ macro_rules! wrap_method {
             let t = self.engine.get_task(self.uuid.as_str()).await?;
             match t {
                 Some(t) => t.$fn_name($( $arg_name ),*).await,
-                None => Err(BackupError::ErrorState(format!(
+                None => Err(BackupError::NotFound(format!(
                     "task({}) has been removed.",
                     self.uuid
                 ))),
@@ -214,7 +273,7 @@ impl PreserveSourceState for TaskWrapper {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.preserve().await,
-            None => Err(BackupError::ErrorState(format!(
+            None => Err(BackupError::NotFound(format!(
                 "task({:?}) has been removed.",
                 self.uuid()
             ))),
@@ -225,7 +284,7 @@ impl PreserveSourceState for TaskWrapper {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.state(state_id).await,
-            None => Err(BackupError::ErrorState(format!(
+            None => Err(BackupError::NotFound(format!(
                 "task({:?}) has been removed.",
                 self.uuid()
             ))),
@@ -236,7 +295,7 @@ impl PreserveSourceState for TaskWrapper {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.restore(state_id).await,
-            None => Err(BackupError::ErrorState(format!(
+            None => Err(BackupError::NotFound(format!(
                 "task({:?}) has been removed.",
                 self.uuid()
             ))),
@@ -252,7 +311,7 @@ impl PreserveSourceState for TaskWrapper {
         match t {
             Some(t) => t.restore_all_idle().await,
             None => Err((
-                BackupError::ErrorState(format!("task({:?}) has been removed.", self.uuid())),
+                BackupError::NotFound(format!("task({:?}) has been removed.", self.uuid())),
                 0,
             )),
         }
@@ -267,7 +326,7 @@ impl PreserveSourceState for TaskWrapper {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.list_preserved_source_states(filter, offset, limit).await,
-            None => Err(BackupError::ErrorState(format!(
+            None => Err(BackupError::NotFound(format!(
                 "task({:?}) has been removed.",
                 self.uuid()
             ))),
@@ -287,7 +346,7 @@ impl Task for TaskWrapper {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.task_info().await,
-            None => Err(BackupError::ErrorState(format!(
+            None => Err(BackupError::NotFound(format!(
                 "task({}) has been removed.",
                 self.uuid()
             ))),
@@ -298,29 +357,7 @@ impl Task for TaskWrapper {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.update(task_info).await,
-            None => Err(BackupError::ErrorState(format!(
-                "task({}) has been removed.",
-                self.uuid()
-            ))),
-        }
-    }
-
-    async fn history_strategy(&self) -> BackupResult<HistoryStrategy> {
-        let t = self.engine.get_task(&self.uuid).await?;
-        match t {
-            Some(t) => t.history_strategy().await,
-            None => Err(BackupError::ErrorState(format!(
-                "task({}) has been removed.",
-                self.uuid()
-            ))),
-        }
-    }
-
-    async fn set_history_strategy(&self, strategy: HistoryStrategy) -> BackupResult<()> {
-        let t = self.engine.get_task(&self.uuid).await?;
-        match t {
-            Some(t) => t.set_history_strategy(strategy).await,
-            None => Err(BackupError::ErrorState(format!(
+            None => Err(BackupError::NotFound(format!(
                 "task({}) has been removed.",
                 self.uuid()
             ))),
@@ -331,14 +368,14 @@ impl Task for TaskWrapper {
         &self,
         preserved_source_state_id: PreserveStateId,
         is_delta: bool,
-    ) -> BackupResult<Box<dyn CheckPoint>> {
+    ) -> BackupResult<Arc<dyn CheckPoint>> {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => {
                 t.prepare_checkpoint(preserved_source_state_id, is_delta)
                     .await
             }
-            None => Err(BackupError::ErrorState(format!(
+            None => Err(BackupError::NotFound(format!(
                 "task({}) has been removed.",
                 self.uuid()
             ))),
@@ -350,11 +387,11 @@ impl Task for TaskWrapper {
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Box<dyn CheckPoint>>> {
+    ) -> BackupResult<Vec<Arc<dyn CheckPoint>>> {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.list_checkpoints(filter, offset, limit).await,
-            None => Err(BackupError::ErrorState(format!(
+            None => Err(BackupError::NotFound(format!(
                 "task({}) has been removed.",
                 self.uuid()
             ))),
@@ -364,36 +401,26 @@ impl Task for TaskWrapper {
     async fn query_checkpoint(
         &self,
         version: CheckPointVersion,
-    ) -> BackupResult<Option<Box<dyn CheckPoint>>> {
+    ) -> BackupResult<Option<Arc<dyn CheckPoint>>> {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.query_checkpoint(version).await,
-            None => Err(BackupError::ErrorState(format!(
+            None => Err(BackupError::NotFound(format!(
                 "task({}) has been removed.",
                 self.uuid()
             ))),
         }
     }
 
-    async fn remove_checkpoint(&self, version: CheckPointVersion) -> BackupResult<()> {
-        let t = self.engine.get_task(&self.uuid).await?;
-        match t {
-            Some(t) => t.remove_checkpoint(version).await,
-            None => Err(BackupError::ErrorState(format!(
-                "task({}) has been removed.",
-                self.uuid()
-            ))),
-        }
-    }
-
-    async fn remove_checkpoints_in_condition(
+    async fn remove_checkpoint(
         &self,
-        filter: &ListCheckPointFilter,
+        version: CheckPointVersion,
+        is_remove_on_target: bool,
     ) -> BackupResult<()> {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
-            Some(t) => t.remove_checkpoints_in_condition(filter).await,
-            None => Err(BackupError::ErrorState(format!(
+            Some(t) => t.remove_checkpoint(version, is_remove_on_target).await,
+            None => Err(BackupError::NotFound(format!(
                 "task({}) has been removed.",
                 self.uuid()
             ))),

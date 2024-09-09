@@ -1,8 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
 use tokio::sync::RwLock;
 
 use crate::{
+    checkpoint::{CheckPoint, CheckPointInfo, CheckPointStatus},
+    checkpoint_impl::{CheckPointImpl, CheckPointWrapper},
     engine::{
         Config, EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter,
         ListTaskFilter, SourceId, SourceInfo, SourceMgr, SourceQueryBy, TargetId, TargetInfo,
@@ -10,23 +12,26 @@ use crate::{
     },
     error::{BackupError, BackupResult},
     handle_error,
-    meta::{CheckPointVersion, PreserveStateId},
+    meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
     meta_storage::{MetaStorage, MetaStorageSourceMgr, MetaStorageTargetMgr},
-    source::{Source, SourceCheckPoint, SourceEngine, SourceFactory, SourceTask},
-    source_wrapper::{SourceTaskWrapper, SourceWrapper},
+    source::{Source, SourceFactory, SourcePreserved, SourceTask},
+    source_wrapper::{SourcePreservedWrapper, SourceTaskWrapper, SourceWrapper},
     target::{Target, TargetCheckPoint, TargetEngine, TargetFactory, TargetTask},
-    target_wrapper::TargetWrapper,
-    task::{HistoryStrategy, ListPreservedSourceStateFilter, SourceState, Task, TaskInfo},
+    target_wrapper::{TargetCheckPointWrapper, TargetTaskWrapper, TargetWrapper},
+    task::{
+        HistoryStrategy, ListCheckPointFilter, ListPreservedSourceStateFilter, SourceState, Task,
+        TaskInfo,
+    },
     task_impl::{TaskImpl, TaskWrapper},
 };
 
 struct SourceTaskCache {
-    source_task: Arc<Box<dyn SourceTask<String, String, String, String, String>>>,
-    source_checkpoints: HashMap<CheckPointVersion, Arc<Box<dyn SourceCheckPoint>>>,
+    source_task: Arc<Box<dyn SourceTask>>,
+    source_preserveds: HashMap<PreserveStateId, Arc<Box<dyn SourcePreserved>>>,
 }
 
 struct SourceCache {
-    source: Arc<Box<dyn Source<String, String, String, String, String>>>,
+    source: Arc<Box<dyn Source>>,
     source_tasks: HashMap<TaskUuid, SourceTaskCache>,
 }
 
@@ -40,21 +45,26 @@ struct TargetCache {
     target_tasks: HashMap<TaskUuid, TargetTaskCache>,
 }
 
+struct TaskCache {
+    task: Arc<TaskImpl>,
+    checkpoints: HashMap<CheckPointVersion, Arc<CheckPointImpl>>,
+}
+
 #[derive(Clone)]
 pub struct Engine {
     meta_storage: Arc<Box<dyn MetaStorage>>,
-    source_factory: Arc<Box<dyn SourceFactory<String, String, String, String, String>>>,
+    source_factory: Arc<Box<dyn SourceFactory>>,
     target_factory: Arc<Box<dyn TargetFactory<String, String, String, String, String>>>,
     sources: Arc<RwLock<HashMap<SourceId, SourceCache>>>,
     targets: Arc<RwLock<HashMap<TargetId, TargetCache>>>,
     config: Arc<RwLock<Option<EngineConfig>>>,
-    tasks: Arc<RwLock<HashMap<TaskUuid, Arc<TaskImpl>>>>,
+    tasks: Arc<RwLock<HashMap<TaskUuid, TaskCache>>>,
 }
 
 impl Engine {
     pub fn new(
         meta_storage: Box<dyn MetaStorage>,
-        source_factory: Box<dyn SourceFactory<String, String, String, String, String>>,
+        source_factory: Box<dyn SourceFactory>,
         target_factory: Box<dyn TargetFactory<String, String, String, String, String>>,
     ) -> Self {
         Self {
@@ -80,7 +90,7 @@ impl Engine {
             };
 
             if let Some(task) = task {
-                return Ok(Some(task.clone()));
+                return Ok(Some(task.task.clone()));
             }
         }
 
@@ -96,7 +106,11 @@ impl Engine {
                 .write()
                 .await
                 .entry(task_info.uuid)
-                .or_insert_with(|| Arc::new(TaskImpl::new(task_info, self.clone())))
+                .or_insert_with(|| TaskCache {
+                    task: Arc::new(TaskImpl::new(task_info, self.clone())),
+                    checkpoints: HashMap::new(),
+                })
+                .task
                 .clone();
             Ok(Some(task))
         } else {
@@ -114,7 +128,7 @@ impl Engine {
     pub(crate) async fn get_source_impl(
         &self,
         by: &SourceQueryBy,
-    ) -> BackupResult<Option<Arc<Box<dyn Source<String, String, String, String, String>>>>> {
+    ) -> BackupResult<Option<Arc<Box<dyn Source>>>> {
         {
             let cache = self.sources.read().await;
             match by {
@@ -169,7 +183,7 @@ impl Engine {
         &self,
         source_id: SourceId,
         task_uuid: &TaskUuid,
-    ) -> BackupResult<Arc<Box<dyn SourceTask<String, String, String, String, String>>>> {
+    ) -> BackupResult<Arc<Box<dyn SourceTask>>> {
         loop {
             {
                 // read from cache
@@ -185,7 +199,7 @@ impl Engine {
             let source = match source {
                 Some(s) => s,
                 None => {
-                    return Err(BackupError::ErrorState(format!(
+                    return Err(BackupError::NotFound(format!(
                         "source({:?}) has been removed.",
                         source_id
                     )));
@@ -196,7 +210,7 @@ impl Engine {
             let task = match task {
                 Some(t) => t,
                 None => {
-                    return Err(BackupError::ErrorState(format!(
+                    return Err(BackupError::NotFound(format!(
                         "task({}) has been removed.",
                         task_uuid
                     )));
@@ -222,7 +236,7 @@ impl Engine {
                         *task_uuid,
                         SourceTaskCache {
                             source_task: source_task.clone(),
-                            source_checkpoints: HashMap::new(),
+                            source_preserveds: HashMap::new(),
                         },
                     );
                     return Ok(source_task);
@@ -297,6 +311,84 @@ impl Engine {
             .map(|t| t.map(|t| Arc::new(TargetWrapper::new(t.target_id(), self.clone()))))
     }
 
+    pub(crate) async fn get_target_task_impl(
+        &self,
+        target_id: TargetId,
+        task_uuid: &TaskUuid,
+    ) -> BackupResult<Arc<Box<dyn TargetTask<String, String, String, String, String>>>> {
+        loop {
+            {
+                // read from cache
+                let cache = self.targets.read().await;
+                if let Some(target) = cache.get(&target_id) {
+                    if let Some(target_task) = target.target_tasks.get(task_uuid) {
+                        return Ok(target_task.target_task.clone());
+                    }
+                }
+            }
+
+            let target = self.get_target_impl(&TargetQueryBy::Id(target_id)).await?;
+            let target = match target {
+                Some(t) => t,
+                None => {
+                    return Err(BackupError::NotFound(format!(
+                        "target({:?}) has been removed.",
+                        target_id
+                    )));
+                }
+            };
+
+            let task = self.get_task_impl(&FindTaskBy::Uuid(*task_uuid)).await?;
+            let task = match task {
+                Some(t) => t,
+                None => {
+                    return Err(BackupError::NotFound(format!(
+                        "task({}) has been removed.",
+                        task_uuid
+                    )));
+                }
+            };
+
+            let target_task =
+                target
+                    .target_task(task.task_info().await?)
+                    .await
+                    .map_err(handle_error!(
+                        "get target task failed, target_id: {:?}, task_uuid: {}",
+                        target_id,
+                        task_uuid
+                    ))?;
+
+            // insert into cache
+            {
+                let target_task = Arc::new(target_task);
+                let mut cache = self.targets.write().await;
+                if let Some(target) = cache.get_mut(&target_id) {
+                    target.target_tasks.insert(
+                        *task_uuid,
+                        TargetTaskCache {
+                            target_task: target_task.clone(),
+                            target_checkpoints: HashMap::new(),
+                        },
+                    );
+                    return Ok(target_task);
+                } else {
+                    // target maybe remove from the cache by other thread, retry it.
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn get_target_task(
+        &self,
+        target_id: TargetId,
+        task_uuid: &TaskUuid,
+    ) -> BackupResult<Arc<TargetTaskWrapper>> {
+        self.get_target_task_impl(target_id, task_uuid)
+            .await
+            .map(|_| Arc::new(TargetTaskWrapper::new(target_id, *task_uuid, self.clone())))
+    }
+
     pub(crate) async fn save_source_original_state(
         &self,
         task_uuid: &TaskUuid,
@@ -341,6 +433,420 @@ impl Engine {
         self.meta_storage
             .list_preserved_source_states(task_uuid, filter, offset, limit)
             .await
+    }
+
+    pub(crate) async fn update_task_info(&self, task_info: &TaskInfo) -> BackupResult<()> {
+        self.meta_storage.update_task(task_info).await?;
+        // remove from cache, it will be reloaded when it's queried next time.
+        self.tasks.write().await.remove(&task_info.uuid);
+        self.sources.write().await.iter_mut().for_each(|(_, s)| {
+            s.source_tasks.remove(&task_info.uuid);
+        });
+        self.targets.write().await.iter_mut().for_each(|(_, t)| {
+            t.target_tasks.remove(&task_info.uuid);
+        });
+        Ok(())
+    }
+
+    pub(crate) async fn create_checkpoint_impl(
+        &self,
+        task_uuid: &TaskUuid,
+        preserved_source_id: Option<PreserveStateId>, // It will be lost for `None`
+        meta: &mut CheckPointMetaEngine,
+    ) -> BackupResult<Arc<CheckPointImpl>> {
+        let version = self
+            .meta_storage
+            .create_checkpoint(task_uuid, preserved_source_id, meta)
+            .await?;
+
+        meta.version = version;
+
+        // insert into cache
+        loop {
+            self.get_task_impl(&FindTaskBy::Uuid(*task_uuid))
+                .await?
+                .map_or(
+                    Err(BackupError::NotFound(format!(
+                        "task({}) has been removed",
+                        task_uuid
+                    ))),
+                    |_| Ok(()),
+                )?;
+
+            let mut cache = self.tasks.write().await;
+            if let Some(task_cache) = cache.get_mut(task_uuid) {
+                let checkpoint = task_cache
+                    .checkpoints
+                    .entry(version)
+                    .or_insert_with(|| {
+                        let checkpoint_info = CheckPointInfo::<CheckPointMetaEngine> {
+                            meta: meta.clone(),
+                            target_meta: None,
+                            preserved_source_state_id: preserved_source_id,
+                            status: CheckPointStatus::Standby,
+                            last_status_changed_time: SystemTime::now(),
+                        };
+                        Arc::new(CheckPointImpl::new(checkpoint_info, self.clone()))
+                    })
+                    .clone();
+                return Ok(checkpoint);
+            } else {
+                // task maybe remove from the cache by other thread, retry it.
+            }
+        }
+    }
+
+    pub(crate) async fn create_checkpoint(
+        &self,
+        task_uuid: &TaskUuid,
+        preserved_source_id: Option<PreserveStateId>, // It will be lost for `None`
+        meta: &mut CheckPointMetaEngine,
+    ) -> BackupResult<Arc<CheckPointWrapper>> {
+        let checkpoint = self
+            .create_checkpoint_impl(task_uuid, preserved_source_id, meta)
+            .await?;
+        Ok(Arc::new(CheckPointWrapper::new(
+            *task_uuid,
+            checkpoint.version(),
+            self.clone(),
+        )))
+    }
+
+    // should never call this function directly except `CheckPointWrapper`, use `Self::get_checkpoint` instead.
+    pub(crate) async fn list_checkpoints_impl(
+        &self,
+        task_uuid: &TaskUuid,
+        filter: &ListCheckPointFilter,
+        offset: ListOffset,
+        limit: u32,
+    ) -> BackupResult<Vec<Arc<CheckPointImpl>>> {
+        loop {
+            self.get_task_impl(&FindTaskBy::Uuid(*task_uuid))
+                .await?
+                .map_or(
+                    Err(BackupError::NotFound(format!(
+                        "task({}) has been removed",
+                        task_uuid
+                    ))),
+                    |_| Ok(()),
+                )?;
+
+            let checkpoint_infos = self
+                .meta_storage
+                .list_checkpoints(task_uuid, filter, offset, limit)
+                .await?;
+
+            let mut cache = self.tasks.write().await;
+            if let Some(task_cache) = cache.get_mut(task_uuid) {
+                let checkpoints = checkpoint_infos
+                    .into_iter()
+                    .map(|info| {
+                        let version = info.meta.version;
+                        task_cache
+                            .checkpoints
+                            .entry(version)
+                            .or_insert_with(|| Arc::new(CheckPointImpl::new(info, self.clone())))
+                            .clone()
+                    })
+                    .collect();
+                return Ok(checkpoints);
+            } else {
+                // task maybe remove from the cache by other thread, retry it.
+            }
+        }
+    }
+
+    pub(crate) async fn list_checkpoints(
+        &self,
+        task_uuid: &TaskUuid,
+        filter: &ListCheckPointFilter,
+        offset: ListOffset,
+        limit: u32,
+    ) -> BackupResult<Vec<Arc<CheckPointWrapper>>> {
+        let checkpoints = self
+            .list_checkpoints_impl(task_uuid, filter, offset, limit)
+            .await?;
+        let checkpoints = checkpoints
+            .iter()
+            .map(|cp| {
+                Arc::new(CheckPointWrapper::new(
+                    *cp.task_uuid(),
+                    cp.version(),
+                    self.clone(),
+                ))
+            })
+            .collect();
+        Ok(checkpoints)
+    }
+
+    // shold never call this function directly except `CheckPointWrapper`, use `Self::get_checkpoint` instead.
+    pub(crate) async fn get_checkpoint_impl(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+    ) -> BackupResult<Option<Arc<CheckPointImpl>>> {
+        loop {
+            self.get_task_impl(&FindTaskBy::Uuid(*task_uuid))
+                .await?
+                .map_or(
+                    Err(BackupError::NotFound(format!(
+                        "task({}) has been removed",
+                        task_uuid
+                    ))),
+                    |_| Ok(()),
+                )?;
+
+            let checkpoint_info = self
+                .meta_storage
+                .query_checkpoint(task_uuid, version)
+                .await?;
+
+            match checkpoint_info {
+                None => return Ok(None),
+                Some(checkpoint_info) => {
+                    let mut cache = self.tasks.write().await;
+                    if let Some(task_cache) = cache.get_mut(task_uuid) {
+                        let version = checkpoint_info.meta.version;
+                        let checkpoint = task_cache
+                            .checkpoints
+                            .entry(version)
+                            .or_insert_with(|| {
+                                Arc::new(CheckPointImpl::new(checkpoint_info, self.clone()))
+                            })
+                            .clone();
+                        return Ok(Some(checkpoint));
+                    } else {
+                        // task maybe remove from the cache by other thread, retry it.
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn get_checkpoint(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+    ) -> BackupResult<Option<Arc<CheckPointWrapper>>> {
+        self.get_checkpoint_impl(task_uuid, version)
+            .await
+            .map(|cp| {
+                cp.map(|_| Arc::new(CheckPointWrapper::new(*task_uuid, version, self.clone())))
+            })
+    }
+
+    // load `SourcePreserved` from cache or `meta_storage`, is similar to `get_source_task_impl`.
+    pub(crate) async fn get_source_preserved_impl(
+        &self,
+        source_id: SourceId,
+        task_uuid: &TaskUuid,
+        preserved_state_id: PreserveStateId,
+    ) -> BackupResult<Arc<Box<dyn SourcePreserved>>> {
+        loop {
+            {
+                // read from cache
+                let cache = self.sources.read().await;
+                if let Some(source) = cache.get(&source_id) {
+                    if let Some(source_task) = source.source_tasks.get(task_uuid) {
+                        if let Some(source_preserved) =
+                            source_task.source_preserveds.get(&preserved_state_id)
+                        {
+                            return Ok(source_preserved.clone());
+                        }
+                    }
+                }
+            }
+
+            let source = self.get_source_impl(&SourceQueryBy::Id(source_id)).await?;
+            if source.is_none() {
+                return Err(BackupError::NotFound(format!(
+                    "source({:?}) has been removed.",
+                    source_id
+                )));
+            };
+
+            let task = self.get_task_impl(&FindTaskBy::Uuid(*task_uuid)).await?;
+            if task.is_none() {
+                return Err(BackupError::NotFound(format!(
+                    "task({}) has been removed.",
+                    task_uuid
+                )));
+            };
+
+            let preserved_state = self.load_source_preserved_state(preserved_state_id).await?;
+            if let SourceState::Preserved(_, perserved_state) = preserved_state {
+                let source_task = self.get_source_task_impl(source_id, task_uuid).await?;
+                let source_preserved = source_task
+                    .source_preserved(preserved_state_id, perserved_state.as_deref())
+                    .await
+                    .map_err(handle_error!(
+                        "create source preserved failed, source_id: {:?}, task_uuid: {}, state_id: {:?}",
+                        source_id,
+                        task_uuid,
+                        preserved_state_id
+                    ))?;
+
+                // insert into cache
+                {
+                    let mut cache = self.sources.write().await;
+                    if let Some(source) = cache.get_mut(&source_id) {
+                        if let Some(source_task) = source.source_tasks.get_mut(task_uuid) {
+                            let source_preserved = source_task
+                                .source_preserveds
+                                .entry(preserved_state_id)
+                                .or_insert_with(|| Arc::new(source_preserved))
+                                .clone();
+                            return Ok(source_preserved);
+                        } else {
+                            // source task maybe remove from the cache by other thread, retry it.
+                        }
+                    } else {
+                        // source maybe remove from the cache by other thread, retry it.
+                    }
+                }
+            } else {
+                return Err(BackupError::ErrorState(format!(
+                    "source preserved state({:?}) is not preserved.",
+                    preserved_state_id
+                )));
+            }
+        }
+    }
+
+    // get_source_preserved
+    pub(crate) async fn get_source_preserved(
+        &self,
+        source_id: SourceId,
+        task_uuid: &TaskUuid,
+        preserved_state_id: PreserveStateId,
+    ) -> BackupResult<Arc<SourcePreservedWrapper>> {
+        self.get_source_preserved_impl(source_id, task_uuid, preserved_state_id)
+            .await
+            .map(|_| {
+                Arc::new(SourcePreservedWrapper::new(
+                    source_id,
+                    *task_uuid,
+                    preserved_state_id,
+                    self.clone(),
+                ))
+            })
+    }
+
+    // get_target_checkpoint_impl, similar to `get_source_preserved_impl`.
+    pub(crate) async fn get_target_checkpoint_impl(
+        &self,
+        target_id: TargetId,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+    ) -> BackupResult<Arc<Box<dyn TargetCheckPoint>>> {
+        loop {
+            {
+                // read from cache
+                let cache = self.targets.read().await;
+                if let Some(target) = cache.get(&target_id) {
+                    if let Some(target_task) = target.target_tasks.get(task_uuid) {
+                        if let Some(target_checkpoint) =
+                            target_task.target_checkpoints.get(&version)
+                        {
+                            return Ok(target_checkpoint.clone());
+                        }
+                    }
+                }
+            }
+
+            let target = self.get_target_impl(&TargetQueryBy::Id(target_id)).await?;
+            if target.is_none() {
+                return Err(BackupError::NotFound(format!(
+                    "target({:?}) has been removed.",
+                    target_id
+                )));
+            };
+
+            let task = self.get_task_impl(&FindTaskBy::Uuid(*task_uuid)).await?;
+            if task.is_none() {
+                return Err(BackupError::NotFound(format!(
+                    "task({}) has been removed.",
+                    task_uuid
+                )));
+            };
+
+            let checkpoint = self.get_checkpoint_impl(task_uuid, version).await?;
+            let checkpoint = match checkpoint {
+                Some(cp) => cp,
+                None => {
+                    return Err(BackupError::NotFound(format!(
+                        "checkpoint({:?}) has been removed.",
+                        version
+                    )));
+                }
+            };
+
+            let target_fill_meta = match checkpoint.info().target_meta.as_ref() {
+                Some(tm) => tm,
+                None => {
+                    return Err(BackupError::ErrorState(format!(
+                        "checkpoint({:?}) has no target meta. should start transfer first.",
+                        version
+                    )));
+                }
+            };
+
+            let target_task = self.get_target_task_impl(target_id, task_uuid).await?;
+            let target_checkpoint = target_task
+                .target_checkpoint_from_filled_meta(
+                    &checkpoint.info().meta,
+                    target_fill_meta
+                        .iter()
+                        .map(|m| m.as_str())
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                )
+                .await
+                .map_err(handle_error!(
+                    "create target checkpoint failed, target_id: {:?}, task_uuid: {}, version: {:?}",
+                    target_id,
+                    task_uuid,
+                    version
+                ))?;
+
+            // insert into cache
+            {
+                let mut cache = self.targets.write().await;
+                if let Some(target) = cache.get_mut(&target_id) {
+                    if let Some(target_task) = target.target_tasks.get_mut(task_uuid) {
+                        let target_checkpoint = target_task
+                            .target_checkpoints
+                            .entry(version)
+                            .or_insert_with(|| Arc::new(target_checkpoint))
+                            .clone();
+                        return Ok(target_checkpoint);
+                    } else {
+                        // target task maybe remove from the cache by other thread, retry it.
+                    }
+                } else {
+                    // target maybe remove from the cache by other thread, retry it.
+                }
+            }
+        }
+    }
+
+    // get_target_checkpoint
+    pub(crate) async fn get_target_checkpoint(
+        &self,
+        target_id: TargetId,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+    ) -> BackupResult<Arc<TargetCheckPointWrapper>> {
+        self.get_target_checkpoint_impl(target_id, task_uuid, version)
+            .await
+            .map(|_| {
+                Arc::new(TargetCheckPointWrapper::new(
+                    target_id,
+                    *task_uuid,
+                    version,
+                    self.clone(),
+                ))
+            })
     }
 }
 
@@ -421,7 +927,7 @@ impl SourceMgr for Engine {
         filter: &ListSourceFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn SourceEngine>>> {
+    ) -> BackupResult<Vec<Arc<dyn Source>>> {
         let source_infos =
             MetaStorageSourceMgr::list(self.meta_storage.as_ref().as_ref(), filter, offset, limit)
                 .await
@@ -448,16 +954,16 @@ impl SourceMgr for Engine {
                     source_tasks: HashMap::new(),
                 });
             }
-            sources.push(Arc::new(SourceWrapper::new(id, self.clone())) as Arc<dyn SourceEngine>);
+            sources.push(Arc::new(SourceWrapper::new(id, self.clone())) as Arc<dyn Source>);
         }
 
         Ok(sources)
     }
 
-    async fn query_by(&self, by: &SourceQueryBy) -> BackupResult<Option<Arc<dyn SourceEngine>>> {
+    async fn query_by(&self, by: &SourceQueryBy) -> BackupResult<Option<Arc<dyn Source>>> {
         self.get_source(by)
             .await
-            .map(|s| s.map(|s| s as Arc<dyn SourceEngine>))
+            .map(|s| s.map(|s| s as Arc<dyn Source>))
     }
 
     async fn update(
@@ -721,7 +1227,7 @@ impl TaskMgr for Engine {
         description: String,
         source_id: SourceId,
         source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
-        target_id: String,
+        target_id: TargetId,
         target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
         history_strategy: HistoryStrategy,
         priority: u32,
@@ -753,11 +1259,18 @@ impl TaskMgr for Engine {
             ))?;
 
         let task = Arc::new(TaskImpl::new(task_info, self.clone()));
-        self.tasks.write().await.insert(uuid, task);
+        self.tasks.write().await.insert(
+            uuid,
+            TaskCache {
+                task,
+                checkpoints: HashMap::new(),
+            },
+        );
 
         Ok(Arc::new(TaskWrapper::new(self.clone(), uuid)))
     }
 
+    // all transfering checkpoint should be stop first.
     async fn remove_task(&self, by: &FindTaskBy, is_remove_on_target: bool) -> BackupResult<()> {
         // 1. remove all checkpoints of the task.
         //      1.1 set remove flag on `meta_storage`.
@@ -791,7 +1304,10 @@ impl TaskMgr for Engine {
                 let uuid = task_info.uuid;
                 task_cache
                     .entry(task_info.uuid)
-                    .or_insert_with(|| Arc::new(TaskImpl::new(task_info, self.clone())));
+                    .or_insert_with(|| TaskCache {
+                        task: Arc::new(TaskImpl::new(task_info, self.clone())),
+                        checkpoints: HashMap::new(),
+                    });
                 Arc::new(TaskWrapper::new(self.clone(), uuid)) as Arc<dyn Task>
             })
             .collect())

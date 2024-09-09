@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS task_source_state (
 -- status: u64,
 -- error_msg: Option<String>,
 -- (task_uuid, seq, create_time) is primary key
+-- (task_uuid, seq) is unique key
 CREATE TABLE IF NOT EXISTS checkpoints (
     task_uuid TEXT NOT NULL,
     seq INTEGER NOT NULL,
@@ -112,7 +113,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     error_msg TEXT DEFAULT NULL,
     PRIMARY KEY (task_uuid, seq, create_time),
     FOREIGN KEY (task_uuid) REFERENCES tasks (uuid),
-    FOREIGN KEY (preserved_source_state_id) REFERENCES task_source_state (id)
+    FOREIGN KEY (preserved_source_state_id) REFERENCES task_source_state (id),
+    UNIQUE(task_uuid, seq)
 );
 
 -- create table `checkpoint_transfer_map` with the following columns:

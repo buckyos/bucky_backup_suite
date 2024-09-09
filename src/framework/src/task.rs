@@ -1,10 +1,10 @@
-use std::time::SystemTime;
+use std::{sync::Arc, time::SystemTime};
 
 use crate::{
     checkpoint::{CheckPoint, CheckPointStatus},
     engine::{ListOffset, SourceId, TargetId, TaskUuid},
     error::{BackupError, BackupResult},
-    meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
+    meta::{CheckPointVersion, PreserveStateId},
 };
 
 pub enum SourceState {
@@ -13,14 +13,14 @@ pub enum SourceState {
     Preserved(Option<String>, Option<String>), // <original, preserved>
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TaskInfo {
     pub uuid: TaskUuid,
     pub friendly_name: String,
     pub description: String,
     pub source_id: SourceId,
     pub source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
-    pub target_id: String,
+    pub target_id: TargetId,
     pub target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
     pub priority: u32,
     pub history_strategy: HistoryStrategy,
@@ -53,8 +53,8 @@ pub trait PreserveSourceState: Send + Sync {
 }
 
 pub enum ListCheckPointFilterTime {
-    CreateTime((Option<SystemTime>, Option<SystemTime>)), // <begin-time, end-time>
-    CompleteTime((Option<SystemTime>, Option<SystemTime>)), // <begin-time, end-time>
+    CreateTime(Option<SystemTime>, Option<SystemTime>), // <begin-time, end-time>
+    CompleteTime(Option<SystemTime>, Option<SystemTime>), // <begin-time, end-time>
 }
 
 pub struct ListCheckPointFilter {
@@ -67,35 +67,33 @@ pub trait Task: PreserveSourceState + Send + Sync {
     fn uuid(&self) -> &TaskUuid;
     async fn task_info(&self) -> BackupResult<TaskInfo>;
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()>;
-    async fn history_strategy(&self) -> BackupResult<HistoryStrategy>;
-    async fn set_history_strategy(&self, strategy: HistoryStrategy) -> BackupResult<()>;
     async fn prepare_checkpoint(
         &self,
         preserved_source_state_id: PreserveStateId,
         is_delta: bool,
-    ) -> BackupResult<Box<dyn CheckPoint>>;
+    ) -> BackupResult<Arc<dyn CheckPoint>>;
     async fn list_checkpoints(
         &self,
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Box<dyn CheckPoint>>>;
+    ) -> BackupResult<Vec<Arc<dyn CheckPoint>>>;
     async fn query_checkpoint(
         &self,
         version: CheckPointVersion,
-    ) -> BackupResult<Option<Box<dyn CheckPoint>>>;
-    async fn remove_checkpoint(&self, version: CheckPointVersion) -> BackupResult<()>;
-    async fn remove_checkpoints_in_condition(
+    ) -> BackupResult<Option<Arc<dyn CheckPoint>>>;
+    async fn remove_checkpoint(
         &self,
-        filter: &ListCheckPointFilter,
+        version: CheckPointVersion,
+        is_remove_on_target: bool,
     ) -> BackupResult<()>;
 }
 
 #[derive(Debug, Clone)]
 pub struct HistoryStrategy {
-    reserve_history_limit: u32,
-    continuous_abort_incomplete_limit: u32,
-    continuous_abort_seconds_limit: u32,
+    pub reserve_history_limit: u32,
+    pub continuous_abort_incomplete_limit: u32,
+    pub continuous_abort_seconds_limit: u32,
 }
 
 impl Default for HistoryStrategy {

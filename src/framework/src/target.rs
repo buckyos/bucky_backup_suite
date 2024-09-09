@@ -1,8 +1,8 @@
 use crate::{
-    checkpoint::{DirReader, LinkInfo},
+    checkpoint::{DirReader, LinkInfo, StorageReader},
     engine::{TargetId, TargetInfo, TaskUuid},
     error::BackupResult,
-    meta::{CheckPointMeta, CheckPointVersion, StorageItemAttributes},
+    meta::{CheckPointMeta, CheckPointVersion, MetaBound, StorageItemAttributes},
     task::TaskInfo,
 };
 
@@ -62,11 +62,11 @@ pub trait Target<
 
 #[async_trait::async_trait]
 pub trait TargetTask<
-    ServiceCheckPointMeta,
-    ServiceDirMetaType,
-    ServiceFileMetaType,
-    ServiceLinkMetaType,
-    ServiceLogMetaType,
+    ServiceCheckPointMeta: MetaBound,
+    ServiceDirMetaType: MetaBound,
+    ServiceFileMetaType: MetaBound,
+    ServiceLinkMetaType: MetaBound,
+    ServiceLogMetaType: MetaBound,
 >: Send + Sync
 {
     fn task_uuid(&self) -> &TaskUuid;
@@ -90,19 +90,14 @@ pub trait TargetTask<
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
-        target_meta: &[String],
+        target_meta: &[&str],
     ) -> BackupResult<Box<dyn TargetCheckPoint>>;
 }
 
 #[async_trait::async_trait]
-pub trait TargetCheckPoint: Send + Sync {
+pub trait TargetCheckPoint: StorageReader + Send + Sync {
     fn checkpoint_version(&self) -> CheckPointVersion;
     async fn transfer(&self) -> BackupResult<()>;
-
-    async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>>;
-    async fn read_file(&self, path: &[u8], offset: u64, length: u32) -> BackupResult<Vec<u8>>;
-    async fn read_link(&self, path: &[u8]) -> BackupResult<LinkInfo>;
-    async fn stat(&self, path: &[u8]) -> BackupResult<StorageItemAttributes>;
 }
 
 pub trait TargetFactoryEngine: TargetFactory<String, String, String, String, String> {}

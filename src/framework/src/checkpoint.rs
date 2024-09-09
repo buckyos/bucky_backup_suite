@@ -1,8 +1,9 @@
 use std::{collections::HashMap, time::SystemTime};
 
 use crate::{
+    engine::TaskUuid,
     error::{BackupError, BackupResult},
-    meta::{PreserveStateId, StorageItemAttributes},
+    meta::{CheckPointVersion, PreserveStateId, StorageItemAttributes},
 };
 
 pub enum CheckPointStatus {
@@ -10,28 +11,26 @@ pub enum CheckPointStatus {
     Start,
     Stop,
     Success,
-    Failed(BackupError),
+    Failed(Option<BackupError>),
 }
 
 pub struct CheckPointInfo<MetaType> {
     pub meta: MetaType,
     pub target_meta: Option<Vec<String>>,
-    pub preserved_source_state_id: PreserveStateId,
+    pub preserved_source_state_id: Option<PreserveStateId>,
     pub status: CheckPointStatus,
     pub last_status_changed_time: SystemTime,
 }
 
 #[async_trait::async_trait]
-pub trait CheckPoint {
+pub trait CheckPoint: StorageReader {
+    fn task_uuid(&self) -> &TaskUuid;
+    fn version(&self) -> CheckPointVersion;
     async fn transfer(&self) -> BackupResult<()>;
     async fn stop(&self) -> BackupResult<()>;
     async fn cancel(&self) -> BackupResult<()>;
 
-    async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>>;
-    async fn read_file(&self, path: &[u8], offset: u64, length: u32) -> BackupResult<Vec<u8>>;
-    async fn read_link(&self, path: &[u8]) -> BackupResult<LinkInfo>;
-    async fn stat(&self, path: &[u8]) -> BackupResult<StorageItemAttributes>;
-    async fn target_meta(&self) -> BackupResult<Option<Vec<u8>>>;
+    async fn target_meta(&self) -> BackupResult<Option<Vec<String>>>;
 
     async fn transfer_map_by_item_path(
         &self,
@@ -127,4 +126,12 @@ pub struct ItemTransferMap {
     pub offset: u64,
     pub length: u64,
     pub detail: Option<Vec<u8>>, // special parse for different target.
+}
+
+#[async_trait::async_trait]
+pub trait StorageReader: Send + Sync {
+    async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>>;
+    async fn read_file(&self, path: &[u8], offset: u64, length: u32) -> BackupResult<Vec<u8>>;
+    async fn read_link(&self, path: &[u8]) -> BackupResult<LinkInfo>;
+    async fn stat(&self, path: &[u8]) -> BackupResult<StorageItemAttributes>;
 }

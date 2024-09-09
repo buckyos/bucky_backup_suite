@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     error::BackupResult,
-    source::SourceEngine,
+    source::Source,
     target::TargetEngine,
     task::{HistoryStrategy, Task},
 };
@@ -25,9 +25,9 @@ pub trait SourceMgr {
         filter: &ListSourceFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn SourceEngine>>>;
+    ) -> BackupResult<Vec<Arc<dyn Source>>>;
 
-    async fn query_by(&self, by: &SourceQueryBy) -> BackupResult<Option<Arc<dyn SourceEngine>>>;
+    async fn query_by(&self, by: &SourceQueryBy) -> BackupResult<Option<Arc<dyn Source>>>;
 
     async fn update(
         &self,
@@ -85,7 +85,7 @@ pub trait TaskMgr {
         description: String,
         source_id: SourceId,
         source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
-        target_id: String,
+        target_id: TargetId,
         target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
         history_strategy: HistoryStrategy,
         priority: u32,
