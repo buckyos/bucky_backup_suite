@@ -1233,7 +1233,7 @@ impl TaskMgr for Engine {
         priority: u32,
         attachment: String, // The application can save any attachment with task.
         flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
-    ) -> BackupResult<Arc<dyn Task>> {
+    ) -> BackupResult<Arc<dyn Task<CheckPointMetaEngine>>> {
         let uuid = TaskUuid::from(uuid::Uuid::new_v4());
 
         let task_info = TaskInfo {
@@ -1285,7 +1285,7 @@ impl TaskMgr for Engine {
         filter: &ListTaskFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn Task>>> {
+    ) -> BackupResult<Vec<Arc<dyn Task<CheckPointMetaEngine>>>> {
         let task_infos = self
             .meta_storage
             .list_task(filter, offset, limit)
@@ -1308,14 +1308,18 @@ impl TaskMgr for Engine {
                         task: Arc::new(TaskImpl::new(task_info, self.clone())),
                         checkpoints: HashMap::new(),
                     });
-                Arc::new(TaskWrapper::new(self.clone(), uuid)) as Arc<dyn Task>
+                Arc::new(TaskWrapper::new(self.clone(), uuid))
+                    as Arc<dyn Task<CheckPointMetaEngine>>
             })
             .collect())
     }
 
-    async fn find_task(&self, by: &FindTaskBy) -> BackupResult<Option<Arc<dyn Task>>> {
+    async fn find_task(
+        &self,
+        by: &FindTaskBy,
+    ) -> BackupResult<Option<Arc<dyn Task<CheckPointMetaEngine>>>> {
         self.get_task(by)
             .await
-            .map(|t| t.map(|t| t as Arc<dyn Task>))
+            .map(|t| t.map(|t| t as Arc<dyn Task<CheckPointMetaEngine>>))
     }
 }

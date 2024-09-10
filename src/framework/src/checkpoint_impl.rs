@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use crate::{
     checkpoint::{
@@ -28,27 +28,33 @@ impl CheckPointImpl {
 
 #[async_trait::async_trait]
 impl StorageReader for CheckPointImpl {
-    async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>> {
+    async fn read_dir(&self, path: &Path) -> BackupResult<Box<dyn DirReader>> {
         unimplemented!()
     }
-    async fn read_file(&self, path: &[u8], offset: u64, length: u32) -> BackupResult<Vec<u8>> {
+    async fn file_size(&self, path: &Path) -> BackupResult<u64> {
         unimplemented!()
     }
-    async fn read_link(&self, path: &[u8]) -> BackupResult<LinkInfo> {
+    async fn read_file(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>> {
         unimplemented!()
     }
-    async fn stat(&self, path: &[u8]) -> BackupResult<StorageItemAttributes> {
+    async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo> {
+        unimplemented!()
+    }
+    async fn stat(&self, path: &Path) -> BackupResult<StorageItemAttributes> {
         unimplemented!()
     }
 }
 
 #[async_trait::async_trait]
-impl CheckPoint for CheckPointImpl {
+impl CheckPoint<CheckPointMetaEngine> for CheckPointImpl {
     fn task_uuid(&self) -> &TaskUuid {
         &self.info.meta.task_uuid
     }
     fn version(&self) -> CheckPointVersion {
         self.info.meta.version
+    }
+    async fn info(&self) -> BackupResult<CheckPointInfo<CheckPointMetaEngine>> {
+        Ok(self.info.clone())
     }
     async fn transfer(&self) -> BackupResult<()> {
         unimplemented!()
@@ -107,27 +113,33 @@ impl CheckPointWrapper {
 
 #[async_trait::async_trait]
 impl StorageReader for CheckPointWrapper {
-    async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>> {
+    async fn read_dir(&self, path: &Path) -> BackupResult<Box<dyn DirReader>> {
         unimplemented!()
     }
-    async fn read_file(&self, path: &[u8], offset: u64, length: u32) -> BackupResult<Vec<u8>> {
+    async fn file_size(&self, path: &Path) -> BackupResult<u64> {
         unimplemented!()
     }
-    async fn read_link(&self, path: &[u8]) -> BackupResult<LinkInfo> {
+    async fn read_file(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>> {
         unimplemented!()
     }
-    async fn stat(&self, path: &[u8]) -> BackupResult<StorageItemAttributes> {
+    async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo> {
+        unimplemented!()
+    }
+    async fn stat(&self, path: &Path) -> BackupResult<StorageItemAttributes> {
         unimplemented!()
     }
 }
 
 #[async_trait::async_trait]
-impl CheckPoint for CheckPointWrapper {
+impl<MetaType> CheckPoint<MetaType> for CheckPointWrapper {
     fn task_uuid(&self) -> &TaskUuid {
         &self.task_uuid
     }
     fn version(&self) -> CheckPointVersion {
         self.version
+    }
+    async fn info(&self) -> BackupResult<CheckPointInfo<MetaType>> {
+        unimplemented!()
     }
     async fn transfer(&self) -> BackupResult<()> {
         unimplemented!()

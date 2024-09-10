@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::{
     checkpoint::{DirReader, LinkInfo, StorageReader},
     engine::{SourceId, SourceInfo, SourceQueryBy, TaskUuid},
@@ -150,28 +152,35 @@ impl SourcePreservedWrapper {
 #[async_trait::async_trait]
 impl StorageReader for SourcePreservedWrapper {
     // for checkpoint
-    async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>> {
+    async fn read_dir(&self, path: &Path) -> BackupResult<Box<dyn DirReader>> {
         self.engine
             .get_source_preserved_impl(self.source_id, &self.task_uuid, self.preserved_state_id)
             .await?
             .read_dir(path)
             .await
     }
-    async fn read_file(&self, path: &[u8], offset: u64, length: u32) -> BackupResult<Vec<u8>> {
+    async fn file_size(&self, path: &Path) -> BackupResult<u64> {
+        self.engine
+            .get_source_preserved_impl(self.source_id, &self.task_uuid, self.preserved_state_id)
+            .await?
+            .file_size(path)
+            .await
+    }
+    async fn read_file(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>> {
         self.engine
             .get_source_preserved_impl(self.source_id, &self.task_uuid, self.preserved_state_id)
             .await?
             .read_file(path, offset, length)
             .await
     }
-    async fn read_link(&self, path: &[u8]) -> BackupResult<LinkInfo> {
+    async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo> {
         self.engine
             .get_source_preserved_impl(self.source_id, &self.task_uuid, self.preserved_state_id)
             .await?
             .read_link(path)
             .await
     }
-    async fn stat(&self, path: &[u8]) -> BackupResult<StorageItemAttributes> {
+    async fn stat(&self, path: &Path) -> BackupResult<StorageItemAttributes> {
         self.engine
             .get_source_preserved_impl(self.source_id, &self.task_uuid, self.preserved_state_id)
             .await?

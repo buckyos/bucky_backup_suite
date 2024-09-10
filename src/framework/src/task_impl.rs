@@ -1,15 +1,19 @@
-use std::sync::{atomic::AtomicU64, Arc};
+use std::{
+    sync::{atomic::AtomicU64, Arc},
+    time::SystemTime,
+};
 
 use crate::{
-    build_meta::{meta_from_delta, meta_from_reader},
+    build_meta::{estimate_occupy_size, meta_from_delta, meta_from_reader},
     checkpoint::{CheckPoint, CheckPointStatus},
     checkpoint_impl::CheckPointWrapper,
     engine::{FindTaskBy, ListOffset, SourceQueryBy, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
-    meta::{CheckPointVersion, PreserveStateId},
+    meta::{CheckPointMeta, CheckPointMetaEngine, CheckPointVersion, PreserveStateId, StorageItem},
     source::SourceTask,
     source_wrapper::SourceTaskWrapper,
+    target::TargetTask,
     task::{
         HistoryStrategy, ListCheckPointFilter, ListCheckPointFilterTime,
         ListPreservedSourceStateFilter, PreserveSourceState, SourceState, Task, TaskInfo,
@@ -134,7 +138,7 @@ impl PreserveSourceState for TaskImpl {
 }
 
 #[async_trait::async_trait]
-impl Task for TaskImpl {
+impl Task<CheckPointMetaEngine> for TaskImpl {
     fn uuid(&self) -> &TaskUuid {
         &self.info.uuid
     }
@@ -148,19 +152,7 @@ impl Task for TaskImpl {
         &self,
         preserved_source_state_id: PreserveStateId,
         is_delta: bool,
-    ) -> BackupResult<Arc<dyn CheckPoint>> {
-        let last_finish_checkpoint = self
-            .list_checkpoints(
-                &ListCheckPointFilter {
-                    time: ListCheckPointFilterTime::CompleteTime(None, None),
-                    status: Some(vec![CheckPointStatus::Success]),
-                },
-                ListOffset::Last(0),
-                1,
-            )
-            .await?
-            .pop();
-
+    ) -> BackupResult<Arc<dyn CheckPoint<CheckPointMetaEngine>>> {
         let source_preserved = self
             .egnine
             .get_source_preserved(
@@ -170,27 +162,86 @@ impl Task for TaskImpl {
             )
             .await?;
 
-        let mut checkpoint_meta = loop {
+        let (mut root_dir_meta, prev_checkpoint_version, prev_occupied_size, prev_consume_size) = loop {
             if is_delta {
-                if let Some(last_checkpoint) = last_finish_checkpoint {
+                let last_finish_checkpoint = self
+                    .egnine
+                    .list_checkpoints(
+                        &self.info.uuid,
+                        &ListCheckPointFilter {
+                            time: ListCheckPointFilterTime::CompleteTime(None, None),
+                            status: Some(vec![CheckPointStatus::Success]),
+                        },
+                        ListOffset::Last(0),
+                        1,
+                    )
+                    .await?
+                    .pop();
+
+                if let Some(prev_checkpoint) = last_finish_checkpoint {
                     let last_target_checkpoint = self
                         .egnine
                         .get_target_checkpoint(
                             self.info.target_id,
                             &self.info.uuid,
-                            last_checkpoint.version(),
+                            prev_checkpoint.version(),
                         )
                         .await?;
-                    break meta_from_delta(
-                        last_target_checkpoint.as_ref(),
-                        source_preserved.as_ref(),
-                    )
-                    .await?;
+                    let mut prev_info =
+                        CheckPoint::<CheckPointMetaEngine>::info(prev_checkpoint.as_ref()).await?;
+
+                    let prev_occupied_size = prev_info.meta.all_prev_version_occupied_size
+                        + prev_info.meta.occupied_size;
+                    let prev_consume_size =
+                        prev_info.meta.all_prev_version_consume_size + prev_info.meta.consume_size;
+
+                    let prev_version = prev_info.meta.version;
+                    prev_info.meta.prev_versions.push(prev_version);
+
+                    let prev_version = prev_info.meta.prev_versions;
+                    break (
+                        meta_from_delta(last_target_checkpoint.as_ref(), source_preserved.as_ref())
+                            .await?,
+                        prev_version,
+                        prev_occupied_size,
+                        prev_consume_size,
+                    );
                 }
             }
 
-            break meta_from_reader(source_preserved.as_ref()).await?;
+            break (
+                meta_from_reader(source_preserved.as_ref()).await?,
+                vec![],
+                0,
+                0,
+            );
         };
+
+        let now = SystemTime::now();
+        let mut checkpoint_meta = CheckPointMeta {
+            task_friendly_name: self.info.friendly_name.clone(),
+            task_uuid: self.info.uuid,
+            version: CheckPointVersion { time: now, seq: 0 },
+            prev_versions: prev_checkpoint_version,
+            create_time: now,
+            complete_time: now,
+            root: StorageItem::Dir(root_dir_meta),
+            occupied_size: 0,
+            consume_size: 0,
+            all_prev_version_occupied_size: prev_occupied_size,
+            all_prev_version_consume_size: prev_consume_size,
+            service_meta: None,
+        };
+
+        let occupied_size = estimate_occupy_size(&checkpoint_meta);
+        checkpoint_meta.occupied_size = occupied_size;
+
+        let target_task = self
+            .egnine
+            .get_target_task(self.info.target_id, &self.info.uuid)
+            .await?;
+        let consume_size = target_task.estimate_consume_size(&checkpoint_meta).await?;
+        checkpoint_meta.consume_size = consume_size;
 
         self.egnine
             .create_checkpoint(
@@ -206,7 +257,7 @@ impl Task for TaskImpl {
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn CheckPoint>>> {
+    ) -> BackupResult<Vec<Arc<dyn CheckPoint<CheckPointMetaEngine>>>> {
         let checkpoints = self
             .egnine
             .list_checkpoints(&self.info.uuid, filter, offset, limit)
@@ -220,7 +271,7 @@ impl Task for TaskImpl {
     async fn query_checkpoint(
         &self,
         version: CheckPointVersion,
-    ) -> BackupResult<Option<Arc<dyn CheckPoint>>> {
+    ) -> BackupResult<Option<Arc<dyn CheckPoint<CheckPointMetaEngine>>>> {
         self.egnine
             .get_checkpoint(&self.info.uuid, version)
             .await
@@ -335,7 +386,7 @@ impl PreserveSourceState for TaskWrapper {
 }
 
 #[async_trait::async_trait]
-impl Task for TaskWrapper {
+impl Task<CheckPointMetaEngine> for TaskWrapper {
     fn uuid(&self) -> &TaskUuid {
         match &self.uuid {
             FindTaskBy::Uuid(uuid) => uuid,
@@ -368,7 +419,7 @@ impl Task for TaskWrapper {
         &self,
         preserved_source_state_id: PreserveStateId,
         is_delta: bool,
-    ) -> BackupResult<Arc<dyn CheckPoint>> {
+    ) -> BackupResult<Arc<dyn CheckPoint<CheckPointMetaEngine>>> {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => {
@@ -387,7 +438,7 @@ impl Task for TaskWrapper {
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn CheckPoint>>> {
+    ) -> BackupResult<Vec<Arc<dyn CheckPoint<CheckPointMetaEngine>>>> {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.list_checkpoints(filter, offset, limit).await,
@@ -401,7 +452,7 @@ impl Task for TaskWrapper {
     async fn query_checkpoint(
         &self,
         version: CheckPointVersion,
-    ) -> BackupResult<Option<Arc<dyn CheckPoint>>> {
+    ) -> BackupResult<Option<Arc<dyn CheckPoint<CheckPointMetaEngine>>>> {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
             Some(t) => t.query_checkpoint(version).await,

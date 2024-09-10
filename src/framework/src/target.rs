@@ -70,6 +70,16 @@ pub trait TargetTask<
 >: Send + Sync
 {
     fn task_uuid(&self) -> &TaskUuid;
+    async fn estimate_consume_size(
+        &self,
+        meta: &CheckPointMeta<
+            ServiceCheckPointMeta,
+            ServiceDirMetaType,
+            ServiceFileMetaType,
+            ServiceLinkMetaType,
+            ServiceLogMetaType,
+        >,
+    ) -> BackupResult<u64>;
     async fn fill_target_meta(
         &self,
         meta: &mut CheckPointMeta<

@@ -63,7 +63,7 @@ pub struct ListCheckPointFilter {
 }
 
 #[async_trait::async_trait]
-pub trait Task: PreserveSourceState + Send + Sync {
+pub trait Task<MetaType>: PreserveSourceState + Send + Sync {
     fn uuid(&self) -> &TaskUuid;
     async fn task_info(&self) -> BackupResult<TaskInfo>;
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()>;
@@ -71,17 +71,17 @@ pub trait Task: PreserveSourceState + Send + Sync {
         &self,
         preserved_source_state_id: PreserveStateId,
         is_delta: bool,
-    ) -> BackupResult<Arc<dyn CheckPoint>>;
+    ) -> BackupResult<Arc<dyn CheckPoint<MetaType>>>;
     async fn list_checkpoints(
         &self,
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn CheckPoint>>>;
+    ) -> BackupResult<Vec<Arc<dyn CheckPoint<MetaType>>>>;
     async fn query_checkpoint(
         &self,
         version: CheckPointVersion,
-    ) -> BackupResult<Option<Arc<dyn CheckPoint>>>;
+    ) -> BackupResult<Option<Arc<dyn CheckPoint<MetaType>>>>;
     async fn remove_checkpoint(
         &self,
         version: CheckPointVersion,

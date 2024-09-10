@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use crate::{
     checkpoint::{DirReader, LinkInfo, StorageReader},
     engine::{TargetId, TargetInfo, TargetQueryBy, TaskUuid},
@@ -89,6 +91,16 @@ impl TargetTask<String, String, String, String, String> for TargetTaskWrapper {
     fn task_uuid(&self) -> &TaskUuid {
         &self.task_uuid
     }
+    async fn estimate_consume_size(
+        &self,
+        meta: &CheckPointMeta<String, String, String, String, String>,
+    ) -> BackupResult<u64> {
+        self.engine
+            .get_target_task_impl(self.target_id, &self.task_uuid)
+            .await?
+            .estimate_consume_size(meta)
+            .await
+    }
     async fn fill_target_meta(
         &self,
         meta: &mut CheckPointMeta<String, String, String, String, String>,
@@ -138,28 +150,35 @@ impl TargetCheckPointWrapper {
 
 #[async_trait::async_trait]
 impl StorageReader for TargetCheckPointWrapper {
-    async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>> {
+    async fn read_dir(&self, path: &Path) -> BackupResult<Box<dyn DirReader>> {
         self.engine
             .get_target_checkpoint_impl(self.target_id, &self.task_uuid, self.version)
             .await?
             .read_dir(path)
             .await
     }
-    async fn read_file(&self, path: &[u8], offset: u64, length: u32) -> BackupResult<Vec<u8>> {
+    async fn file_size(&self, path: &Path) -> BackupResult<u64> {
+        self.engine
+            .get_target_checkpoint_impl(self.target_id, &self.task_uuid, self.version)
+            .await?
+            .file_size(path)
+            .await
+    }
+    async fn read_file(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>> {
         self.engine
             .get_target_checkpoint_impl(self.target_id, &self.task_uuid, self.version)
             .await?
             .read_file(path, offset, length)
             .await
     }
-    async fn read_link(&self, path: &[u8]) -> BackupResult<LinkInfo> {
+    async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo> {
         self.engine
             .get_target_checkpoint_impl(self.target_id, &self.task_uuid, self.version)
             .await?
             .read_link(path)
             .await
     }
-    async fn stat(&self, path: &[u8]) -> BackupResult<StorageItemAttributes> {
+    async fn stat(&self, path: &Path) -> BackupResult<StorageItemAttributes> {
         self.engine
             .get_target_checkpoint_impl(self.target_id, &self.task_uuid, self.version)
             .await?

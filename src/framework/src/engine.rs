@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{
     error::BackupResult,
+    meta::CheckPointMetaEngine,
     source::Source,
     target::TargetEngine,
     task::{HistoryStrategy, Task},
@@ -91,7 +94,7 @@ pub trait TaskMgr {
         priority: u32,
         attachment: String, // The application can save any attachment with task.
         flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
-    ) -> BackupResult<Arc<dyn Task>>;
+    ) -> BackupResult<Arc<dyn Task<CheckPointMetaEngine>>>;
 
     async fn remove_task(&self, by: &FindTaskBy, is_remove_on_target: bool) -> BackupResult<()>;
 
@@ -100,9 +103,12 @@ pub trait TaskMgr {
         filter: &ListTaskFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn Task>>>;
+    ) -> BackupResult<Vec<Arc<dyn Task<CheckPointMetaEngine>>>>;
 
-    async fn find_task(&self, by: &FindTaskBy) -> BackupResult<Option<Arc<dyn Task>>>;
+    async fn find_task(
+        &self,
+        by: &FindTaskBy,
+    ) -> BackupResult<Option<Arc<dyn Task<CheckPointMetaEngine>>>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -198,6 +204,19 @@ impl<T: AsRef<[u8]>> From<T> for TaskUuid {
 impl std::fmt::Display for TaskUuid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", String::from_utf8_lossy(&self.0[..self.1 as usize]))
+    }
+}
+
+impl Serialize for TaskUuid {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(format!("{}", self).as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for TaskUuid {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::from(s))
     }
 }
 

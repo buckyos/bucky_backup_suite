@@ -1,4 +1,8 @@
-use std::{collections::HashMap, time::SystemTime};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 use crate::{
     engine::TaskUuid,
@@ -23,9 +27,10 @@ pub struct CheckPointInfo<MetaType> {
 }
 
 #[async_trait::async_trait]
-pub trait CheckPoint: StorageReader {
+pub trait CheckPoint<MetaType>: StorageReader {
     fn task_uuid(&self) -> &TaskUuid;
     fn version(&self) -> CheckPointVersion;
+    async fn info(&self) -> BackupResult<CheckPointInfo<MetaType>>;
     async fn transfer(&self) -> BackupResult<()>;
     async fn stop(&self) -> BackupResult<()>;
     async fn cancel(&self) -> BackupResult<()>;
@@ -94,13 +99,13 @@ pub trait CheckPointObserver {
 }
 
 pub enum DirChildType {
-    File(Vec<u8>),
-    Dir(Vec<u8>),
-    Link(Vec<u8>),
+    File(PathBuf),
+    Dir(PathBuf),
+    Link(PathBuf),
 }
 
 impl DirChildType {
-    pub fn path(&self) -> &[u8] {
+    pub fn path(&self) -> &Path {
         match self {
             DirChildType::File(path) => path,
             DirChildType::Dir(path) => path,
@@ -111,12 +116,12 @@ impl DirChildType {
 
 #[async_trait::async_trait]
 pub trait DirReader {
-    fn path(&self) -> &[u8];
-    fn next(&mut self) -> BackupResult<Option<DirChildType>>;
+    fn path(&self) -> &Path;
+    async fn next(&mut self) -> BackupResult<Option<DirChildType>>;
 }
 
 pub struct LinkInfo {
-    pub target: Vec<u8>,
+    pub target: PathBuf,
     pub is_hard: bool,
 }
 
@@ -130,8 +135,41 @@ pub struct ItemTransferMap {
 
 #[async_trait::async_trait]
 pub trait StorageReader: Send + Sync {
-    async fn read_dir(&self, path: &[u8]) -> BackupResult<Box<dyn DirReader>>;
-    async fn read_file(&self, path: &[u8], offset: u64, length: u32) -> BackupResult<Vec<u8>>;
-    async fn read_link(&self, path: &[u8]) -> BackupResult<LinkInfo>;
-    async fn stat(&self, path: &[u8]) -> BackupResult<StorageItemAttributes>;
+    async fn read_dir(&self, path: &Path) -> BackupResult<Box<dyn DirReader>>;
+    async fn file_size(&self, path: &Path) -> BackupResult<u64>;
+    async fn read_file(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>>;
+    async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo>;
+    async fn stat(&self, path: &Path) -> BackupResult<StorageItemAttributes>;
+}
+
+pub struct FileStreamReader<'a> {
+    reader: &'a dyn StorageReader,
+    path: PathBuf,
+    pos: u64,
+    chunk_size: u32,
+}
+
+impl<'a> FileStreamReader<'a> {
+    pub fn new(reader: &dyn StorageReader, path: PathBuf, pos: u64, chunk_size: u32) -> Self {
+        Self {
+            reader,
+            pos,
+            chunk_size,
+            path,
+        }
+    }
+
+    pub fn pos(&self) -> u64 {
+        self.pos
+    }
+
+    pub async fn read_next(&mut self) -> BackupResult<Vec<u8>> {
+        let data = self
+            .reader
+            .read_file(&self.path, self.pos, self.chunk_size)
+            .await?;
+
+        self.pos += data.len() as u64;
+        Ok(data)
+    }
 }
