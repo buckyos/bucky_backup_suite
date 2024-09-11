@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -33,6 +33,7 @@ pub struct CheckPointMeta<
     ServiceCheckPointMeta: MetaBound,
     ServiceDirMetaType: MetaBound,
     ServiceFileMetaType: MetaBound,
+    ServiceDiffMetaType: MetaBound,
     ServiceLinkMetaType: MetaBound,
     ServiceLogMetaType: MetaBound,
 > {
@@ -42,10 +43,14 @@ pub struct CheckPointMeta<
     pub prev_versions: Vec<CheckPointVersion>, // all versions this checkpoint depends on
     pub create_time: SystemTime,
     pub complete_time: SystemTime,
-
+    #[serde(
+        serialize_with = "serialize_meta_bound",
+        deserialize_with = "deserialize_meta_bound"
+    )]
     pub root: StorageItem<
         ServiceDirMetaType,
         ServiceFileMetaType,
+        ServiceDiffMetaType,
         ServiceLinkMetaType,
         ServiceLogMetaType,
     >,
@@ -57,6 +62,10 @@ pub struct CheckPointMeta<
     pub all_prev_version_consume_size: u64,
 
     // Special for services
+    #[serde(
+        serialize_with = "serialize_meta_bound",
+        deserialize_with = "deserialize_meta_bound"
+    )]
     pub service_meta: Option<ServiceCheckPointMeta>,
 }
 
@@ -70,7 +79,7 @@ pub struct CheckPointVersion {
     pub seq: u64,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StorageItemAttributes {
     #[serde(
         serialize_with = "serialize_system_time",
@@ -92,6 +101,7 @@ pub struct StorageItemAttributes {
 pub enum StorageItem<
     ServiceDirMetaType: MetaBound,
     ServiceFileMetaType: MetaBound,
+    ServiceDiffMetaType: MetaBound,
     ServiceLinkMetaType: MetaBound,
     ServiceLogMetaType: MetaBound,
 > {
@@ -99,78 +109,97 @@ pub enum StorageItem<
         DirectoryMeta<
             ServiceDirMetaType,
             ServiceFileMetaType,
+            ServiceDiffMetaType,
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
     ),
     File(FileMeta<ServiceFileMetaType>),
+    FileDiff(FileDiffMeta<ServiceDiffMetaType>),
     Link(LinkMeta<ServiceLinkMetaType>),
     Log(LogMeta<ServiceLogMetaType>),
 }
 
-impl <
-    ServiceDirMetaType: MetaBound,
-    ServiceFileMetaType: MetaBound,
-    ServiceLinkMetaType: MetaBound,
-    ServiceLogMetaType: MetaBound,
-> Serialize for StorageItem<
-    ServiceDirMetaType,
-    ServiceFileMetaType,
-    ServiceLinkMetaType,
-    ServiceLogMetaType,
-> {
+impl<
+        ServiceDirMetaType: MetaBound,
+        ServiceFileMetaType: MetaBound,
+        ServiceDiffMetaType: MetaBound,
+        ServiceLinkMetaType: MetaBound,
+        ServiceLogMetaType: MetaBound,
+    > Serialize
+    for StorageItem<
+        ServiceDirMetaType,
+        ServiceFileMetaType,
+        ServiceDiffMetaType,
+        ServiceLinkMetaType,
+        ServiceLogMetaType,
+    >
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         // Serialize `self` into the format `Type:Serialize::serialize(content)`
         match self {
-            StorageItem::Dir(dir) => {
-                serializer.serialize_str(format!("DIR:{}", serde_json::to_string(dir).unwrap()).as_str())
-            }
-            StorageItem::File(file) => {
-                serializer.serialize_str(format!("FILE:{}", serde_json::to_string(file).unwrap()).as_str())
-            }
-            StorageItem::Link(link) => {
-                serializer.serialize_str(format!("LINK:{}", serde_json::to_string(link).unwrap()).as_str())
-            }
-            StorageItem::Log(log) => {
-                serializer.serialize_str(format!("LOG:{}", serde_json::to_string(log).unwrap()).as_str())
-            }
+            StorageItem::Dir(dir) => serializer
+                .serialize_str(format!("DIR:{}", serde_json::to_string(dir).unwrap()).as_str()),
+            StorageItem::File(file) => serializer
+                .serialize_str(format!("FILE:{}", serde_json::to_string(file).unwrap()).as_str()),
+            StorageItem::Link(link) => serializer
+                .serialize_str(format!("LINK:{}", serde_json::to_string(link).unwrap()).as_str()),
+            StorageItem::Log(log) => serializer
+                .serialize_str(format!("LOG:{}", serde_json::to_string(log).unwrap()).as_str()),
+            StorageItem::FileDiff(diff) => serializer
+                .serialize_str(format!("DIFF:{}", serde_json::to_string(diff).unwrap()).as_str()),
         }
     }
 }
 
-impl <'de,
-    ServiceDirMetaType: MetaBound,
-    ServiceFileMetaType: MetaBound,
-    ServiceLinkMetaType: MetaBound,
-    ServiceLogMetaType: MetaBound
-> Deserialize<'de> for StorageItem<
-    ServiceDirMetaType,
-    ServiceFileMetaType,
-    ServiceLinkMetaType,
-    ServiceLogMetaType,
-> {
-    fn deserialize<D>(deserializer: D) -> Result<StorageItem<
+impl<
+        'de,
+        ServiceDirMetaType: MetaBound,
+        ServiceFileMetaType: MetaBound,
+        ServiceDiffMetaType: MetaBound,
+        ServiceLinkMetaType: MetaBound,
+        ServiceLogMetaType: MetaBound,
+    > Deserialize<'de>
+    for StorageItem<
         ServiceDirMetaType,
         ServiceFileMetaType,
+        ServiceDiffMetaType,
         ServiceLinkMetaType,
         ServiceLogMetaType,
-    >, D::Error>
+    >
+{
+    fn deserialize<D>(
+        deserializer: D,
+    ) -> Result<
+        StorageItem<
+            ServiceDirMetaType,
+            ServiceFileMetaType,
+            ServiceDiffMetaType,
+            ServiceLinkMetaType,
+            ServiceLogMetaType,
+        >,
+        D::Error,
+    >
     where
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
         let v: Vec<&str> = s.splitn(2, ':').collect();
         if v.len() != 2 {
-            return Err(serde::de::Error::custom(format!("Unknown storage item: {}", s)));
+            return Err(serde::de::Error::custom(format!(
+                "Unknown storage item: {}",
+                s
+            )));
         }
         match v[0] {
             "DIR" => {
                 let dir: DirectoryMeta<
                     ServiceDirMetaType,
                     ServiceFileMetaType,
+                    ServiceDiffMetaType,
                     ServiceLinkMetaType,
                     ServiceLogMetaType,
                 > = serde_json::from_str(v[1]).unwrap();
@@ -188,7 +217,50 @@ impl <'de,
                 let log: LogMeta<ServiceLogMetaType> = serde_json::from_str(v[1]).unwrap();
                 Ok(StorageItem::Log(log))
             }
-            _ => Err(serde::de::Error::custom(format!("Unknown storage item: {}", s))),
+            "DIFF" => {
+                let diff: FileDiffMeta<ServiceDiffMetaType> = serde_json::from_str(v[1]).unwrap();
+                Ok(StorageItem::FileDiff(diff))
+            }
+            _ => Err(serde::de::Error::custom(format!(
+                "Unknown storage item: {}",
+                s
+            ))),
+        }
+    }
+}
+
+impl<
+        ServiceDirMetaType: MetaBound,
+        ServiceFileMetaType: MetaBound,
+        ServiceDiffMetaType: MetaBound,
+        ServiceLinkMetaType: MetaBound,
+        ServiceLogMetaType: MetaBound,
+    > StorageItemField
+    for StorageItem<
+        ServiceDirMetaType,
+        ServiceFileMetaType,
+        ServiceDiffMetaType,
+        ServiceLinkMetaType,
+        ServiceLogMetaType,
+    >
+{
+    fn name(&self) -> &Path {
+        match self {
+            StorageItem::Dir(d) => d.name(),
+            StorageItem::File(f) => f.name(),
+            StorageItem::Link(l) => l.name(),
+            StorageItem::Log(l) => l.name(),
+            StorageItem::FileDiff(d) => d.name(),
+        }
+    }
+
+    fn attributes(&self) -> &StorageItemAttributes {
+        match self {
+            StorageItem::Dir(d) => d.attributes(),
+            StorageItem::File(f) => f.attributes(),
+            StorageItem::Link(l) => l.attributes(),
+            StorageItem::Log(l) => l.attributes(),
+            StorageItem::FileDiff(d) => d.attributes(),
         }
     }
 }
@@ -197,30 +269,78 @@ impl <'de,
 pub struct DirectoryMeta<
     ServiceDirMetaType: MetaBound,
     ServiceFileMetaType: MetaBound,
+    ServiceDiffMetaType: MetaBound,
     ServiceLinkMetaType: MetaBound,
     ServiceLogMetaType: MetaBound,
 > {
     pub name: PathBuf,
     pub attributes: StorageItemAttributes,
+    #[serde(
+        serialize_with = "serialize_meta_bound",
+        deserialize_with = "deserialize_meta_bound"
+    )]
     pub service_meta: Option<ServiceDirMetaType>,
+    #[serde(
+        serialize_with = "serialize_meta_bound",
+        deserialize_with = "deserialize_meta_bound"
+    )]
     pub children: Vec<
         StorageItem<
             ServiceDirMetaType,
             ServiceFileMetaType,
+            ServiceDiffMetaType,
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
     >,
 }
 
+impl<
+        ServiceDirMetaType: MetaBound,
+        ServiceFileMetaType: MetaBound,
+        ServiceDiffMetaType: MetaBound,
+        ServiceLinkMetaType: MetaBound,
+        ServiceLogMetaType: MetaBound,
+    > StorageItemField
+    for DirectoryMeta<
+        ServiceDirMetaType,
+        ServiceFileMetaType,
+        ServiceDiffMetaType,
+        ServiceLinkMetaType,
+        ServiceLogMetaType,
+    >
+{
+    fn name(&self) -> &Path {
+        &self.name
+    }
+
+    fn attributes(&self) -> &StorageItemAttributes {
+        &self.attributes
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FileMeta<ServiceFileMetaType: MetaBound> {
     pub name: PathBuf,
     pub attributes: StorageItemAttributes,
+    #[serde(
+        serialize_with = "serialize_meta_bound",
+        deserialize_with = "deserialize_meta_bound"
+    )]
     pub service_meta: Option<ServiceFileMetaType>,
     pub hash: String,
     pub size: u64,
     pub upload_bytes: u64,
+}
+
+impl<ServiceFileMetaType: MetaBound> StorageItemField for FileMeta<ServiceFileMetaType> {
+    fn name(&self) -> &Path {
+        &self.name
+    }
+
+    fn attributes(&self) -> &StorageItemAttributes {
+        &self.attributes
+    }
 }
 
 // It will work with a chunk
@@ -237,27 +357,54 @@ pub struct FileDiffChunk {
 pub struct FileDiffMeta<ServiceDiffMetaType: MetaBound> {
     pub name: PathBuf,
     pub attributes: StorageItemAttributes,
+    #[serde(
+        serialize_with = "serialize_meta_bound",
+        deserialize_with = "deserialize_meta_bound"
+    )]
     pub service_meta: Option<ServiceDiffMetaType>,
     pub hash: String,
     pub size: u64,
     pub diff_chunks: Vec<FileDiffChunk>,
+    pub upload_bytes: u64,
+}
+
+impl<ServiceDiffMetaType: MetaBound> StorageItemField for FileDiffMeta<ServiceDiffMetaType> {
+    fn name(&self) -> &Path {
+        &self.name
+    }
+
+    fn attributes(&self) -> &StorageItemAttributes {
+        &self.attributes
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LinkMeta<ServiceLinkMetaType: MetaBound> {
     pub name: PathBuf,
     pub attributes: StorageItemAttributes,
+    #[serde(
+        serialize_with = "serialize_meta_bound",
+        deserialize_with = "deserialize_meta_bound"
+    )]
     pub service_meta: Option<ServiceLinkMetaType>,
     pub target: PathBuf,
     pub is_hard: bool,
+}
+
+impl<ServiceLinkMetaType: MetaBound> StorageItemField for LinkMeta<ServiceLinkMetaType> {
+    fn name(&self) -> &Path {
+        &self.name
+    }
+
+    fn attributes(&self) -> &StorageItemAttributes {
+        &self.attributes
+    }
 }
 
 #[derive(Clone)]
 pub enum LogAction {
     Remove,
     Recover,
-    MoveFrom(String),
-    MoveTo(String),
     CopyFrom(String),
     UpdateAttributes, // new attributes will be set in `attributes` field
 }
@@ -270,8 +417,6 @@ impl Serialize for LogAction {
         match self {
             LogAction::Remove => serializer.serialize_str("RM"),
             LogAction::Recover => serializer.serialize_str("RC"),
-            LogAction::MoveFrom(from) => serializer.serialize_str(format!("MF:{}", from).as_str()),
-            LogAction::MoveTo(to) => serializer.serialize_str(format!("MT:{}", to).as_str())
             LogAction::CopyFrom(from) => serializer.serialize_str(format!("CF:{}", from).as_str()),
             LogAction::UpdateAttributes => serializer.serialize_str("UA"),
         }
@@ -288,16 +433,15 @@ impl<'de> Deserialize<'de> for LogAction {
             Ok(LogAction::Remove)
         } else if s == "RC" {
             Ok(LogAction::Recover)
-        } else if s.starts_with("MF:") {
-            Ok(LogAction::MoveFrom(s[3..].to_string()))
-        } else if s.starts_with("MT:") {
-            Ok(LogAction::MoveTo(s[3..].to_string()))
         } else if s.starts_with("CF:") {
             Ok(LogAction::CopyFrom(s[3..].to_string()))
         } else if s == "UA" {
             Ok(LogAction::UpdateAttributes)
         } else {
-            Err(serde::de::Error::custom(format!("Unknown log action: {}", s)))
+            Err(serde::de::Error::custom(format!(
+                "Unknown log action: {}",
+                s
+            )))
         }
     }
 }
@@ -306,13 +450,32 @@ impl<'de> Deserialize<'de> for LogAction {
 pub struct LogMeta<ServiceLogMetaType: MetaBound> {
     pub name: PathBuf,
     pub attributes: StorageItemAttributes,
+    #[serde(
+        serialize_with = "serialize_meta_bound",
+        deserialize_with = "deserialize_meta_bound"
+    )]
     pub service_meta: Option<ServiceLogMetaType>,
     pub action: LogAction,
 }
 
-pub type CheckPointMetaEngine = CheckPointMeta<String, String, String, String, String>;
-pub type StorageItemEngine = StorageItem<String, String, String, String>;
-pub type DirectoryMetaEngine = DirectoryMeta<String, String, String, String>;
+impl<ServiceLogMetaType: MetaBound> StorageItemField for LogMeta<ServiceLogMetaType> {
+    fn name(&self) -> &Path {
+        &self.name
+    }
+
+    fn attributes(&self) -> &StorageItemAttributes {
+        &self.attributes
+    }
+}
+
+pub trait StorageItemField {
+    fn name(&self) -> &Path;
+    fn attributes(&self) -> &StorageItemAttributes;
+}
+
+pub type CheckPointMetaEngine = CheckPointMeta<String, String, String, String, String, String>;
+pub type StorageItemEngine = StorageItem<String, String, String, String, String>;
+pub type DirectoryMetaEngine = DirectoryMeta<String, String, String, String, String>;
 pub type FileMetaEngine = FileMeta<String>;
 pub type FileDiffMetaEngine = FileDiffMeta<String>;
 pub type LinkMetaEngine = LinkMeta<String>;
@@ -361,4 +524,21 @@ where
 {
     let secs = u64::deserialize(deserializer)?;
     Ok(UNIX_EPOCH + std::time::Duration::from_secs(secs))
+}
+
+fn serialize_meta_bound<S, T>(v: &T, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+    T: MetaBound,
+{
+    v.serialize(serializer)
+}
+
+fn deserialize_meta_bound<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: MetaBound,
+{
+    let v = T::deserialize(deserializer)?;
+    Ok(v)
 }

@@ -1,13 +1,9 @@
-use std::{
-    sync::{atomic::AtomicU64, Arc},
-    time::SystemTime,
-};
+use std::{sync::Arc, time::SystemTime};
 
 use crate::{
     build_meta::{estimate_occupy_size, meta_from_delta, meta_from_reader},
     checkpoint::{CheckPoint, CheckPointStatus},
-    checkpoint_impl::CheckPointWrapper,
-    engine::{FindTaskBy, ListOffset, SourceQueryBy, TaskUuid},
+    engine::{FindTaskBy, ListOffset, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
     meta::{CheckPointMeta, CheckPointMetaEngine, CheckPointVersion, PreserveStateId, StorageItem},
@@ -15,8 +11,8 @@ use crate::{
     source_wrapper::SourceTaskWrapper,
     target::TargetTask,
     task::{
-        HistoryStrategy, ListCheckPointFilter, ListCheckPointFilterTime,
-        ListPreservedSourceStateFilter, PreserveSourceState, SourceState, Task, TaskInfo,
+        ListCheckPointFilter, ListCheckPointFilterTime, ListPreservedSourceStateFilter,
+        PreserveSourceState, SourceState, Task, TaskInfo,
     },
 };
 
@@ -179,29 +175,31 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
                     .pop();
 
                 if let Some(prev_checkpoint) = last_finish_checkpoint {
+                    let mut prev_meta =
+                        CheckPoint::<CheckPointMetaEngine>::full_meta(prev_checkpoint.as_ref())
+                            .await?;
+                    let prev_version = prev_meta.version;
+
                     let last_target_checkpoint = self
                         .egnine
-                        .get_target_checkpoint(
-                            self.info.target_id,
-                            &self.info.uuid,
-                            prev_checkpoint.version(),
-                        )
+                        .get_target_checkpoint(self.info.target_id, &self.info.uuid, prev_version)
                         .await?;
-                    let mut prev_info =
-                        CheckPoint::<CheckPointMetaEngine>::info(prev_checkpoint.as_ref()).await?;
 
-                    let prev_occupied_size = prev_info.meta.all_prev_version_occupied_size
-                        + prev_info.meta.occupied_size;
+                    let prev_occupied_size =
+                        prev_meta.all_prev_version_occupied_size + prev_meta.occupied_size;
                     let prev_consume_size =
-                        prev_info.meta.all_prev_version_consume_size + prev_info.meta.consume_size;
+                        prev_meta.all_prev_version_consume_size + prev_meta.consume_size;
 
-                    let prev_version = prev_info.meta.version;
-                    prev_info.meta.prev_versions.push(prev_version);
+                    prev_meta.prev_versions.push(prev_version);
 
-                    let prev_version = prev_info.meta.prev_versions;
+                    let prev_version = prev_meta.prev_versions;
                     break (
-                        meta_from_delta(last_target_checkpoint.as_ref(), source_preserved.as_ref())
-                            .await?,
+                        meta_from_delta(
+                            &prev_meta.root,
+                            last_target_checkpoint.as_ref(),
+                            source_preserved.as_ref(),
+                        )
+                        .await?,
                         prev_version,
                         prev_occupied_size,
                         prev_consume_size,
@@ -250,7 +248,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
                 &mut checkpoint_meta,
             )
             .await
-            .map(|cp| cp as Arc<dyn CheckPoint>)
+            .map(|cp| cp as Arc<dyn CheckPoint<CheckPointMetaEngine>>)
     }
     async fn list_checkpoints(
         &self,
@@ -264,7 +262,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
             .await?;
         let checkpoints = checkpoints
             .into_iter()
-            .map(|cp| cp as Arc<dyn CheckPoint>)
+            .map(|cp| cp as Arc<dyn CheckPoint<CheckPointMetaEngine>>)
             .collect();
         Ok(checkpoints)
     }
@@ -275,7 +273,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
         self.egnine
             .get_checkpoint(&self.info.uuid, version)
             .await
-            .map(|cp| cp.map(|cp| cp as Arc<dyn CheckPoint>))
+            .map(|cp| cp.map(|cp| cp as Arc<dyn CheckPoint<CheckPointMetaEngine>>))
     }
 
     // the checkpoint should be stopped first if it's transfering.

@@ -10,6 +10,7 @@ use crate::{
     meta::{CheckPointVersion, PreserveStateId, StorageItemAttributes},
 };
 
+#[derive(Clone)]
 pub enum CheckPointStatus {
     Standby,
     Start,
@@ -18,6 +19,7 @@ pub enum CheckPointStatus {
     Failed(Option<BackupError>),
 }
 
+#[derive(Clone)]
 pub struct CheckPointInfo<MetaType> {
     pub meta: MetaType,
     pub target_meta: Option<Vec<String>>,
@@ -31,6 +33,9 @@ pub trait CheckPoint<MetaType>: StorageReader {
     fn task_uuid(&self) -> &TaskUuid;
     fn version(&self) -> CheckPointVersion;
     async fn info(&self) -> BackupResult<CheckPointInfo<MetaType>>;
+    // if is_delta: SUM(prev-checkpoints[])
+    // otherwise: self.info().meta
+    async fn full_meta(&self) -> BackupResult<MetaType>;
     async fn transfer(&self) -> BackupResult<()>;
     async fn stop(&self) -> BackupResult<()>;
     async fn cancel(&self) -> BackupResult<()>;
@@ -115,7 +120,7 @@ impl DirChildType {
 }
 
 #[async_trait::async_trait]
-pub trait DirReader {
+pub trait DirReader: Send + Sync {
     fn path(&self) -> &Path;
     async fn next(&mut self) -> BackupResult<Option<DirChildType>>;
 }
@@ -144,13 +149,13 @@ pub trait StorageReader: Send + Sync {
 
 pub struct FileStreamReader<'a> {
     reader: &'a dyn StorageReader,
-    path: PathBuf,
+    path: &'a Path,
     pos: u64,
     chunk_size: u32,
 }
 
 impl<'a> FileStreamReader<'a> {
-    pub fn new(reader: &dyn StorageReader, path: PathBuf, pos: u64, chunk_size: u32) -> Self {
+    pub fn new(reader: &'a dyn StorageReader, path: &'a Path, pos: u64, chunk_size: u32) -> Self {
         Self {
             reader,
             pos,

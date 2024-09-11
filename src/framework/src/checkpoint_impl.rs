@@ -56,6 +56,9 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointImpl {
     async fn info(&self) -> BackupResult<CheckPointInfo<CheckPointMetaEngine>> {
         Ok(self.info.clone())
     }
+    async fn full_meta(&self) -> BackupResult<CheckPointMetaEngine> {
+        unimplemented!()
+    }
     async fn transfer(&self) -> BackupResult<()> {
         unimplemented!()
     }
@@ -139,6 +142,9 @@ impl<MetaType> CheckPoint<MetaType> for CheckPointWrapper {
         self.version
     }
     async fn info(&self) -> BackupResult<CheckPointInfo<MetaType>> {
+        unimplemented!()
+    }
+    async fn full_meta(&self) -> BackupResult<MetaType> {
         unimplemented!()
     }
     async fn transfer(&self) -> BackupResult<()> {

@@ -1,8 +1,8 @@
 use crate::{
-    checkpoint::{DirReader, LinkInfo, StorageReader},
+    checkpoint::StorageReader,
     engine::{TargetId, TargetInfo, TaskUuid},
     error::BackupResult,
-    meta::{CheckPointMeta, CheckPointVersion, MetaBound, StorageItemAttributes},
+    meta::{CheckPointMeta, CheckPointVersion, MetaBound},
     task::TaskInfo,
 };
 
@@ -11,6 +11,7 @@ pub trait TargetFactory<
     ServiceCheckPointMeta,
     ServiceDirMetaType,
     ServiceFileMetaType,
+    ServiceDiffMetaType,
     ServiceLinkMetaType,
     ServiceLogMetaType,
 >: Send + Sync
@@ -24,6 +25,7 @@ pub trait TargetFactory<
                 ServiceCheckPointMeta,
                 ServiceDirMetaType,
                 ServiceFileMetaType,
+                ServiceDiffMetaType,
                 ServiceLinkMetaType,
                 ServiceLogMetaType,
             >,
@@ -36,6 +38,7 @@ pub trait Target<
     ServiceCheckPointMeta,
     ServiceDirMetaType,
     ServiceFileMetaType,
+    ServiceDiffMetaType,
     ServiceLinkMetaType,
     ServiceLogMetaType,
 >: Send + Sync
@@ -51,6 +54,7 @@ pub trait Target<
                 ServiceCheckPointMeta,
                 ServiceDirMetaType,
                 ServiceFileMetaType,
+                ServiceDiffMetaType,
                 ServiceLinkMetaType,
                 ServiceLogMetaType,
             >,
@@ -65,6 +69,7 @@ pub trait TargetTask<
     ServiceCheckPointMeta: MetaBound,
     ServiceDirMetaType: MetaBound,
     ServiceFileMetaType: MetaBound,
+    ServiceDiffMetaType: MetaBound,
     ServiceLinkMetaType: MetaBound,
     ServiceLogMetaType: MetaBound,
 >: Send + Sync
@@ -76,6 +81,7 @@ pub trait TargetTask<
             ServiceCheckPointMeta,
             ServiceDirMetaType,
             ServiceFileMetaType,
+            ServiceDiffMetaType,
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
@@ -86,6 +92,7 @@ pub trait TargetTask<
             ServiceCheckPointMeta,
             ServiceDirMetaType,
             ServiceFileMetaType,
+            ServiceDiffMetaType,
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
@@ -97,6 +104,7 @@ pub trait TargetTask<
             ServiceCheckPointMeta,
             ServiceDirMetaType,
             ServiceFileMetaType,
+            ServiceDiffMetaType,
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
@@ -110,11 +118,14 @@ pub trait TargetCheckPoint: StorageReader + Send + Sync {
     async fn transfer(&self) -> BackupResult<()>;
 }
 
-pub trait TargetFactoryEngine: TargetFactory<String, String, String, String, String> {}
-impl<T: TargetFactory<String, String, String, String, String>> TargetFactoryEngine for T {}
+pub trait TargetFactoryEngine:
+    TargetFactory<String, String, String, String, String, String>
+{
+}
+impl<T: TargetFactory<String, String, String, String, String, String>> TargetFactoryEngine for T {}
 
-pub trait TargetEngine: Target<String, String, String, String, String> {}
-impl<T: Target<String, String, String, String, String>> TargetEngine for T {}
+pub trait TargetEngine: Target<String, String, String, String, String, String> {}
+impl<T: Target<String, String, String, String, String, String>> TargetEngine for T {}
 
-pub trait TargetTaskEngine: TargetTask<String, String, String, String, String> {}
-impl<T: TargetTask<String, String, String, String, String>> TargetTaskEngine for T {}
+pub trait TargetTaskEngine: TargetTask<String, String, String, String, String, String> {}
+impl<T: TargetTask<String, String, String, String, String, String>> TargetTaskEngine for T {}

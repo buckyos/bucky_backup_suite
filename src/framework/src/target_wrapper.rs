@@ -5,7 +5,7 @@ use crate::{
     engine::{TargetId, TargetInfo, TargetQueryBy, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
-    meta::{CheckPointMeta, CheckPointVersion, StorageItemAttributes},
+    meta::{CheckPointMetaEngine, CheckPointVersion, StorageItemAttributes},
     target::{Target, TargetCheckPoint, TargetTask},
     task::TaskInfo,
 };
@@ -25,7 +25,7 @@ impl TargetWrapper {
 }
 
 #[async_trait::async_trait]
-impl Target<String, String, String, String, String> for TargetWrapper {
+impl Target<String, String, String, String, String, String> for TargetWrapper {
     fn target_id(&self) -> TargetId {
         match &self.target_id {
             TargetQueryBy::Id(id) => *id,
@@ -47,7 +47,7 @@ impl Target<String, String, String, String, String> for TargetWrapper {
     async fn target_task(
         &self,
         task_info: TaskInfo,
-    ) -> BackupResult<Box<dyn TargetTask<String, String, String, String, String>>> {
+    ) -> BackupResult<Box<dyn TargetTask<String, String, String, String, String, String>>> {
         let t = self.engine.get_target_impl(&self.target_id).await?;
         match t {
             Some(t) => t.target_task(task_info).await,
@@ -87,14 +87,11 @@ impl TargetTaskWrapper {
 }
 
 #[async_trait::async_trait]
-impl TargetTask<String, String, String, String, String> for TargetTaskWrapper {
+impl TargetTask<String, String, String, String, String, String> for TargetTaskWrapper {
     fn task_uuid(&self) -> &TaskUuid {
         &self.task_uuid
     }
-    async fn estimate_consume_size(
-        &self,
-        meta: &CheckPointMeta<String, String, String, String, String>,
-    ) -> BackupResult<u64> {
+    async fn estimate_consume_size(&self, meta: &CheckPointMetaEngine) -> BackupResult<u64> {
         self.engine
             .get_target_task_impl(self.target_id, &self.task_uuid)
             .await?
@@ -103,7 +100,7 @@ impl TargetTask<String, String, String, String, String> for TargetTaskWrapper {
     }
     async fn fill_target_meta(
         &self,
-        meta: &mut CheckPointMeta<String, String, String, String, String>,
+        meta: &mut CheckPointMetaEngine,
     ) -> BackupResult<(Vec<String>, Box<dyn TargetCheckPoint>)> {
         self.engine
             .get_target_task_impl(self.target_id, &self.task_uuid)
@@ -114,7 +111,7 @@ impl TargetTask<String, String, String, String, String> for TargetTaskWrapper {
 
     async fn target_checkpoint_from_filled_meta(
         &self,
-        meta: &CheckPointMeta<String, String, String, String, String>,
+        meta: &CheckPointMetaEngine,
         target_meta: &[&str],
     ) -> BackupResult<Box<dyn TargetCheckPoint>> {
         self.engine
