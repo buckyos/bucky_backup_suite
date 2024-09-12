@@ -168,6 +168,10 @@ impl<'a> FileStreamReader<'a> {
         self.pos
     }
 
+    pub async fn file_size(&self) -> BackupResult<u64> {
+        self.reader.file_size(self.path).await
+    }
+
     pub async fn read_next(&mut self) -> BackupResult<Vec<u8>> {
         let data = self
             .reader

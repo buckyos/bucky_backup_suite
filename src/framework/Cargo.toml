@@ -13,4 +13,5 @@ serde_json = "1.0"
 log = "*"
 thiserror = "*"
 uuid = { version = "*", features = ["v4"] }
+sha2 = {version = '*'}
 bs58 = "*"

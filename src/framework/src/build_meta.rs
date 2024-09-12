@@ -1,5 +1,7 @@
 use std::{collections::HashSet, path::PathBuf, time::SystemTime};
 
+use sha2::{Digest, Sha256};
+
 use crate::{
     checkpoint::{DirChildType, FileStreamReader, StorageReader},
     error::BackupResult,
@@ -374,14 +376,35 @@ pub async fn meta_from_delta(
 }
 
 pub async fn file_hash_from_reader<'a>(reader: &mut FileStreamReader<'a>) -> BackupResult<String> {
-    unimplemented!()
+    let mut hasher = Sha256::new();
+    loop {
+        let chunk = reader.read_next().await?;
+        if chunk.is_empty() {
+            break;
+        }
+        hasher.update(chunk);
+    }
+    let hash = hasher.finalize();
+    let hash = bs58::encode(hash).into_string();
+    Ok(hash)
 }
 
+// result = reader - base_reader
 pub async fn diff_file_from_reader<'a>(
     base_reader: &mut FileStreamReader<'a>,
     reader: &mut FileStreamReader<'a>,
 ) -> BackupResult<Vec<FileDiffChunk>> {
-    unimplemented!()
+    // TODO: diff
+
+    let all_replace = FileDiffChunk {
+        pos: 0,
+        length: reader.file_size().await?,
+        origin_offset: 0,
+        origin_length: base_reader.file_size().await?,
+        upload_bytes: 0,
+    };
+
+    Ok(vec![all_replace])
 }
 
 pub fn estimate_occupy_size(meta: &CheckPointMetaEngine) -> u64 {

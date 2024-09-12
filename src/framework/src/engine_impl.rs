@@ -1236,7 +1236,7 @@ impl TaskMgr for Engine {
         attachment: String, // The application can save any attachment with task.
         flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
     ) -> BackupResult<Arc<dyn Task<CheckPointMetaEngine>>> {
-        let uuid = TaskUuid::from(uuid::Uuid::new_v4());
+        let uuid = TaskUuid::from(bs58::encode(uuid::Uuid::new_v4()).into_string());
 
         let task_info = TaskInfo {
             uuid,
