@@ -13,9 +13,9 @@ use crate::{
     error::{BackupError, BackupResult},
     handle_error,
     meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
-    meta_storage::{MetaStorage, MetaStorageSourceMgr, MetaStorageTargetMgr},
     source::{Source, SourceFactory, SourcePreserved, SourceTask},
     source_wrapper::{SourcePreservedWrapper, SourceTaskWrapper, SourceWrapper},
+    storage::{Storage, StorageSourceMgr, StorageTargetMgr},
     target::{Target, TargetCheckPoint, TargetEngine, TargetFactory, TargetTask},
     target_wrapper::{TargetCheckPointWrapper, TargetTaskWrapper, TargetWrapper},
     task::{
@@ -52,7 +52,7 @@ struct TaskCache {
 
 #[derive(Clone)]
 pub struct Engine {
-    meta_storage: Arc<Box<dyn MetaStorage>>,
+    meta_storage: Arc<Box<dyn Storage>>,
     source_factory: Arc<Box<dyn SourceFactory>>,
     target_factory: Arc<Box<dyn TargetFactory<String, String, String, String, String, String>>>,
     sources: Arc<RwLock<HashMap<SourceId, SourceCache>>>,
@@ -63,7 +63,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(
-        meta_storage: Box<dyn MetaStorage>,
+        meta_storage: Box<dyn Storage>,
         source_factory: Box<dyn SourceFactory>,
         target_factory: Box<dyn TargetFactory<String, String, String, String, String, String>>,
     ) -> Self {
@@ -149,7 +149,7 @@ impl Engine {
             }
         }
 
-        let source = MetaStorageSourceMgr::query_by(self.meta_storage.as_ref().as_ref(), by)
+        let source = StorageSourceMgr::query_by(self.meta_storage.as_ref().as_ref(), by)
             .await
             .map_err(handle_error!("query source failed, by: {:?}", by))?;
 
@@ -283,7 +283,7 @@ impl Engine {
             }
         }
 
-        let target = MetaStorageTargetMgr::query_by(self.meta_storage.as_ref().as_ref(), by)
+        let target = StorageTargetMgr::query_by(self.meta_storage.as_ref().as_ref(), by)
             .await
             .map_err(handle_error!("query target failed, by: {:?}", by))?;
 
@@ -862,7 +862,7 @@ impl SourceMgr for Engine {
         config: String,
         description: String,
     ) -> BackupResult<SourceId> {
-        let source_id = MetaStorageSourceMgr::register(self.meta_storage.as_ref().as_ref(),
+        let source_id = StorageSourceMgr::register(self.meta_storage.as_ref().as_ref(),
                 classify.as_str(),
                 url.as_str(),
                 friendly_name.as_str(),
@@ -893,7 +893,7 @@ impl SourceMgr for Engine {
     }
 
     async fn unregister(&self, by: &SourceQueryBy) -> BackupResult<()> {
-        MetaStorageSourceMgr::unregister(self.meta_storage.as_ref().as_ref(), by)
+        StorageSourceMgr::unregister(self.meta_storage.as_ref().as_ref(), by)
             .await
             .map_err(handle_error!(
                 "unregister source failed, source_id: {:?}",
@@ -931,7 +931,7 @@ impl SourceMgr for Engine {
         limit: u32,
     ) -> BackupResult<Vec<Arc<dyn Source>>> {
         let source_infos =
-            MetaStorageSourceMgr::list(self.meta_storage.as_ref().as_ref(), filter, offset, limit)
+            StorageSourceMgr::list(self.meta_storage.as_ref().as_ref(), filter, offset, limit)
                 .await
                 .map_err(handle_error!(
                     "list sources failed, filter: {:?}, offset: {:?}, limit: {}",
@@ -976,7 +976,7 @@ impl SourceMgr for Engine {
         config: Option<String>,
         description: Option<String>,
     ) -> BackupResult<()> {
-        MetaStorageSourceMgr::update(self
+        StorageSourceMgr::update(self
                 .meta_storage.as_ref().as_ref(), by, url.as_deref(), friendly_name.as_deref(), config.as_deref(), description.as_deref())
             .await
             .map_err(handle_error!(
@@ -1028,7 +1028,7 @@ impl TargetMgr for Engine {
         config: String,
         description: String,
     ) -> BackupResult<TargetId> {
-        let target_id = MetaStorageTargetMgr::register(self.meta_storage.as_ref().as_ref(),
+        let target_id = StorageTargetMgr::register(self.meta_storage.as_ref().as_ref(),
                 classify.as_str(),
                 url.as_str(),
                 friendly_name.as_str(),
@@ -1059,7 +1059,7 @@ impl TargetMgr for Engine {
     }
 
     async fn unregister(&self, by: &TargetQueryBy) -> BackupResult<()> {
-        MetaStorageTargetMgr::unregister(self.meta_storage.as_ref().as_ref(), by)
+        StorageTargetMgr::unregister(self.meta_storage.as_ref().as_ref(), by)
             .await
             .map_err(handle_error!(
                 "unregister target failed, target_id: {:?}",
@@ -1097,7 +1097,7 @@ impl TargetMgr for Engine {
         limit: u32,
     ) -> BackupResult<Vec<Arc<dyn TargetEngine>>> {
         let target_infos =
-            MetaStorageTargetMgr::list(self.meta_storage.as_ref().as_ref(), filter, offset, limit)
+            StorageTargetMgr::list(self.meta_storage.as_ref().as_ref(), filter, offset, limit)
                 .await
                 .map_err(handle_error!(
                     "list targets failed, filter: {:?}, offset: {:?}, limit: {}",
@@ -1142,7 +1142,7 @@ impl TargetMgr for Engine {
         config: Option<String>,
         description: Option<String>,
     ) -> BackupResult<()> {
-        MetaStorageTargetMgr::update(self
+        StorageTargetMgr::update(self
                 .meta_storage.as_ref().as_ref(), by, url.as_deref(), friendly_name.as_deref(), config.as_deref(), description.as_deref())
             .await
             .map_err(handle_error!(

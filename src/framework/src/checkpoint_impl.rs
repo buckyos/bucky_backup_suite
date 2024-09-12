@@ -7,7 +7,7 @@ use crate::{
     },
     engine::TaskUuid,
     engine_impl::Engine,
-    error::BackupResult,
+    error::{BackupError, BackupResult},
     meta::{CheckPointMetaEngine, CheckPointVersion, StorageItemAttributes},
 };
 
@@ -65,9 +65,6 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointImpl {
     async fn stop(&self) -> BackupResult<()> {
         unimplemented!()
     }
-    async fn cancel(&self) -> BackupResult<()> {
-        unimplemented!()
-    }
 
     async fn target_meta(&self) -> BackupResult<Option<Vec<String>>> {
         Ok(self.info.target_meta.clone())
@@ -75,7 +72,7 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointImpl {
 
     async fn transfer_map_by_item_path(
         &self,
-        paths: Option<Vec<&[u8]>>,
+        paths: Option<Vec<&Path>>,
     ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>> // <item-path, target-address, ItemTransferInfo>
     {
         unimplemented!()
@@ -117,56 +114,164 @@ impl CheckPointWrapper {
 #[async_trait::async_trait]
 impl StorageReader for CheckPointWrapper {
     async fn read_dir(&self, path: &Path) -> BackupResult<Box<dyn DirReader>> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.read_dir(path).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
     async fn file_size(&self, path: &Path) -> BackupResult<u64> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.file_size(path).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
     async fn read_file(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.read_file(path, offset, length).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
     async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.read_link(path).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
+
     async fn stat(&self, path: &Path) -> BackupResult<StorageItemAttributes> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.stat(path).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
 }
 
 #[async_trait::async_trait]
-impl<MetaType> CheckPoint<MetaType> for CheckPointWrapper {
+impl CheckPoint<CheckPointMetaEngine> for CheckPointWrapper {
     fn task_uuid(&self) -> &TaskUuid {
         &self.task_uuid
     }
     fn version(&self) -> CheckPointVersion {
         self.version
     }
-    async fn info(&self) -> BackupResult<CheckPointInfo<MetaType>> {
-        unimplemented!()
+    async fn info(&self) -> BackupResult<CheckPointInfo<CheckPointMetaEngine>> {
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => Ok(cp.info.clone()),
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
-    async fn full_meta(&self) -> BackupResult<MetaType> {
-        unimplemented!()
+    async fn full_meta(&self) -> BackupResult<CheckPointMetaEngine> {
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => Ok(cp.full_meta().await?),
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
     async fn transfer(&self) -> BackupResult<()> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.transfer().await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
     async fn stop(&self) -> BackupResult<()> {
-        unimplemented!()
-    }
-    async fn cancel(&self) -> BackupResult<()> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.stop().await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
 
     async fn target_meta(&self) -> BackupResult<Option<Vec<String>>> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.target_meta().await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
 
     async fn transfer_map_by_item_path(
         &self,
-        paths: Option<Vec<&[u8]>>,
+        paths: Option<Vec<&Path>>,
     ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>> // <item-path, target-address, ItemTransferInfo>
     {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.transfer_map_by_item_path(paths).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
 
     async fn transfer_map_to_target_address(
@@ -174,14 +279,44 @@ impl<MetaType> CheckPoint<MetaType> for CheckPointWrapper {
         target_addresses: Option<Vec<&str>>,
     ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>> // <target-address, <item-path, ItemTransferInfo>>
     {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.transfer_map_to_target_address(target_addresses).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
 
     async fn get_all_transfer_target_address(&self) -> BackupResult<Vec<Vec<u8>>> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.get_all_transfer_target_address().await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
 
     async fn status(&self) -> BackupResult<CheckPointStatus> {
-        unimplemented!()
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.status().await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
     }
 }

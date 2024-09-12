@@ -1,12 +1,14 @@
 use std::{sync::Arc, time::SystemTime};
 
 use crate::{
-    build_meta::{estimate_occupy_size, meta_from_delta, meta_from_reader},
     checkpoint::{CheckPoint, CheckPointStatus},
     engine::{FindTaskBy, ListOffset, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
-    meta::{CheckPointMeta, CheckPointMetaEngine, CheckPointVersion, PreserveStateId, StorageItem},
+    meta::{
+        CheckPointMeta, CheckPointMetaEngine, CheckPointVersion, DirectoryMetaEngine,
+        PreserveStateId, StorageItem,
+    },
     source::SourceTask,
     source_wrapper::SourceTaskWrapper,
     target::TargetTask,
@@ -138,12 +140,15 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
     fn uuid(&self) -> &TaskUuid {
         &self.info.uuid
     }
+
     async fn task_info(&self) -> BackupResult<TaskInfo> {
         Ok(self.info.clone())
     }
+
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()> {
         self.egnine.update_task_info(task_info).await
     }
+
     async fn prepare_checkpoint(
         &self,
         preserved_source_state_id: PreserveStateId,
@@ -194,7 +199,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
 
                     let prev_version = prev_meta.prev_versions;
                     break (
-                        meta_from_delta(
+                        DirectoryMetaEngine::from_delta(
                             &prev_meta.root,
                             last_target_checkpoint.as_ref(),
                             source_preserved.as_ref(),
@@ -208,7 +213,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
             }
 
             break (
-                meta_from_reader(source_preserved.as_ref()).await?,
+                DirectoryMetaEngine::from_reader(source_preserved.as_ref()).await?,
                 vec![],
                 0,
                 0,
@@ -231,7 +236,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
             service_meta: None,
         };
 
-        let occupied_size = estimate_occupy_size(&checkpoint_meta);
+        let occupied_size = checkpoint_meta.estimate_occupy_size();
         checkpoint_meta.occupied_size = occupied_size;
 
         let target_task = self
@@ -250,6 +255,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
             .await
             .map(|cp| cp as Arc<dyn CheckPoint<CheckPointMetaEngine>>)
     }
+
     async fn list_checkpoints(
         &self,
         filter: &ListCheckPointFilter,
@@ -266,6 +272,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
             .collect();
         Ok(checkpoints)
     }
+
     async fn query_checkpoint(
         &self,
         version: CheckPointVersion,

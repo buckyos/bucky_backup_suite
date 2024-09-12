@@ -1,11 +1,16 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::engine::TaskUuid;
+use crate::{
+    checkpoint::{DirChildType, FileStreamReader, StorageReader},
+    engine::TaskUuid,
+    error::BackupResult,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PreserveStateId(u64);
@@ -67,6 +72,68 @@ pub struct CheckPointMeta<
         deserialize_with = "deserialize_meta_bound"
     )]
     pub service_meta: Option<ServiceCheckPointMeta>,
+}
+
+impl<
+        ServiceCheckPointMeta: MetaBound,
+        ServiceDirMetaType: MetaBound,
+        ServiceFileMetaType: MetaBound,
+        ServiceDiffMetaType: MetaBound,
+        ServiceLinkMetaType: MetaBound,
+        ServiceLogMetaType: MetaBound,
+    >
+    CheckPointMeta<
+        ServiceCheckPointMeta,
+        ServiceDirMetaType,
+        ServiceFileMetaType,
+        ServiceDiffMetaType,
+        ServiceLinkMetaType,
+        ServiceLogMetaType,
+    >
+{
+    pub fn estimate_occupy_size(&self) -> u64 {
+        // meta size
+        let mut occupy_size = serde_json::to_string(self).unwrap().len() as u64;
+        // calculate the size of all files(Type: DirChildType::File) in the meta.
+        // Traverse it as meta_from_reader
+
+        let mut wait_read_dirs = vec![&self.root];
+
+        while !wait_read_dirs.is_empty() {
+            let current_item = wait_read_dirs.remove(0);
+
+            match current_item {
+                StorageItem::Dir(dir) => {
+                    for child in dir.children.iter() {
+                        match child {
+                            StorageItem::Dir(_) => {
+                                wait_read_dirs.push(child);
+                            }
+                            StorageItem::File(file) => {
+                                occupy_size += file.size;
+                            }
+                            StorageItem::Link(_) => {}
+                            StorageItem::Log(_) => {}
+                            StorageItem::FileDiff(diff) => {
+                                occupy_size +=
+                                    diff.diff_chunks.iter().map(|diff| diff.length).sum::<u64>();
+                            }
+                        }
+                    }
+                }
+                StorageItem::File(file) => {
+                    occupy_size += file.size;
+                }
+                StorageItem::Link(_) => {}
+                StorageItem::Log(_) => {}
+                StorageItem::FileDiff(diff) => {
+                    occupy_size += diff.diff_chunks.iter().map(|diff| diff.length).sum::<u64>()
+                }
+            }
+        }
+
+        occupy_size
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -319,6 +386,385 @@ impl<
     }
 }
 
+impl<
+        ServiceDirMetaType: MetaBound,
+        ServiceFileMetaType: MetaBound,
+        ServiceDiffMetaType: MetaBound,
+        ServiceLinkMetaType: MetaBound,
+        ServiceLogMetaType: MetaBound,
+    >
+    DirectoryMeta<
+        ServiceDirMetaType,
+        ServiceFileMetaType,
+        ServiceDiffMetaType,
+        ServiceLinkMetaType,
+        ServiceLogMetaType,
+    >
+{
+    pub async fn from_reader(reader: &dyn StorageReader) -> BackupResult<Self> {
+        // Traverse all hierarchical subdirectories of reader. read-dir() in a breadth first manner and store them in the structure of CheckPointMeta.
+        // For each directory, call read_dir() to get the list of files and subdirectories in the directory.
+        // For each file, call read_file() to get the file content.
+        // For each subdirectory, call read_dir() recursively.
+        // For each link, call read_link() to get the link information.
+        // For each file, call stat() to get the file attributes.
+        // Return the CheckPointMeta structure.
+
+        let root_name = PathBuf::from("/");
+        let root_dir_attr = reader.stat(&root_name).await?;
+        let root_dir = Self {
+            name: root_name.clone(),
+            attributes: root_dir_attr,
+            service_meta: None,
+            children: vec![],
+        };
+
+        let mut all_read_files = vec![(None, StorageItem::Dir(root_dir), root_name)]; // <parent-index, item, full-path>
+        let mut next_dir_index = 0;
+
+        while next_dir_index < all_read_files.len() {
+            let parent_index = next_dir_index;
+            let parent_full_path = all_read_files[next_dir_index].2.as_path();
+            let current_item = &all_read_files[next_dir_index].1;
+            next_dir_index += 1;
+            if let StorageItem::Dir(_) = current_item {
+            } else {
+                continue;
+            }
+
+            let mut dir_reader = reader.read_dir(parent_full_path).await?;
+
+            while let Some(child) = dir_reader.next().await? {
+                let parent_full_path = all_read_files[next_dir_index].2.as_path();
+                let child_name = child.path().to_path_buf();
+                let full_path = parent_full_path.join(&child_name);
+                let child_attr = reader.stat(&child_name).await?;
+                let child_meta = match child {
+                    DirChildType::File(_) => {
+                        let file_size = reader.file_size(&child_name).await?;
+                        let hash =
+                            FileStreamReader::new(reader, full_path.as_path(), 0, 1024 * 1024)
+                                .hash()
+                                .await?;
+                        StorageItem::File(FileMeta {
+                            name: child_name,
+                            attributes: child_attr,
+                            service_meta: None,
+                            hash,
+                            size: file_size,
+                            upload_bytes: 0,
+                        })
+                    }
+                    DirChildType::Dir(_) => StorageItem::Dir(DirectoryMeta {
+                        name: child_name,
+                        attributes: child_attr,
+                        service_meta: None,
+                        children: vec![],
+                    }),
+                    DirChildType::Link(_) => {
+                        let link_info = reader.read_link(&child_name).await?;
+                        StorageItem::Link(LinkMeta {
+                            name: child_name,
+                            attributes: child_attr,
+                            service_meta: None,
+                            is_hard: link_info.is_hard,
+                            target: link_info.target,
+                        })
+                    }
+                };
+
+                all_read_files.push((Some(parent_index), child_meta, full_path));
+            }
+        }
+
+        loop {
+            let (parent_index, child_meta, _) = all_read_files
+                .pop()
+                .expect("root directory should be in the list");
+            if let Some(parent_index) = parent_index {
+                let parent = &mut all_read_files[parent_index].1;
+                if let StorageItem::Dir(parent_dir) = parent {
+                    parent_dir.children.push(child_meta);
+                } else {
+                    unreachable!("only directory can have children");
+                }
+            } else if let StorageItem::Dir(child_meta) = child_meta {
+                return Ok(child_meta);
+            }
+        }
+    }
+
+    // meta = meta(reader) - meta(base_meta)
+    pub async fn from_delta(
+        base_meta: &StorageItem<
+            ServiceDirMetaType,
+            ServiceFileMetaType,
+            ServiceDiffMetaType,
+            ServiceLinkMetaType,
+            ServiceLogMetaType,
+        >,
+        base_reader: &dyn StorageReader,
+        reader: &dyn StorageReader,
+    ) -> BackupResult<Self> {
+        let root_name = PathBuf::from("/");
+        let root_dir_attr = reader.stat(&root_name).await?;
+        let root_dir = DirectoryMeta {
+            name: root_name.clone(),
+            attributes: root_dir_attr,
+            service_meta: None,
+            children: vec![],
+        };
+
+        // makesource there is a directory in base.
+        let mut base_root_dir = DirectoryMeta {
+            name: root_name.clone(),
+            attributes: StorageItemAttributes {
+                create_time: SystemTime::UNIX_EPOCH,
+                last_update_time: SystemTime::UNIX_EPOCH,
+                owner: "".to_string(),
+                group: "".to_string(),
+                permissions: "".to_string(),
+            },
+            service_meta: None,
+            children: vec![],
+        };
+        let base_meta = if let StorageItem::Dir(base_dir) = base_meta {
+            base_dir
+        } else {
+            base_root_dir.children.push(base_meta.clone());
+            &base_root_dir
+        };
+
+        let mut all_read_files = vec![(None, StorageItem::Dir(root_dir), root_name)]; // <parent-index, item, full-path>
+        let mut all_reader_dir_indexs = vec![(0, true)]; // <index-in-all_read_files, is-updated>
+        let mut all_base_dirs = vec![Some(base_meta)];
+        let mut next_dir_index = 0;
+
+        while next_dir_index < all_reader_dir_indexs.len() {
+            let current_base_dir = all_base_dirs[next_dir_index];
+            let (parent_index, is_dir_attr_update) = all_reader_dir_indexs[next_dir_index];
+            let parent_full_path = all_read_files[parent_index].2.clone();
+            let current_item = &all_read_files[parent_index].1;
+            next_dir_index += 1;
+            let current_dir = if let StorageItem::Dir(current_dir) = current_item {
+                current_dir
+            } else {
+                unreachable!("only directory can have children");
+            };
+
+            let mut dir_reader = reader.read_dir(parent_full_path.as_path()).await?;
+            let mut children = HashSet::new();
+
+            while let Some(child) = dir_reader.next().await? {
+                let child_name = child.path().to_path_buf();
+                let full_path = parent_full_path.join(&child_name);
+
+                children.insert(child_name.clone());
+
+                let base_child = current_base_dir.map_or(None, |dir| {
+                    dir.children
+                        .iter()
+                        .find(|c| c.name() == child_name.as_path())
+                });
+
+                let child_attr = reader.stat(&child_name).await?;
+
+                // compare attributes
+                let mut update_attr_log = None;
+                if let Some(base_child) = base_child {
+                    if base_child.attributes() != &child_attr {
+                        update_attr_log = Some(LogMeta {
+                            name: child_name.clone(),
+                            attributes: child_attr.clone(),
+                            service_meta: None,
+                            action: LogAction::UpdateAttributes,
+                        })
+                    }
+                }
+
+                let child_meta = match child {
+                    DirChildType::File(_) => {
+                        let file_size = reader.file_size(&child_name).await?;
+                        let hash =
+                            FileStreamReader::new(reader, full_path.as_path(), 0, 1024 * 1024)
+                                .hash()
+                                .await?;
+                        match base_child {
+                            Some(base_child) => {
+                                // TODO: move/copy/recovery from other directory.
+                                if let StorageItem::File(base_file) = base_child {
+                                    if base_file.hash == hash && base_file.size == file_size {
+                                        // no update
+                                        None
+                                    } else {
+                                        // diff
+                                        let diffs = FileDiffChunk::from_reader(
+                                            &mut FileStreamReader::new(
+                                                base_reader,
+                                                full_path.as_path(),
+                                                0,
+                                                1024 * 1024,
+                                            ),
+                                            &mut FileStreamReader::new(
+                                                reader,
+                                                full_path.as_path(),
+                                                0,
+                                                1024 * 1024,
+                                            ),
+                                        )
+                                        .await?;
+                                        Some(StorageItem::FileDiff(FileDiffMeta {
+                                            name: child_name,
+                                            attributes: child_attr,
+                                            service_meta: None,
+                                            hash,
+                                            size: file_size,
+                                            upload_bytes: 0,
+                                            diff_chunks: diffs,
+                                        }))
+                                    }
+                                } else {
+                                    // new file
+                                    Some(StorageItem::File(FileMeta {
+                                        name: child_name,
+                                        attributes: child_attr,
+                                        service_meta: None,
+                                        hash,
+                                        size: file_size,
+                                        upload_bytes: 0,
+                                    }))
+                                }
+                            }
+                            None => {
+                                // new file
+                                Some(StorageItem::File(FileMeta {
+                                    name: child_name,
+                                    attributes: child_attr,
+                                    service_meta: None,
+                                    hash,
+                                    size: file_size,
+                                    upload_bytes: 0,
+                                }))
+                            }
+                        }
+                    }
+                    DirChildType::Dir(_) => {
+                        let is_type_changed = match base_child {
+                            Some(base_child) => {
+                                if let StorageItem::Dir(base_child) = base_child {
+                                    all_base_dirs.push(Some(base_child));
+                                    false
+                                } else {
+                                    all_base_dirs.push(None);
+                                    true
+                                }
+                            }
+                            None => {
+                                all_base_dirs.push(None);
+                                true
+                            }
+                        };
+                        all_reader_dir_indexs.push((
+                            all_read_files.len(),
+                            is_type_changed || update_attr_log.is_some(),
+                        ));
+                        Some(StorageItem::Dir(DirectoryMeta {
+                            name: child_name,
+                            attributes: child_attr,
+                            service_meta: None,
+                            children: vec![],
+                        }))
+                    }
+                    DirChildType::Link(_) => {
+                        let link_info = reader.read_link(&child_name).await?;
+                        let mut is_updated = true;
+                        if let Some(base_child) = base_child {
+                            if let StorageItem::Link(base_link) = base_child {
+                                if base_link.is_hard == link_info.is_hard
+                                    && base_link.target == link_info.target
+                                {
+                                    // no update
+                                    is_updated = false;
+                                }
+                            }
+                        }
+
+                        if is_updated {
+                            Some(StorageItem::Link(LinkMeta {
+                                name: child_name,
+                                attributes: child_attr,
+                                service_meta: None,
+                                is_hard: link_info.is_hard,
+                                target: link_info.target,
+                            }))
+                        } else {
+                            None
+                        }
+                    }
+                };
+
+                // next_dir_index has +1 in the loop
+                if let Some(child_meta) = child_meta {
+                    all_read_files.push((Some(next_dir_index - 1), child_meta, full_path));
+                } else if let Some(update_attr_log) = update_attr_log {
+                    all_read_files.push((
+                        Some(next_dir_index - 1),
+                        StorageItem::Log(update_attr_log),
+                        full_path,
+                    ));
+                }
+            }
+
+            if let Some(base_dir) = current_base_dir {
+                for child in base_dir.children.iter() {
+                    // add LogAction::Remove for the `child`` not in `children`.
+                    if !children.contains(child.name()) {
+                        all_read_files.push((
+                            Some(next_dir_index - 1),
+                            StorageItem::Log(LogMeta {
+                                name: child.name().to_path_buf(),
+                                attributes: child.attributes().clone(),
+                                service_meta: None,
+                                action: LogAction::Remove,
+                            }),
+                            parent_full_path.join(child.name()),
+                        ));
+                    }
+                }
+            }
+        }
+
+        loop {
+            let (parent_index, child_meta, _) = all_read_files
+                .pop()
+                .expect("root directory should be in the list");
+            if let Some(parent_index) = parent_index {
+                let parent_index = if parent_index == all_reader_dir_indexs.len() - 1 {
+                    let (parent_index, is_updated) =
+                        all_reader_dir_indexs.pop().expect("dir should existed");
+                    if !is_updated {
+                        continue;
+                    }
+                    parent_index
+                } else {
+                    all_reader_dir_indexs[parent_index].1 = true;
+                    let (parent_index, _) = all_reader_dir_indexs[parent_index];
+                    parent_index
+                };
+
+                let parent = &mut all_read_files[parent_index].1;
+                if let StorageItem::Dir(parent_dir) = parent {
+                    parent_dir.children.push(child_meta);
+                } else {
+                    unreachable!("only directory can have children");
+                }
+            } else if let StorageItem::Dir(child_meta) = child_meta {
+                return Ok(child_meta);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FileMeta<ServiceFileMetaType: MetaBound> {
     pub name: PathBuf,
@@ -351,6 +797,26 @@ pub struct FileDiffChunk {
     pub origin_offset: u64, // the offset the bytes were instead in the original chunk
     pub origin_length: u64, // the length of the original bytes will be instead.
     pub upload_bytes: u64,
+}
+
+impl FileDiffChunk {
+    // result = reader - base_reader
+    pub async fn from_reader<'a>(
+        base_reader: &mut FileStreamReader<'a>,
+        reader: &mut FileStreamReader<'a>,
+    ) -> BackupResult<Vec<FileDiffChunk>> {
+        // TODO: diff
+
+        let all_replace = FileDiffChunk {
+            pos: 0,
+            length: reader.file_size().await?,
+            origin_offset: 0,
+            origin_length: base_reader.file_size().await?,
+            upload_bytes: 0,
+        };
+
+        Ok(vec![all_replace])
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -481,32 +947,32 @@ pub type FileDiffMetaEngine = FileDiffMeta<String>;
 pub type LinkMetaEngine = LinkMeta<String>;
 pub type LogMetaEngine = LogMeta<String>;
 
-// meta for DMC, sample<TODO>.
-pub struct SectorId(u64);
-pub type ServiceDirMetaTypeDMC = ();
-pub type ServiceLinkMetaTypeDMC = ();
-pub type ServiceLogMetaTypeDMC = ();
+// // meta for DMC, sample<TODO>.
+// pub struct SectorId(u64);
+// pub type ServiceDirMetaTypeDMC = ();
+// pub type ServiceLinkMetaTypeDMC = ();
+// pub type ServiceLogMetaTypeDMC = ();
 
-pub struct ChunkPositionDMC {
-    pub sector: SectorId,
-    pub pos: u64,    // Where this file storage in sector.
-    pub offset: u64, // If this file is too large, it will be cut into several chunks and stored in different sectors.
-    // the `offset` is the offset of the chunk in total file.
-    pub size: u64, //
-}
+// pub struct ChunkPositionDMC {
+//     pub sector: SectorId,
+//     pub pos: u64,    // Where this file storage in sector.
+//     pub offset: u64, // If this file is too large, it will be cut into several chunks and stored in different sectors.
+//     // the `offset` is the offset of the chunk in total file.
+//     pub size: u64, //
+// }
 
-pub struct ServiceMetaChunkTypeDMC {
-    pub chunks: Vec<ChunkPositionDMC>,
-    pub sector_count: u32, // Count of sectors occupied by this file; if the sector count is greater than it in `chunks` field, the file will be incomplete.
-}
+// pub struct ServiceMetaChunkTypeDMC {
+//     pub chunks: Vec<ChunkPositionDMC>,
+//     pub sector_count: u32, // Count of sectors occupied by this file; if the sector count is greater than it in `chunks` field, the file will be incomplete.
+// }
 
-pub type ServiceFileMetaTypeDMC = ServiceMetaChunkTypeDMC;
+// pub type ServiceFileMetaTypeDMC = ServiceMetaChunkTypeDMC;
 
-pub type ServiceDiffMetaTypeDMC = ServiceMetaChunkTypeDMC;
+// pub type ServiceDiffMetaTypeDMC = ServiceMetaChunkTypeDMC;
 
-pub struct ServiceCheckPointMetaDMC {
-    pub sector_count: u32, // Count of sectors this checkpoint consumed. Some checkpoint will consume several sectors.
-}
+// pub struct ServiceCheckPointMetaDMC {
+//     pub sector_count: u32, // Count of sectors this checkpoint consumed. Some checkpoint will consume several sectors.
+// }
 
 fn serialize_system_time<S>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error>
 where

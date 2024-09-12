@@ -4,6 +4,8 @@ use std::{
     time::SystemTime,
 };
 
+use sha2::{Digest, Sha256};
+
 use crate::{
     engine::TaskUuid,
     error::{BackupError, BackupResult},
@@ -38,13 +40,12 @@ pub trait CheckPoint<MetaType>: StorageReader {
     async fn full_meta(&self) -> BackupResult<MetaType>;
     async fn transfer(&self) -> BackupResult<()>;
     async fn stop(&self) -> BackupResult<()>;
-    async fn cancel(&self) -> BackupResult<()>;
 
     async fn target_meta(&self) -> BackupResult<Option<Vec<String>>>;
 
     async fn transfer_map_by_item_path(
         &self,
-        paths: Option<Vec<&[u8]>>,
+        paths: Option<Vec<&Path>>,
     ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>>; // <item-path, target-address, ItemTransferInfo>
 
     async fn transfer_map_to_target_address(
@@ -180,5 +181,19 @@ impl<'a> FileStreamReader<'a> {
 
         self.pos += data.len() as u64;
         Ok(data)
+    }
+
+    pub async fn hash(&mut self) -> BackupResult<String> {
+        let mut hasher = Sha256::new();
+        loop {
+            let chunk = self.read_next().await?;
+            if chunk.is_empty() {
+                break;
+            }
+            hasher.update(chunk);
+        }
+        let hash = hasher.finalize();
+        let hash = bs58::encode(hash).into_string();
+        Ok(hash)
     }
 }
