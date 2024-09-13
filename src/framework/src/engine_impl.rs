@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc, time::SystemTime};
 
+use base58::ToBase58;
 use tokio::sync::RwLock;
 
 use crate::{
@@ -36,12 +37,12 @@ struct SourceCache {
 }
 
 struct TargetTaskCache {
-    target_task: Arc<Box<dyn TargetTask<String, String, String, String, String, String>>>,
+    target_task: Arc<Box<dyn TargetTask<String, String, String, String, String>>>,
     target_checkpoints: HashMap<CheckPointVersion, Arc<Box<dyn TargetCheckPoint>>>,
 }
 
 struct TargetCache {
-    target: Arc<Box<dyn Target<String, String, String, String, String, String>>>,
+    target: Arc<Box<dyn Target<String, String, String, String, String>>>,
     target_tasks: HashMap<TaskUuid, TargetTaskCache>,
 }
 
@@ -54,7 +55,7 @@ struct TaskCache {
 pub struct Engine {
     meta_storage: Arc<Box<dyn Storage>>,
     source_factory: Arc<Box<dyn SourceFactory>>,
-    target_factory: Arc<Box<dyn TargetFactory<String, String, String, String, String, String>>>,
+    target_factory: Arc<Box<dyn TargetFactory<String, String, String, String, String>>>,
     sources: Arc<RwLock<HashMap<SourceId, SourceCache>>>,
     targets: Arc<RwLock<HashMap<TargetId, TargetCache>>>,
     config: Arc<RwLock<Option<EngineConfig>>>,
@@ -65,7 +66,7 @@ impl Engine {
     pub fn new(
         meta_storage: Box<dyn Storage>,
         source_factory: Box<dyn SourceFactory>,
-        target_factory: Box<dyn TargetFactory<String, String, String, String, String, String>>,
+        target_factory: Box<dyn TargetFactory<String, String, String, String, String>>,
     ) -> Self {
         Self {
             meta_storage: Arc::new(meta_storage),
@@ -261,8 +262,7 @@ impl Engine {
     pub(crate) async fn get_target_impl(
         &self,
         by: &TargetQueryBy,
-    ) -> BackupResult<Option<Arc<Box<dyn Target<String, String, String, String, String, String>>>>>
-    {
+    ) -> BackupResult<Option<Arc<Box<dyn Target<String, String, String, String, String>>>>> {
         {
             let cache = self.targets.read().await;
             match by {
@@ -316,8 +316,7 @@ impl Engine {
         &self,
         target_id: TargetId,
         task_uuid: &TaskUuid,
-    ) -> BackupResult<Arc<Box<dyn TargetTask<String, String, String, String, String, String>>>>
-    {
+    ) -> BackupResult<Arc<Box<dyn TargetTask<String, String, String, String, String>>>> {
         loop {
             {
                 // read from cache
@@ -1236,7 +1235,7 @@ impl TaskMgr for Engine {
         attachment: String, // The application can save any attachment with task.
         flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
     ) -> BackupResult<Arc<dyn Task<CheckPointMetaEngine>>> {
-        let uuid = TaskUuid::from(bs58::encode(uuid::Uuid::new_v4()).into_string());
+        let uuid = TaskUuid::from(uuid::Uuid::new_v4().as_bytes().to_base58());
 
         let task_info = TaskInfo {
             uuid,

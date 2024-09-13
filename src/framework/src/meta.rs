@@ -4,12 +4,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     checkpoint::{DirChildType, FileStreamReader, StorageReader},
     engine::TaskUuid,
-    error::BackupResult,
+    error::{BackupError, BackupResult},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -38,7 +38,6 @@ pub struct CheckPointMeta<
     ServiceCheckPointMeta: MetaBound,
     ServiceDirMetaType: MetaBound,
     ServiceFileMetaType: MetaBound,
-    ServiceDiffMetaType: MetaBound,
     ServiceLinkMetaType: MetaBound,
     ServiceLogMetaType: MetaBound,
 > {
@@ -55,7 +54,6 @@ pub struct CheckPointMeta<
     pub root: StorageItem<
         ServiceDirMetaType,
         ServiceFileMetaType,
-        ServiceDiffMetaType,
         ServiceLinkMetaType,
         ServiceLogMetaType,
     >,
@@ -78,7 +76,6 @@ impl<
         ServiceCheckPointMeta: MetaBound,
         ServiceDirMetaType: MetaBound,
         ServiceFileMetaType: MetaBound,
-        ServiceDiffMetaType: MetaBound,
         ServiceLinkMetaType: MetaBound,
         ServiceLogMetaType: MetaBound,
     >
@@ -86,11 +83,78 @@ impl<
         ServiceCheckPointMeta,
         ServiceDirMetaType,
         ServiceFileMetaType,
-        ServiceDiffMetaType,
         ServiceLinkMetaType,
         ServiceLogMetaType,
     >
 {
+    pub fn combine_previous_versions(prev_checkpoints: &[&Self]) -> BackupResult<Self> {
+        if prev_checkpoints.is_empty() {
+            return Err(BackupError::InvalidArgument(
+                "prev_checkpoints is empty".to_string(),
+            ));
+        }
+
+        // sort by previous versions
+        let mut prev_checkpoints = Vec::from(prev_checkpoints);
+        Self::sort_checkpoints(prev_checkpoints.as_mut_slice());
+
+        let last_checkpoint = prev_checkpoints.last().unwrap();
+
+        // clone from the last checkpoint
+        let mut meta = Self {
+            task_friendly_name: last_checkpoint.task_friendly_name.clone(),
+            task_uuid: last_checkpoint.task_uuid,
+            version: last_checkpoint.version,
+            prev_versions: prev_checkpoints
+                .iter()
+                .flat_map(|c| c.prev_versions)
+                .collect(),
+            create_time: last_checkpoint.create_time.clone(),
+            complete_time: last_checkpoint.complete_time.clone(),
+            root: StorageItem::Dir(DirectoryMeta {
+                name: PathBuf::from("/"),
+                attributes: StorageItemAttributes {
+                    create_time: SystemTime::UNIX_EPOCH,
+                    last_update_time: SystemTime::UNIX_EPOCH,
+                    owner: "".to_string(),
+                    group: "".to_string(),
+                    permissions: "".to_string(),
+                },
+                service_meta: None,
+                children: vec![],
+            }),
+            occupied_size: last_checkpoint.occupied_size,
+            consume_size: last_checkpoint.consume_size,
+            all_prev_version_occupied_size: last_checkpoint.all_prev_version_occupied_size,
+            all_prev_version_consume_size: last_checkpoint.all_prev_version_consume_size,
+            service_meta: last_checkpoint.service_meta.clone(),
+        };
+
+        for checkpoint in prev_checkpoints {
+            // use checkpoint to exchange the meta
+        }
+    }
+
+    pub fn sort_checkpoints(checkpoints: &mut [&Self]) {
+        for i in 0..checkpoints.len() {
+            let mut is_swapped = true;
+            while is_swapped {
+                is_swapped = false;
+                for j in i + 1..checkpoints.len() {
+                    if checkpoints[i]
+                        .prev_versions
+                        .iter()
+                        .find(|v| **v == checkpoints[j].version)
+                        .is_some()
+                    {
+                        checkpoints.swap(i, j);
+                        is_swapped = true;
+                    }
+                }
+            }
+        }
+    }
+
     pub fn estimate_occupy_size(&self) -> u64 {
         // meta size
         let mut occupy_size = serde_json::to_string(self).unwrap().len() as u64;
@@ -103,30 +167,30 @@ impl<
             let current_item = wait_read_dirs.remove(0);
 
             match current_item {
-                StorageItem::Dir(dir) => {
+                StorageItem::Dir(dir, _) => {
                     for child in dir.children.iter() {
                         match child {
-                            StorageItem::Dir(_) => {
+                            StorageItem::Dir(_, _) => {
                                 wait_read_dirs.push(child);
                             }
-                            StorageItem::File(file) => {
+                            StorageItem::File(file, _) => {
                                 occupy_size += file.size;
                             }
-                            StorageItem::Link(_) => {}
-                            StorageItem::Log(_) => {}
-                            StorageItem::FileDiff(diff) => {
+                            StorageItem::Link(_, _) => {}
+                            StorageItem::Log(_, _) => {}
+                            StorageItem::FileDiff(diff, _) => {
                                 occupy_size +=
                                     diff.diff_chunks.iter().map(|diff| diff.length).sum::<u64>();
                             }
                         }
                     }
                 }
-                StorageItem::File(file) => {
+                StorageItem::File(file, _) => {
                     occupy_size += file.size;
                 }
-                StorageItem::Link(_) => {}
-                StorageItem::Log(_) => {}
-                StorageItem::FileDiff(diff) => {
+                StorageItem::Link(_, _) => {}
+                StorageItem::Log(_, _) => {}
+                StorageItem::FileDiff(diff, _) => {
                     occupy_size += diff.diff_chunks.iter().map(|diff| diff.length).sum::<u64>()
                 }
             }
@@ -163,12 +227,13 @@ pub struct StorageItemAttributes {
     pub permissions: String,
 }
 
-// common meta
+// (meta, logs), logs record the change history of stored files (not other types) for this item (if any),
+// mainly used for incremental synchronization and reuse of files, and are rarely used in most cases,
+// logs are not serialized or stored, they are only used in memory
 #[derive(Clone)]
 pub enum StorageItem<
     ServiceDirMetaType: MetaBound,
     ServiceFileMetaType: MetaBound,
-    ServiceDiffMetaType: MetaBound,
     ServiceLinkMetaType: MetaBound,
     ServiceLogMetaType: MetaBound,
 > {
@@ -176,28 +241,38 @@ pub enum StorageItem<
         DirectoryMeta<
             ServiceDirMetaType,
             ServiceFileMetaType,
-            ServiceDiffMetaType,
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
+        Vec<Option<FileLog<ServiceFileMetaType>>>,
     ),
-    File(FileMeta<ServiceFileMetaType>),
-    FileDiff(FileDiffMeta<ServiceDiffMetaType>),
-    Link(LinkMeta<ServiceLinkMetaType>),
-    Log(LogMeta<ServiceLogMetaType>),
+    File(
+        FileMeta<ServiceFileMetaType>,
+        Vec<Option<FileLog<ServiceFileMetaType>>>,
+    ),
+    FileDiff(
+        FileDiffMeta<ServiceFileMetaType>,
+        Vec<Option<FileLog<ServiceFileMetaType>>>,
+    ),
+    Link(
+        LinkMeta<ServiceLinkMetaType>,
+        Vec<Option<FileLog<ServiceFileMetaType>>>,
+    ),
+    Log(
+        LogMeta<ServiceLogMetaType>,
+        Vec<Option<FileLog<ServiceFileMetaType>>>,
+    ),
 }
 
 impl<
         ServiceDirMetaType: MetaBound,
         ServiceFileMetaType: MetaBound,
-        ServiceDiffMetaType: MetaBound,
         ServiceLinkMetaType: MetaBound,
         ServiceLogMetaType: MetaBound,
     > Serialize
     for StorageItem<
         ServiceDirMetaType,
         ServiceFileMetaType,
-        ServiceDiffMetaType,
         ServiceLinkMetaType,
         ServiceLogMetaType,
     >
@@ -208,15 +283,15 @@ impl<
     {
         // Serialize `self` into the format `Type:Serialize::serialize(content)`
         match self {
-            StorageItem::Dir(dir) => serializer
+            StorageItem::Dir(dir, _) => serializer
                 .serialize_str(format!("DIR:{}", serde_json::to_string(dir).unwrap()).as_str()),
-            StorageItem::File(file) => serializer
+            StorageItem::File(file, _) => serializer
                 .serialize_str(format!("FILE:{}", serde_json::to_string(file).unwrap()).as_str()),
-            StorageItem::Link(link) => serializer
+            StorageItem::Link(link, _) => serializer
                 .serialize_str(format!("LINK:{}", serde_json::to_string(link).unwrap()).as_str()),
-            StorageItem::Log(log) => serializer
+            StorageItem::Log(log, _) => serializer
                 .serialize_str(format!("LOG:{}", serde_json::to_string(log).unwrap()).as_str()),
-            StorageItem::FileDiff(diff) => serializer
+            StorageItem::FileDiff(diff, _) => serializer
                 .serialize_str(format!("DIFF:{}", serde_json::to_string(diff).unwrap()).as_str()),
         }
     }
@@ -226,14 +301,12 @@ impl<
         'de,
         ServiceDirMetaType: MetaBound,
         ServiceFileMetaType: MetaBound,
-        ServiceDiffMetaType: MetaBound,
         ServiceLinkMetaType: MetaBound,
         ServiceLogMetaType: MetaBound,
     > Deserialize<'de>
     for StorageItem<
         ServiceDirMetaType,
         ServiceFileMetaType,
-        ServiceDiffMetaType,
         ServiceLinkMetaType,
         ServiceLogMetaType,
     >
@@ -244,7 +317,6 @@ impl<
         StorageItem<
             ServiceDirMetaType,
             ServiceFileMetaType,
-            ServiceDiffMetaType,
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
@@ -266,27 +338,26 @@ impl<
                 let dir: DirectoryMeta<
                     ServiceDirMetaType,
                     ServiceFileMetaType,
-                    ServiceDiffMetaType,
                     ServiceLinkMetaType,
                     ServiceLogMetaType,
                 > = serde_json::from_str(v[1]).unwrap();
-                Ok(StorageItem::Dir(dir))
+                Ok(StorageItem::Dir(dir, vec![]))
             }
             "FILE" => {
                 let file: FileMeta<ServiceFileMetaType> = serde_json::from_str(v[1]).unwrap();
-                Ok(StorageItem::File(file))
+                Ok(StorageItem::File(file, vec![]))
             }
             "LINK" => {
                 let link: LinkMeta<ServiceLinkMetaType> = serde_json::from_str(v[1]).unwrap();
-                Ok(StorageItem::Link(link))
+                Ok(StorageItem::Link(link, vec![]))
             }
             "LOG" => {
                 let log: LogMeta<ServiceLogMetaType> = serde_json::from_str(v[1]).unwrap();
-                Ok(StorageItem::Log(log))
+                Ok(StorageItem::Log(log, vec![]))
             }
             "DIFF" => {
-                let diff: FileDiffMeta<ServiceDiffMetaType> = serde_json::from_str(v[1]).unwrap();
-                Ok(StorageItem::FileDiff(diff))
+                let diff: FileDiffMeta<ServiceFileMetaType> = serde_json::from_str(v[1]).unwrap();
+                Ok(StorageItem::FileDiff(diff, vec![]))
             }
             _ => Err(serde::de::Error::custom(format!(
                 "Unknown storage item: {}",
@@ -299,36 +370,77 @@ impl<
 impl<
         ServiceDirMetaType: MetaBound,
         ServiceFileMetaType: MetaBound,
-        ServiceDiffMetaType: MetaBound,
         ServiceLinkMetaType: MetaBound,
         ServiceLogMetaType: MetaBound,
     > StorageItemField
     for StorageItem<
         ServiceDirMetaType,
         ServiceFileMetaType,
-        ServiceDiffMetaType,
         ServiceLinkMetaType,
         ServiceLogMetaType,
     >
 {
     fn name(&self) -> &Path {
         match self {
-            StorageItem::Dir(d) => d.name(),
-            StorageItem::File(f) => f.name(),
-            StorageItem::Link(l) => l.name(),
-            StorageItem::Log(l) => l.name(),
-            StorageItem::FileDiff(d) => d.name(),
+            StorageItem::Dir(d, _) => d.name(),
+            StorageItem::File(f, _) => f.name(),
+            StorageItem::Link(l, _) => l.name(),
+            StorageItem::Log(l, _) => l.name(),
+            StorageItem::FileDiff(d, _) => d.name(),
         }
     }
 
     fn attributes(&self) -> &StorageItemAttributes {
         match self {
-            StorageItem::Dir(d) => d.attributes(),
-            StorageItem::File(f) => f.attributes(),
-            StorageItem::Link(l) => l.attributes(),
-            StorageItem::Log(l) => l.attributes(),
-            StorageItem::FileDiff(d) => d.attributes(),
+            StorageItem::Dir(d, _) => d.attributes(),
+            StorageItem::File(f, _) => f.attributes(),
+            StorageItem::Link(l, _) => l.attributes(),
+            StorageItem::Log(l, _) => l.attributes(),
+            StorageItem::FileDiff(d, _) => d.attributes(),
         }
+    }
+}
+
+impl<
+        ServiceDirMetaType: MetaBound,
+        ServiceFileMetaType: MetaBound,
+        ServiceLinkMetaType: MetaBound,
+        ServiceLogMetaType: MetaBound,
+    >
+    StorageItem<ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>
+{
+    fn logs(&self) -> &[Option<FileLog<ServiceFileMetaType>>] {
+        match self {
+            StorageItem::Dir(_, logs) => logs.as_slice(),
+            StorageItem::File(_, logs) => logs.as_slice(),
+            StorageItem::Link(_, logs) => logs.as_slice(),
+            StorageItem::Log(_, logs) => logs.as_slice(),
+            StorageItem::FileDiff(_, logs) => logs.as_slice(),
+        }
+    }
+
+    fn logs_mut(&mut self) -> &mut Vec<Option<FileLog<ServiceFileMetaType>>> {
+        match self {
+            StorageItem::Dir(_, logs) => logs,
+            StorageItem::File(_, logs) => logs,
+            StorageItem::Link(_, logs) => logs,
+            StorageItem::Log(_, logs) => logs,
+            StorageItem::FileDiff(_, logs) => logs,
+        }
+    }
+
+    fn find_log(&self, hash: &str, size: u64) -> Option<&FileLog<ServiceFileMetaType>> {
+        self.logs()
+            .iter()
+            .find(|log| {
+                log.as_ref()
+                    .map_or(false, |log| log.hash == hash && log.size == size)
+            })
+            .map_or(None, |log| log.as_ref())
+    }
+
+    fn is_removed(&self) -> bool {
+        self.logs().last().map_or(false, |log| log.is_none())
     }
 }
 
@@ -336,7 +448,6 @@ impl<
 pub struct DirectoryMeta<
     ServiceDirMetaType: MetaBound,
     ServiceFileMetaType: MetaBound,
-    ServiceDiffMetaType: MetaBound,
     ServiceLinkMetaType: MetaBound,
     ServiceLogMetaType: MetaBound,
 > {
@@ -355,7 +466,6 @@ pub struct DirectoryMeta<
         StorageItem<
             ServiceDirMetaType,
             ServiceFileMetaType,
-            ServiceDiffMetaType,
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
@@ -365,14 +475,12 @@ pub struct DirectoryMeta<
 impl<
         ServiceDirMetaType: MetaBound,
         ServiceFileMetaType: MetaBound,
-        ServiceDiffMetaType: MetaBound,
         ServiceLinkMetaType: MetaBound,
         ServiceLogMetaType: MetaBound,
     > StorageItemField
     for DirectoryMeta<
         ServiceDirMetaType,
         ServiceFileMetaType,
-        ServiceDiffMetaType,
         ServiceLinkMetaType,
         ServiceLogMetaType,
     >
@@ -389,17 +497,10 @@ impl<
 impl<
         ServiceDirMetaType: MetaBound,
         ServiceFileMetaType: MetaBound,
-        ServiceDiffMetaType: MetaBound,
         ServiceLinkMetaType: MetaBound,
         ServiceLogMetaType: MetaBound,
     >
-    DirectoryMeta<
-        ServiceDirMetaType,
-        ServiceFileMetaType,
-        ServiceDiffMetaType,
-        ServiceLinkMetaType,
-        ServiceLogMetaType,
-    >
+    DirectoryMeta<ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>
 {
     pub async fn from_reader(reader: &dyn StorageReader) -> BackupResult<Self> {
         // Traverse all hierarchical subdirectories of reader. read-dir() in a breadth first manner and store them in the structure of CheckPointMeta.
@@ -419,7 +520,7 @@ impl<
             children: vec![],
         };
 
-        let mut all_read_files = vec![(None, StorageItem::Dir(root_dir), root_name)]; // <parent-index, item, full-path>
+        let mut all_read_files = vec![(None, StorageItem::Dir(root_dir, vec![]), root_name)]; // <parent-index, item, full-path>
         let mut next_dir_index = 0;
 
         while next_dir_index < all_read_files.len() {
@@ -427,7 +528,7 @@ impl<
             let parent_full_path = all_read_files[next_dir_index].2.as_path();
             let current_item = &all_read_files[next_dir_index].1;
             next_dir_index += 1;
-            if let StorageItem::Dir(_) = current_item {
+            if let StorageItem::Dir(_, _) = current_item {
             } else {
                 continue;
             }
@@ -446,30 +547,39 @@ impl<
                             FileStreamReader::new(reader, full_path.as_path(), 0, 1024 * 1024)
                                 .hash()
                                 .await?;
-                        StorageItem::File(FileMeta {
+                        StorageItem::File(
+                            FileMeta {
+                                name: child_name,
+                                attributes: child_attr,
+                                service_meta: None,
+                                hash,
+                                size: file_size,
+                                upload_bytes: 0,
+                            },
+                            vec![],
+                        )
+                    }
+                    DirChildType::Dir(_) => StorageItem::Dir(
+                        DirectoryMeta {
                             name: child_name,
                             attributes: child_attr,
                             service_meta: None,
-                            hash,
-                            size: file_size,
-                            upload_bytes: 0,
-                        })
-                    }
-                    DirChildType::Dir(_) => StorageItem::Dir(DirectoryMeta {
-                        name: child_name,
-                        attributes: child_attr,
-                        service_meta: None,
-                        children: vec![],
-                    }),
+                            children: vec![],
+                        },
+                        vec![],
+                    ),
                     DirChildType::Link(_) => {
                         let link_info = reader.read_link(&child_name).await?;
-                        StorageItem::Link(LinkMeta {
-                            name: child_name,
-                            attributes: child_attr,
-                            service_meta: None,
-                            is_hard: link_info.is_hard,
-                            target: link_info.target,
-                        })
+                        StorageItem::Link(
+                            LinkMeta {
+                                name: child_name,
+                                attributes: child_attr,
+                                service_meta: None,
+                                is_hard: link_info.is_hard,
+                                target: link_info.target,
+                            },
+                            vec![],
+                        )
                     }
                 };
 
@@ -483,29 +593,51 @@ impl<
                 .expect("root directory should be in the list");
             if let Some(parent_index) = parent_index {
                 let parent = &mut all_read_files[parent_index].1;
-                if let StorageItem::Dir(parent_dir) = parent {
+                if let StorageItem::Dir(parent_dir, _) = parent {
                     parent_dir.children.push(child_meta);
                 } else {
                     unreachable!("only directory can have children");
                 }
-            } else if let StorageItem::Dir(child_meta) = child_meta {
+            } else if let StorageItem::Dir(child_meta, _) = child_meta {
                 return Ok(child_meta);
             }
         }
     }
+}
 
+#[derive(Clone)]
+pub struct FileLog<ServiceFileMetaType: MetaBound> {
+    pub service_meta: Option<ServiceFileMetaType>,
+    pub hash: String,
+    pub size: u64,
+}
+
+impl<
+        ServiceDirMetaType: MetaBound,
+        ServiceFileMetaType: MetaBound,
+        ServiceLinkMetaType: MetaBound,
+        ServiceLogMetaType: MetaBound,
+    >
+    DirectoryMeta<ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>
+{
     // meta = meta(reader) - meta(base_meta)
-    pub async fn from_delta(
+    pub async fn delta_from_reader(
         base_meta: &StorageItem<
             ServiceDirMetaType,
             ServiceFileMetaType,
-            ServiceDiffMetaType,
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
         base_reader: &dyn StorageReader,
         reader: &dyn StorageReader,
-    ) -> BackupResult<Self> {
+    ) -> BackupResult<
+        DirectoryMeta<
+            ServiceDirMetaType,
+            ServiceFileMetaType,
+            ServiceLinkMetaType,
+            ServiceLogMetaType,
+        >,
+    > {
         let root_name = PathBuf::from("/");
         let root_dir_attr = reader.stat(&root_name).await?;
         let root_dir = DirectoryMeta {
@@ -528,29 +660,23 @@ impl<
             service_meta: None,
             children: vec![],
         };
-        let base_meta = if let StorageItem::Dir(base_dir) = base_meta {
+        let base_meta = if let StorageItem::Dir(base_dir, _) = base_meta {
             base_dir
         } else {
             base_root_dir.children.push(base_meta.clone());
             &base_root_dir
         };
 
-        let mut all_read_files = vec![(None, StorageItem::Dir(root_dir), root_name)]; // <parent-index, item, full-path>
+        let mut all_read_files = vec![(None, StorageItem::Dir(root_dir, vec![]), root_name)]; // <parent-index, item, full-path>
         let mut all_reader_dir_indexs = vec![(0, true)]; // <index-in-all_read_files, is-updated>
         let mut all_base_dirs = vec![Some(base_meta)];
         let mut next_dir_index = 0;
 
         while next_dir_index < all_reader_dir_indexs.len() {
             let current_base_dir = all_base_dirs[next_dir_index];
-            let (parent_index, is_dir_attr_update) = all_reader_dir_indexs[next_dir_index];
+            let (parent_index, _) = all_reader_dir_indexs[next_dir_index];
             let parent_full_path = all_read_files[parent_index].2.clone();
-            let current_item = &all_read_files[parent_index].1;
             next_dir_index += 1;
-            let current_dir = if let StorageItem::Dir(current_dir) = current_item {
-                current_dir
-            } else {
-                unreachable!("only directory can have children");
-            };
 
             let mut dir_reader = reader.read_dir(parent_full_path.as_path()).await?;
             let mut children = HashSet::new();
@@ -589,69 +715,107 @@ impl<
                             FileStreamReader::new(reader, full_path.as_path(), 0, 1024 * 1024)
                                 .hash()
                                 .await?;
-                        match base_child {
+                        let (is_no_modify, use_diff) = match base_child {
                             Some(base_child) => {
-                                // TODO: move/copy/recovery from other directory.
-                                if let StorageItem::File(base_file) = base_child {
-                                    if base_file.hash == hash && base_file.size == file_size {
-                                        // no update
-                                        None
-                                    } else {
-                                        // diff
-                                        let diffs = FileDiffChunk::from_reader(
-                                            &mut FileStreamReader::new(
-                                                base_reader,
-                                                full_path.as_path(),
-                                                0,
-                                                1024 * 1024,
-                                            ),
-                                            &mut FileStreamReader::new(
-                                                reader,
-                                                full_path.as_path(),
-                                                0,
-                                                1024 * 1024,
-                                            ),
-                                        )
-                                        .await?;
-                                        Some(StorageItem::FileDiff(FileDiffMeta {
-                                            name: child_name,
-                                            attributes: child_attr,
-                                            service_meta: None,
-                                            hash,
-                                            size: file_size,
-                                            upload_bytes: 0,
-                                            diff_chunks: diffs,
-                                        }))
+                                match base_child {
+                                    StorageItem::Dir(_, _) => {
+                                        // use exist file if it's same, otherwise create a new file
+                                        (false, false)
                                     }
-                                } else {
-                                    // new file
-                                    Some(StorageItem::File(FileMeta {
+                                    StorageItem::File(base_file, _) => {
+                                        // ignore it if it's same, otherwise use exist, and diff at last
+                                        (
+                                            base_file.hash == hash && base_file.size == file_size,
+                                            true,
+                                        )
+                                    }
+                                    StorageItem::FileDiff(diff, _) => {
+                                        // ignore it if it's same, otherwise use exist, and diff at last
+                                        (diff.hash == hash && diff.size == file_size, true)
+                                    }
+                                    StorageItem::Link(_, _) => {
+                                        // use exist file if it's same, otherwise create a new file
+                                        (false, false)
+                                    }
+                                    StorageItem::Log(_, _) => {
+                                        // use exist file if it's same, otherwise create a new file
+                                        (false, false)
+                                    }
+                                }
+                            }
+                            None => (false, false),
+                        };
+
+                        if is_no_modify {
+                            None
+                        } else {
+                            // find from all files in the directory, if it's exists in earlier time, use the meta from service simple.
+                            let exist_file_meta = base_root_dir.find_file_service_meta(
+                                hash.as_str(),
+                                file_size,
+                                true,
+                            );
+                            if let Some(exist_file_meta) = exist_file_meta {
+                                Some(StorageItem::File(
+                                    FileMeta {
+                                        name: child_name,
+                                        attributes: child_attr,
+                                        service_meta: exist_file_meta.clone(), // the `target` can use the history meta to reuse the space, and it should save it in a new space.
+                                        hash,
+                                        size: file_size,
+                                        upload_bytes: 0,
+                                    },
+                                    vec![],
+                                ))
+                            } else if use_diff {
+                                // diff
+                                let diffs = FileDiffChunk::from_reader(
+                                    &mut FileStreamReader::new(
+                                        base_reader,
+                                        full_path.as_path(),
+                                        0,
+                                        1024 * 1024,
+                                    ),
+                                    &mut FileStreamReader::new(
+                                        reader,
+                                        full_path.as_path(),
+                                        0,
+                                        1024 * 1024,
+                                    ),
+                                )
+                                .await?;
+                                Some(StorageItem::FileDiff(
+                                    FileDiffMeta {
                                         name: child_name,
                                         attributes: child_attr,
                                         service_meta: None,
                                         hash,
                                         size: file_size,
                                         upload_bytes: 0,
-                                    }))
-                                }
-                            }
-                            None => {
+                                        diff_chunks: diffs,
+                                    },
+                                    vec![],
+                                ))
+                            } else {
                                 // new file
-                                Some(StorageItem::File(FileMeta {
-                                    name: child_name,
-                                    attributes: child_attr,
-                                    service_meta: None,
-                                    hash,
-                                    size: file_size,
-                                    upload_bytes: 0,
-                                }))
+                                Some(StorageItem::File(
+                                    FileMeta {
+                                        name: child_name,
+                                        attributes: child_attr,
+                                        service_meta: None,
+                                        hash,
+                                        size: file_size,
+                                        upload_bytes: 0,
+                                    },
+                                    vec![],
+                                ))
                             }
                         }
                     }
                     DirChildType::Dir(_) => {
                         let is_type_changed = match base_child {
                             Some(base_child) => {
-                                if let StorageItem::Dir(base_child) = base_child {
+                                if let StorageItem::Dir(base_child, _) = base_child {
                                     all_base_dirs.push(Some(base_child));
                                     false
                                 } else {
@@ -668,18 +832,21 @@ impl<
                             all_read_files.len(),
                             is_type_changed || update_attr_log.is_some(),
                         ));
-                        Some(StorageItem::Dir(DirectoryMeta {
-                            name: child_name,
-                            attributes: child_attr,
-                            service_meta: None,
-                            children: vec![],
-                        }))
+                        Some(StorageItem::Dir(
+                            DirectoryMeta {
+                                name: child_name,
+                                attributes: child_attr,
+                                service_meta: None,
+                                children: vec![],
+                            },
+                            vec![],
+                        ))
                     }
                     DirChildType::Link(_) => {
                         let link_info = reader.read_link(&child_name).await?;
                         let mut is_updated = true;
                         if let Some(base_child) = base_child {
-                            if let StorageItem::Link(base_link) = base_child {
+                            if let StorageItem::Link(base_link, _) = base_child {
                                 if base_link.is_hard == link_info.is_hard
                                     && base_link.target == link_info.target
                                 {
@@ -690,13 +857,16 @@ impl<
                         }
 
                         if is_updated {
-                            Some(StorageItem::Link(LinkMeta {
-                                name: child_name,
-                                attributes: child_attr,
-                                service_meta: None,
-                                is_hard: link_info.is_hard,
-                                target: link_info.target,
-                            }))
+                            Some(StorageItem::Link(
+                                LinkMeta {
+                                    name: child_name,
+                                    attributes: child_attr,
+                                    service_meta: None,
+                                    is_hard: link_info.is_hard,
+                                    target: link_info.target,
+                                },
+                                vec![],
+                            ))
                         } else {
                             None
                         }
@@ -709,7 +879,7 @@ impl<
                 } else if let Some(update_attr_log) = update_attr_log {
                     all_read_files.push((
                         Some(next_dir_index - 1),
-                        StorageItem::Log(update_attr_log),
+                        StorageItem::Log(update_attr_log, vec![]),
                         full_path,
                     ));
                 }
@@ -721,12 +891,15 @@ impl<
                     if !children.contains(child.name()) {
                         all_read_files.push((
                             Some(next_dir_index - 1),
-                            StorageItem::Log(LogMeta {
-                                name: child.name().to_path_buf(),
-                                attributes: child.attributes().clone(),
-                                service_meta: None,
-                                action: LogAction::Remove,
-                            }),
+                            StorageItem::Log(
+                                LogMeta {
+                                    name: child.name().to_path_buf(),
+                                    attributes: child.attributes().clone(),
+                                    service_meta: None,
+                                    action: LogAction::Remove,
+                                },
+                                vec![],
+                            ),
                             parent_full_path.join(child.name()),
                         ));
                     }
@@ -753,15 +926,86 @@ impl<
                 };
 
                 let parent = &mut all_read_files[parent_index].1;
-                if let StorageItem::Dir(parent_dir) = parent {
+                if let StorageItem::Dir(parent_dir, _) = parent {
                     parent_dir.children.push(child_meta);
                 } else {
                     unreachable!("only directory can have children");
                 }
-            } else if let StorageItem::Dir(child_meta) = child_meta {
+            } else if let StorageItem::Dir(child_meta, _) = child_meta {
                 return Ok(child_meta);
             }
         }
+    }
+
+    // self += delta
+    pub fn add_delta(&mut self, delta: &Self) {
+        let mut wait_sub_dirs = vec![self];
+        unimplemented!()
+    }
+
+    pub fn find_file_service_meta(
+        &self,
+        hash: &str,
+        file_size: u64,
+        is_include_history: bool,
+    ) -> Option<&Option<ServiceFileMetaType>> {
+        let mut wait_search_dirs = vec![self];
+        let mut next_dir_index = 0;
+
+        while next_dir_index < wait_search_dirs.len() {
+            let cur_dir = wait_search_dirs[next_dir_index];
+            next_dir_index += 1;
+            for child in cur_dir.children.iter() {
+                match child {
+                    StorageItem::Dir(dir, logs) => {
+                        wait_search_dirs.push(dir);
+                        if is_include_history {
+                            if let Some(meta) = child.find_log(hash, file_size) {
+                                return Some(&meta.service_meta);
+                            }
+                        }
+                    }
+                    StorageItem::File(file, _) => {
+                        if file.hash == hash && file.size == file_size {
+                            return Some(&file.service_meta);
+                        }
+
+                        if is_include_history {
+                            if let Some(meta) = child.find_log(hash, file_size) {
+                                return Some(&meta.service_meta);
+                            }
+                        }
+                    }
+                    StorageItem::FileDiff(diff, _) => {
+                        if diff.hash == hash && diff.size == file_size {
+                            return Some(&diff.service_meta);
+                        }
+
+                        if is_include_history {
+                            if let Some(meta) = child.find_log(hash, file_size) {
+                                return Some(&meta.service_meta);
+                            }
+                        }
+                    }
+                    StorageItem::Link(link, _) => {
+                        if is_include_history {
+                            if let Some(meta) = child.find_log(hash, file_size) {
+                                return Some(&meta.service_meta);
+                            }
+                        }
+                    }
+                    StorageItem::Log(log, _) => {
+                        if is_include_history {
+                            if let Some(meta) = child.find_log(hash, file_size) {
+                                return Some(&meta.service_meta);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -870,8 +1114,6 @@ impl<ServiceLinkMetaType: MetaBound> StorageItemField for LinkMeta<ServiceLinkMe
 #[derive(Clone)]
 pub enum LogAction {
     Remove,
-    Recover,
-    CopyFrom(String),
     UpdateAttributes, // new attributes will be set in `attributes` field
 }
 
@@ -882,8 +1124,6 @@ impl Serialize for LogAction {
     {
         match self {
             LogAction::Remove => serializer.serialize_str("RM"),
-            LogAction::Recover => serializer.serialize_str("RC"),
-            LogAction::CopyFrom(from) => serializer.serialize_str(format!("CF:{}", from).as_str()),
             LogAction::UpdateAttributes => serializer.serialize_str("UA"),
         }
     }
@@ -897,10 +1137,6 @@ impl<'de> Deserialize<'de> for LogAction {
         let s = String::deserialize(deserializer)?;
         if s == "RM" {
             Ok(LogAction::Remove)
-        } else if s == "RC" {
-            Ok(LogAction::Recover)
-        } else if s.starts_with("CF:") {
-            Ok(LogAction::CopyFrom(s[3..].to_string()))
         } else if s == "UA" {
             Ok(LogAction::UpdateAttributes)
         } else {
@@ -939,9 +1175,9 @@ pub trait StorageItemField {
     fn attributes(&self) -> &StorageItemAttributes;
 }
 
-pub type CheckPointMetaEngine = CheckPointMeta<String, String, String, String, String, String>;
-pub type StorageItemEngine = StorageItem<String, String, String, String, String>;
-pub type DirectoryMetaEngine = DirectoryMeta<String, String, String, String, String>;
+pub type CheckPointMetaEngine = CheckPointMeta<String, String, String, String, String>;
+pub type StorageItemEngine = StorageItem<String, String, String, String>;
+pub type DirectoryMetaEngine = DirectoryMeta<String, String, String, String>;
 pub type FileMetaEngine = FileMeta<String>;
 pub type FileDiffMetaEngine = FileDiffMeta<String>;
 pub type LinkMetaEngine = LinkMeta<String>;
@@ -967,8 +1203,6 @@ pub type LogMetaEngine = LogMeta<String>;
 // }
 
 // pub type ServiceFileMetaTypeDMC = ServiceMetaChunkTypeDMC;
-
-// pub type ServiceDiffMetaTypeDMC = ServiceMetaChunkTypeDMC;
 
 // pub struct ServiceCheckPointMetaDMC {
 //     pub sector_count: u32, // Count of sectors this checkpoint consumed. Some checkpoint will consume several sectors.

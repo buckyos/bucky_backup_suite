@@ -25,7 +25,7 @@ impl TargetWrapper {
 }
 
 #[async_trait::async_trait]
-impl Target<String, String, String, String, String, String> for TargetWrapper {
+impl Target<String, String, String, String, String> for TargetWrapper {
     fn target_id(&self) -> TargetId {
         match &self.target_id {
             TargetQueryBy::Id(id) => *id,
@@ -47,7 +47,7 @@ impl Target<String, String, String, String, String, String> for TargetWrapper {
     async fn target_task(
         &self,
         task_info: TaskInfo,
-    ) -> BackupResult<Box<dyn TargetTask<String, String, String, String, String, String>>> {
+    ) -> BackupResult<Box<dyn TargetTask<String, String, String, String, String>>> {
         let t = self.engine.get_target_impl(&self.target_id).await?;
         match t {
             Some(t) => t.target_task(task_info).await,
@@ -87,7 +87,7 @@ impl TargetTaskWrapper {
 }
 
 #[async_trait::async_trait]
-impl TargetTask<String, String, String, String, String, String> for TargetTaskWrapper {
+impl TargetTask<String, String, String, String, String> for TargetTaskWrapper {
     fn task_uuid(&self) -> &TaskUuid {
         &self.task_uuid
     }

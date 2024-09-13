@@ -163,7 +163,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
             )
             .await?;
 
-        let (mut root_dir_meta, prev_checkpoint_version, prev_occupied_size, prev_consume_size) = loop {
+        let (root_dir_meta, prev_checkpoint_version, prev_occupied_size, prev_consume_size) = loop {
             if is_delta {
                 let last_finish_checkpoint = self
                     .egnine
@@ -199,7 +199,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
 
                     let prev_version = prev_meta.prev_versions;
                     break (
-                        DirectoryMetaEngine::from_delta(
+                        DirectoryMetaEngine::delta_from_reader(
                             &prev_meta.root,
                             last_target_checkpoint.as_ref(),
                             source_preserved.as_ref(),

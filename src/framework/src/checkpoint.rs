@@ -4,6 +4,7 @@ use std::{
     time::SystemTime,
 };
 
+use base58::ToBase58;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -193,7 +194,7 @@ impl<'a> FileStreamReader<'a> {
             hasher.update(chunk);
         }
         let hash = hasher.finalize();
-        let hash = bs58::encode(hash).into_string();
+        let hash = hash.as_slice().to_base58();
         Ok(hash)
     }
 }
