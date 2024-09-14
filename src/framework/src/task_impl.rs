@@ -228,7 +228,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
             prev_versions: prev_checkpoint_version,
             create_time: now,
             complete_time: now,
-            root: StorageItem::Dir(root_dir_meta),
+            root: StorageItem::Dir(root_dir_meta, vec![]),
             occupied_size: 0,
             consume_size: 0,
             all_prev_version_occupied_size: prev_occupied_size,

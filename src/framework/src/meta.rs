@@ -98,41 +98,55 @@ impl<
         let mut prev_checkpoints = Vec::from(prev_checkpoints);
         Self::sort_checkpoints(prev_checkpoints.as_mut_slice());
 
+        let first_checkpoint = prev_checkpoints.first().unwrap();
+
+        let mut root_dir = DirectoryMeta {
+            name: PathBuf::from("/"),
+            attributes: first_checkpoint.root.attributes().clone(),
+            service_meta: None,
+            children: vec![],
+        };
+
+        let mut delta_root_dir = DirectoryMeta {
+            name: PathBuf::from("/"),
+            attributes: first_checkpoint.root.attributes().clone(),
+            service_meta: None,
+            children: vec![],
+        };
+
+        for checkpoint in prev_checkpoints.iter() {
+            // add each `root` item to the meta
+            let delta_dir = loop {
+                if let StorageItem::Dir(dir, _) = &checkpoint.root {
+                    if dir.name() == PathBuf::from("/") {
+                        break dir;
+                    }
+                }
+                delta_root_dir.attributes = root_dir.attributes().clone();
+                delta_root_dir.children = vec![checkpoint.root.clone()];
+                break &delta_root_dir;
+            };
+
+            root_dir.add_delta(delta_dir)
+        }
+
         let last_checkpoint = prev_checkpoints.last().unwrap();
 
         // clone from the last checkpoint
-        let mut meta = Self {
+        Ok(Self {
             task_friendly_name: last_checkpoint.task_friendly_name.clone(),
             task_uuid: last_checkpoint.task_uuid,
             version: last_checkpoint.version,
-            prev_versions: prev_checkpoints
-                .iter()
-                .flat_map(|c| c.prev_versions)
-                .collect(),
+            prev_versions: prev_checkpoints.iter().map(|c| c.version).collect(),
             create_time: last_checkpoint.create_time.clone(),
             complete_time: last_checkpoint.complete_time.clone(),
-            root: StorageItem::Dir(DirectoryMeta {
-                name: PathBuf::from("/"),
-                attributes: StorageItemAttributes {
-                    create_time: SystemTime::UNIX_EPOCH,
-                    last_update_time: SystemTime::UNIX_EPOCH,
-                    owner: "".to_string(),
-                    group: "".to_string(),
-                    permissions: "".to_string(),
-                },
-                service_meta: None,
-                children: vec![],
-            }),
+            root: StorageItem::Dir(root_dir, vec![]),
             occupied_size: last_checkpoint.occupied_size,
             consume_size: last_checkpoint.consume_size,
             all_prev_version_occupied_size: last_checkpoint.all_prev_version_occupied_size,
             all_prev_version_consume_size: last_checkpoint.all_prev_version_consume_size,
             service_meta: last_checkpoint.service_meta.clone(),
-        };
-
-        for checkpoint in prev_checkpoints {
-            // use checkpoint to exchange the meta
-        }
+        })
     }
 
     pub fn sort_checkpoints(checkpoints: &mut [&Self]) {
@@ -399,6 +413,16 @@ impl<
             StorageItem::FileDiff(d, _) => d.attributes(),
         }
     }
+
+    fn attributes_mut(&mut self) -> &mut StorageItemAttributes {
+        match self {
+            StorageItem::Dir(d, _) => d.attributes_mut(),
+            StorageItem::File(f, _) => f.attributes_mut(),
+            StorageItem::Link(l, _) => l.attributes_mut(),
+            StorageItem::Log(l, _) => l.attributes_mut(),
+            StorageItem::FileDiff(d, _) => d.attributes_mut(),
+        }
+    }
 }
 
 impl<
@@ -439,8 +463,18 @@ impl<
             .map_or(None, |log| log.as_ref())
     }
 
-    fn is_removed(&self) -> bool {
+    // return true if there is a file in history but it has been removed or replaced with other type.
+    // if the item is removed, there will be a log-item with action `Remove`.
+    fn is_file_removed(&self) -> bool {
         self.logs().last().map_or(false, |log| log.is_none())
+    }
+
+    fn is_file_in_history(&self) -> bool {
+        self.logs().len() > 0
+    }
+
+    fn take_logs(&mut self) -> Vec<Option<FileLog<ServiceFileMetaType>>> {
+        std::mem::take(self.logs_mut())
     }
 }
 
@@ -491,6 +525,10 @@ impl<
 
     fn attributes(&self) -> &StorageItemAttributes {
         &self.attributes
+    }
+
+    fn attributes_mut(&mut self) -> &mut StorageItemAttributes {
+        &mut self.attributes
     }
 }
 
@@ -938,9 +976,273 @@ impl<
     }
 
     // self += delta
+    // the name of delta should be same as self.
     pub fn add_delta(&mut self, delta: &Self) {
-        let mut wait_sub_dirs = vec![self];
-        unimplemented!()
+        if delta.name() != self.name() {
+            panic!("delta directory name should be same as self");
+        }
+
+        let mut wait_sub_dirs = vec![(self, delta)];
+        let mut wait_dir_count = 1;
+
+        while wait_dir_count > 0 {
+            let (base_dir, delta_dir) = wait_sub_dirs.remove(0);
+            wait_dir_count -= 1;
+            let mut append_dir_indexs = vec![];
+            base_dir.attributes = delta_dir.attributes.clone();
+            for child_index in 0..delta_dir.children.len() {
+                let child = &delta_dir.children[child_index];
+                let base_child_index = base_dir
+                    .children
+                    .iter()
+                    .position(|base_child| base_child.name() == child.name());
+
+                if let Some(base_child_index) = base_child_index {
+                    let base_child = &base_dir.children[base_child_index];
+                    let (is_remove_old, add_new_item, new_file_log) = match child {
+                        StorageItem::Dir(dir, _) => {
+                            let file_log = match base_child {
+                                StorageItem::Dir(_, _) => {
+                                    // compare later
+                                    append_dir_indexs.push((base_child_index, child_index));
+                                    wait_dir_count += 1;
+                                    continue;
+                                }
+                                StorageItem::File(_, _) | StorageItem::FileDiff(_, _) => {
+                                    // file removed log
+                                    // logs.push(None);
+                                    Some(None)
+                                }
+                                _ => None,
+                            };
+                            // type changed, remove it, and a new dir from delta will be added later.
+                            // let file_logs = base_dir.children.remove(base_child_index).take_logs();
+                            // base_dir
+                            //     .children
+                            //     .push(StorageItem::Dir(dir.clone(), file_logs));
+                            (true, Some(StorageItem::Dir(dir.clone(), vec![])), file_log)
+                        }
+                        StorageItem::File(file, _) => {
+                            // if it's a new file, replace it in base_dir, but the logs should be append it in base_dir.
+                            // if it's same as base_dir, do nothing.
+                            let mut is_new_file = true;
+                            match base_child {
+                                StorageItem::File(base_file, _) => {
+                                    if base_file.hash == file.hash && base_file.size == file.size {
+                                        is_new_file = false;
+                                    }
+                                }
+                                StorageItem::FileDiff(base_diff, _) => {
+                                    if base_diff.hash == file.hash && base_diff.size == file.size {
+                                        is_new_file = false;
+                                    }
+                                }
+                                _ => {}
+                            }
+
+                            let new_file_log = if is_new_file {
+                                Some(Some(FileLog {
+                                    hash: file.hash.clone(),
+                                    size: file.size,
+                                    service_meta: file.service_meta.clone(),
+                                }))
+                            } else {
+                                None
+                            };
+                            (
+                                true,
+                                Some(StorageItem::File(file.clone(), vec![])),
+                                new_file_log,
+                            )
+                            // type changed, remove it, and a new file from delta will be added later.
+                            // let mut file_logs =
+                            //     base_dir.children.remove(base_child_index).take_logs();
+                            // file_logs.push(Some(FileLog {
+                            //     hash: file.hash,
+                            //     size: file.size,
+                            //     service_meta: file.service_meta,
+                            // }));
+                            // base_dir
+                            //     .children
+                            //     .push(StorageItem::File(file.clone(), file_logs));
+                        }
+                        StorageItem::FileDiff(diff, _) => {
+                            // similar to StorageItem::File
+                            let mut is_new_file = true;
+                            match base_child {
+                                StorageItem::File(base_file, _) => {
+                                    if base_file.hash == diff.hash && base_file.size == diff.size {
+                                        is_new_file = false;
+                                    }
+                                }
+                                StorageItem::FileDiff(base_diff, _) => {
+                                    if base_diff.hash == diff.hash && base_diff.size == diff.size {
+                                        is_new_file = false;
+                                    }
+                                }
+                                _ => {}
+                            }
+                            // type changed, remove it, and a new file from delta will be added later.
+                            // let mut file_logs =
+                            //     base_dir.children.remove(base_child_index).take_logs();
+                            // file_logs.push(Some(FileLog {
+                            //     hash: diff.hash,
+                            //     size: diff.size,
+                            //     service_meta: diff.service_meta,
+                            // }));
+                            // base_dir.children.push(StorageItem::File(
+                            //     FileMeta {
+                            //         name: diff.name,
+                            //         attributes: diff.attributes,
+                            //         service_meta: diff.service_meta,
+                            //         hash: diff.hash,
+                            //         size: diff.size,
+                            //         upload_bytes: diff.upload_bytes,
+                            //     },
+                            //     file_logs,
+                            // ));
+
+                            let new_file_log = if is_new_file {
+                                Some(Some(FileLog {
+                                    hash: diff.hash.clone(),
+                                    size: diff.size,
+                                    service_meta: diff.service_meta.clone(),
+                                }))
+                            } else {
+                                None
+                            };
+
+                            (
+                                true,
+                                Some(StorageItem::File(
+                                    FileMeta {
+                                        name: diff.name.clone(),
+                                        attributes: diff.attributes.clone(),
+                                        service_meta: diff.service_meta.clone(),
+                                        hash: diff.hash.clone(),
+                                        size: diff.size,
+                                        upload_bytes: diff.upload_bytes,
+                                    },
+                                    vec![],
+                                )),
+                                new_file_log,
+                            )
+                        }
+                        StorageItem::Link(link, _) => {
+                            // if it's a new link, replace it in base_dir, but the logs should be append it in base_dir.
+                            // if it's same as base_dir, do nothing.
+                            let file_log = match base_child {
+                                StorageItem::File(_, _) | StorageItem::FileDiff(_, _) => Some(None),
+                                _ => None,
+                            };
+                            // type changed, remove it, and a new link from delta will be added later.
+                            // let file_logs = base_dir.children.remove(base_child_index).take_logs();
+                            // base_dir
+                            //     .children
+                            //     .push(StorageItem::Link(link.clone(), file_logs));
+                            (
+                                true,
+                                Some(StorageItem::Link(link.clone(), vec![])),
+                                file_log,
+                            )
+                        }
+                        StorageItem::Log(log, _) => {
+                            match log.action {
+                                LogAction::Remove => {
+                                    let file_log = match base_child {
+                                        StorageItem::File(_, _) | StorageItem::FileDiff(_, _) => {
+                                            Some(None)
+                                        }
+                                        _ => None,
+                                    };
+
+                                    // let file_logs =
+                                    //     base_dir.children.remove(base_child_index).take_logs();
+                                    if base_child.is_file_in_history() || file_log.is_some() {
+                                        // base_dir
+                                        //     .children
+                                        //     .push(StorageItem::Log(log.clone(), file_logs));
+                                        (
+                                            true,
+                                            Some(StorageItem::Log(log.clone(), vec![])),
+                                            file_log,
+                                        )
+                                    } else {
+                                        (true, None, None)
+                                    }
+                                }
+                                LogAction::UpdateAttributes => {
+                                    let mut new_item = base_child.clone();
+                                    *new_item.attributes_mut() = log.attributes.clone();
+                                    // *base_child.attributes_mut() = log.attributes.clone();
+                                    (true, Some(new_item), None)
+                                }
+                            }
+                        }
+                    };
+
+                    let mut file_logs = if is_remove_old {
+                        // the index record in `append_dirs` is based on `base_dir.children `,
+                        // so we need to -1 when remove it.
+                        append_dir_indexs
+                            .iter_mut()
+                            .for_each(|(append_base_child_index, _)| {
+                                if *append_base_child_index > base_child_index {
+                                    *append_base_child_index -= 1;
+                                }
+                            });
+
+                        base_dir.children.remove(base_child_index).take_logs()
+                    } else {
+                        vec![]
+                    };
+
+                    if let Some(new_file_log) = new_file_log {
+                        file_logs.push(new_file_log);
+                    }
+                    if let Some(mut add_new_item) = add_new_item {
+                        std::mem::swap(add_new_item.logs_mut(), &mut file_logs);
+                        base_dir.children.push(add_new_item);
+                    }
+                } else {
+                    // new item
+                    base_dir.children.push(child.clone());
+                }
+            }
+
+            if !append_dir_indexs.is_empty() {
+                // sort append_dir_indexs by append_base_child_index asc
+                append_dir_indexs
+                    .sort_by_key(|(append_base_child_index, _)| *append_base_child_index);
+
+                let mut wait_base_dirs = vec![];
+                // splite base_dir.children at the indexs in `append_dir_indexs`
+                let first_base_dir_index = append_dir_indexs[0].0;
+                let (_, mut rest) = base_dir.children.split_at_mut(first_base_dir_index);
+                for i in 1..append_dir_indexs.len() {
+                    let (cut_count, _) = append_dir_indexs[i - 1];
+                    let (append_base_child_index, _) = append_dir_indexs[i];
+                    let (left, right) = rest.split_at_mut(append_base_child_index - cut_count);
+                    rest = right;
+                    wait_base_dirs.push(&mut left[0]);
+                }
+                wait_base_dirs.push(&mut rest[0]);
+
+                for (_, delta_child_index) in append_dir_indexs {
+                    let append_base_child = wait_base_dirs.remove(0);
+                    let append_delta_child = &delta_dir.children[delta_child_index];
+                    if let StorageItem::Dir(base_dir, _) = append_base_child {
+                        if let StorageItem::Dir(delta_dir, _) = append_delta_child {
+                            wait_sub_dirs.push((base_dir, delta_dir));
+                        } else {
+                            unreachable!("append_delta_child should be a directory");
+                        }
+                    } else {
+                        unreachable!("append_delta_child should be a directory");
+                    }
+                }
+            }
+        }
     }
 
     pub fn find_file_service_meta(
@@ -1031,6 +1333,10 @@ impl<ServiceFileMetaType: MetaBound> StorageItemField for FileMeta<ServiceFileMe
     fn attributes(&self) -> &StorageItemAttributes {
         &self.attributes
     }
+
+    fn attributes_mut(&mut self) -> &mut StorageItemAttributes {
+        &mut self.attributes
+    }
 }
 
 // It will work with a chunk
@@ -1086,6 +1392,10 @@ impl<ServiceDiffMetaType: MetaBound> StorageItemField for FileDiffMeta<ServiceDi
     fn attributes(&self) -> &StorageItemAttributes {
         &self.attributes
     }
+
+    fn attributes_mut(&mut self) -> &mut StorageItemAttributes {
+        &mut self.attributes
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1108,6 +1418,10 @@ impl<ServiceLinkMetaType: MetaBound> StorageItemField for LinkMeta<ServiceLinkMe
 
     fn attributes(&self) -> &StorageItemAttributes {
         &self.attributes
+    }
+
+    fn attributes_mut(&mut self) -> &mut StorageItemAttributes {
+        &mut self.attributes
     }
 }
 
@@ -1168,11 +1482,16 @@ impl<ServiceLogMetaType: MetaBound> StorageItemField for LogMeta<ServiceLogMetaT
     fn attributes(&self) -> &StorageItemAttributes {
         &self.attributes
     }
+
+    fn attributes_mut(&mut self) -> &mut StorageItemAttributes {
+        &mut self.attributes
+    }
 }
 
 pub trait StorageItemField {
     fn name(&self) -> &Path;
     fn attributes(&self) -> &StorageItemAttributes;
+    fn attributes_mut(&mut self) -> &mut StorageItemAttributes;
 }
 
 pub type CheckPointMetaEngine = CheckPointMeta<String, String, String, String, String>;
