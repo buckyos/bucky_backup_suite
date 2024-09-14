@@ -1500,7 +1500,8 @@ where
     S: Serializer,
     T: MetaBound,
 {
-    v.serialize(serializer)
+    let v_str = serde_json::to_string(v).map_err(serde::ser::Error::custom)?;
+    serializer.serialize_str(v_str.as_str())
 }
 
 fn deserialize_meta_bound<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -1508,6 +1509,6 @@ where
     D: Deserializer<'de>,
     T: MetaBound,
 {
-    let v = T::deserialize(deserializer)?;
-    Ok(v)
+    let v_str = String::deserialize(deserializer)?;
+    serde_json::from_str(&v_str).map_err(serde::de::Error::custom)
 }
