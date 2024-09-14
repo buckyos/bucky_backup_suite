@@ -1010,16 +1010,11 @@ impl<
                                 }
                                 StorageItem::File(_, _) | StorageItem::FileDiff(_, _) => {
                                     // file removed log
-                                    // logs.push(None);
                                     Some(None)
                                 }
                                 _ => None,
                             };
                             // type changed, remove it, and a new dir from delta will be added later.
-                            // let file_logs = base_dir.children.remove(base_child_index).take_logs();
-                            // base_dir
-                            //     .children
-                            //     .push(StorageItem::Dir(dir.clone(), file_logs));
                             (true, Some(StorageItem::Dir(dir.clone(), vec![])), file_log)
                         }
                         StorageItem::File(file, _) => {
@@ -1040,6 +1035,7 @@ impl<
                                 _ => {}
                             }
 
+                            // type changed, remove it, and a new file from delta will be added later.
                             let new_file_log = if is_new_file {
                                 Some(Some(FileLog {
                                     hash: file.hash.clone(),
@@ -1054,17 +1050,6 @@ impl<
                                 Some(StorageItem::File(file.clone(), vec![])),
                                 new_file_log,
                             )
-                            // type changed, remove it, and a new file from delta will be added later.
-                            // let mut file_logs =
-                            //     base_dir.children.remove(base_child_index).take_logs();
-                            // file_logs.push(Some(FileLog {
-                            //     hash: file.hash,
-                            //     size: file.size,
-                            //     service_meta: file.service_meta,
-                            // }));
-                            // base_dir
-                            //     .children
-                            //     .push(StorageItem::File(file.clone(), file_logs));
                         }
                         StorageItem::FileDiff(diff, _) => {
                             // similar to StorageItem::File
@@ -1083,25 +1068,6 @@ impl<
                                 _ => {}
                             }
                             // type changed, remove it, and a new file from delta will be added later.
-                            // let mut file_logs =
-                            //     base_dir.children.remove(base_child_index).take_logs();
-                            // file_logs.push(Some(FileLog {
-                            //     hash: diff.hash,
-                            //     size: diff.size,
-                            //     service_meta: diff.service_meta,
-                            // }));
-                            // base_dir.children.push(StorageItem::File(
-                            //     FileMeta {
-                            //         name: diff.name,
-                            //         attributes: diff.attributes,
-                            //         service_meta: diff.service_meta,
-                            //         hash: diff.hash,
-                            //         size: diff.size,
-                            //         upload_bytes: diff.upload_bytes,
-                            //     },
-                            //     file_logs,
-                            // ));
-
                             let new_file_log = if is_new_file {
                                 Some(Some(FileLog {
                                     hash: diff.hash.clone(),
@@ -1135,50 +1101,34 @@ impl<
                                 StorageItem::File(_, _) | StorageItem::FileDiff(_, _) => Some(None),
                                 _ => None,
                             };
-                            // type changed, remove it, and a new link from delta will be added later.
-                            // let file_logs = base_dir.children.remove(base_child_index).take_logs();
-                            // base_dir
-                            //     .children
-                            //     .push(StorageItem::Link(link.clone(), file_logs));
+
                             (
                                 true,
                                 Some(StorageItem::Link(link.clone(), vec![])),
                                 file_log,
                             )
                         }
-                        StorageItem::Log(log, _) => {
-                            match log.action {
-                                LogAction::Remove => {
-                                    let file_log = match base_child {
-                                        StorageItem::File(_, _) | StorageItem::FileDiff(_, _) => {
-                                            Some(None)
-                                        }
-                                        _ => None,
-                                    };
-
-                                    // let file_logs =
-                                    //     base_dir.children.remove(base_child_index).take_logs();
-                                    if base_child.is_file_in_history() || file_log.is_some() {
-                                        // base_dir
-                                        //     .children
-                                        //     .push(StorageItem::Log(log.clone(), file_logs));
-                                        (
-                                            true,
-                                            Some(StorageItem::Log(log.clone(), vec![])),
-                                            file_log,
-                                        )
-                                    } else {
-                                        (true, None, None)
+                        StorageItem::Log(log, _) => match log.action {
+                            LogAction::Remove => {
+                                let file_log = match base_child {
+                                    StorageItem::File(_, _) | StorageItem::FileDiff(_, _) => {
+                                        Some(None)
                                     }
-                                }
-                                LogAction::UpdateAttributes => {
-                                    let mut new_item = base_child.clone();
-                                    *new_item.attributes_mut() = log.attributes.clone();
-                                    // *base_child.attributes_mut() = log.attributes.clone();
-                                    (true, Some(new_item), None)
+                                    _ => None,
+                                };
+
+                                if base_child.is_file_in_history() || file_log.is_some() {
+                                    (true, Some(StorageItem::Log(log.clone(), vec![])), file_log)
+                                } else {
+                                    (true, None, None)
                                 }
                             }
-                        }
+                            LogAction::UpdateAttributes => {
+                                let mut new_item = base_child.clone();
+                                *new_item.attributes_mut() = log.attributes.clone();
+                                (true, Some(new_item), None)
+                            }
+                        },
                     };
 
                     let mut file_logs = if is_remove_old {

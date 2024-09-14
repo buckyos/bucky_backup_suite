@@ -57,7 +57,45 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointImpl {
         Ok(self.info.clone())
     }
     async fn full_meta(&self) -> BackupResult<CheckPointMetaEngine> {
-        unimplemented!()
+        if self.info.meta.prev_versions.is_empty() {
+            Ok(self.info.meta.clone())
+        } else {
+            let mut prev_checkpoint_results = futures::future::join_all(
+                self.info
+                    .meta
+                    .prev_versions
+                    .iter()
+                    .map(|version| self.engine.get_checkpoint_impl(self.task_uuid(), *version)),
+            )
+            .await;
+
+            // fail if there is any error
+            let mut prev_checkpoints = Vec::with_capacity(self.info.meta.prev_versions.len());
+            for i in 0..self.info.meta.prev_versions.len() {
+                let checkpoint = prev_checkpoint_results.remove(0);
+                match checkpoint {
+                    Ok(cp) => match cp {
+                        Some(cp) => prev_checkpoints.push(cp),
+                        None => {
+                            return Err(BackupError::NotFound(format!(
+                                "prev-checkpoint(version: {:?}) has been removed.",
+                                self.info.meta.prev_versions[i],
+                            )));
+                        }
+                    },
+                    Err(err) => return Err(err),
+                }
+            }
+
+            // merge all prev checkpoints
+            let mut prev_checkpoint_metas = prev_checkpoints
+                .iter()
+                .map(|cp| &cp.info.meta)
+                .collect::<Vec<_>>();
+            prev_checkpoint_metas.push(&self.info.meta);
+
+            CheckPointMetaEngine::combine_previous_versions(prev_checkpoint_metas.as_slice())
+        }
     }
     async fn transfer(&self) -> BackupResult<()> {
         unimplemented!()
