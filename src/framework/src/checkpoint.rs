@@ -17,6 +17,7 @@ use crate::{
 pub enum CheckPointStatus {
     Standby,
     Start,
+    Transfering,
     Stop,
     Success,
     Failed(Option<BackupError>),
@@ -47,38 +48,41 @@ pub trait CheckPoint<MetaType>: StorageReader {
     async fn transfer_map_by_item_path(
         &self,
         paths: Option<Vec<&Path>>,
-    ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>>; // <item-path, target-address, ItemTransferInfo>
+    ) -> BackupResult<HashMap<PathBuf, HashMap<Vec<u8>, Vec<ChunkTransferInfo>>>>; // <item-path, target-address, ItemTransferInfo>
 
     async fn transfer_map_to_target_address(
         &self,
-        target_addresses: Option<Vec<&str>>,
-    ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>>; // <target-address, <item-path, ItemTransferInfo>>
+        target_addresses: Option<Vec<&[u8]>>,
+    ) -> BackupResult<HashMap<Vec<u8>, HashMap<PathBuf, Vec<ChunkTransferInfo>>>>; // <target-address, <item-path, ItemTransferInfo>>
 
     async fn get_all_transfer_target_address(&self) -> BackupResult<Vec<Vec<u8>>>;
 
     async fn status(&self) -> BackupResult<CheckPointStatus>;
 }
 
+pub struct PrepareTransferChunkResult {
+    pub prepared_chunk_id: u64,
+    pub target_address: Vec<u8>,
+    pub info: ChunkTransferInfo,
+}
+
 // The targets will call these interfaces to notify the new status.
 #[async_trait::async_trait]
 pub trait CheckPointObserver {
     async fn on_success(&self) -> BackupResult<()>;
-    async fn on_stop(&self) -> BackupResult<()>;
     async fn on_failed(&self, err: BackupError) -> BackupResult<()>;
-    async fn on_pre_transfer_item(
+    async fn on_prepare_transfer_chunk(
         &self,
-        item_path: &[u8],
+        item_full_path: &Path,
         offset: u64,
         length: u64,
-        target_address: Option<&[u8]>, // specific target address
+        target_address: Option<&[u8]>, // specific target address defined by target
         detail: Option<&[u8]>,
-    ) -> BackupResult<()>;
+    ) -> BackupResult<PrepareTransferChunkResult>;
     async fn on_item_transfer_done(
         &self,
-        item_path: &[u8],
-        offset: u64,
-        length: u64,
-        target_address: Option<&[u8]>, // specific target address
+        prepared_chunk_id: u64,
+        target_address: Option<&[u8]>, // specific target address defined by target
         detail: Option<&[u8]>,
     ) -> BackupResult<()>;
     /*
@@ -103,6 +107,7 @@ pub trait CheckPointObserver {
     */
     async fn save_key_value(&self, key: &str, value: &[u8], is_replace: bool) -> BackupResult<()>;
     async fn get_key_value(&self, key: &str) -> BackupResult<Option<Vec<u8>>>;
+    async fn delete_key_value(&self, key: &str) -> BackupResult<()>;
 }
 
 pub enum DirChildType {
@@ -121,18 +126,15 @@ impl DirChildType {
     }
 }
 
-#[async_trait::async_trait]
-pub trait DirReader: Send + Sync {
-    fn path(&self) -> &Path;
-    async fn next(&mut self) -> BackupResult<Option<DirChildType>>;
-}
-
+#[derive(Clone)]
 pub struct LinkInfo {
     pub target: PathBuf,
     pub is_hard: bool,
 }
 
-pub struct ItemTransferMap {
+#[derive(Clone)]
+pub struct ChunkTransferInfo {
+    pub prepared_chunk_id: u64,
     pub begin_time: SystemTime,
     pub finish_time: Option<SystemTime>,
     pub offset: u64,
@@ -142,7 +144,7 @@ pub struct ItemTransferMap {
 
 #[async_trait::async_trait]
 pub trait StorageReader: Send + Sync {
-    async fn read_dir(&self, path: &Path) -> BackupResult<Box<dyn DirReader>>;
+    async fn read_dir(&self, path: &Path) -> BackupResult<Vec<DirChildType>>;
     async fn file_size(&self, path: &Path) -> BackupResult<u64>;
     async fn read_file(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>>;
     async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo>;

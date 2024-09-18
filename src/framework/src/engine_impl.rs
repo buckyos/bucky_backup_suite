@@ -1,10 +1,15 @@
-use std::{collections::HashMap, sync::Arc, time::SystemTime};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::SystemTime,
+};
 
 use base58::ToBase58;
 use tokio::sync::RwLock;
 
 use crate::{
-    checkpoint::{CheckPoint, CheckPointInfo, CheckPointStatus},
+    checkpoint::{CheckPoint, CheckPointInfo, CheckPointStatus, ChunkTransferInfo},
     checkpoint_impl::{CheckPointImpl, CheckPointWrapper},
     engine::{
         Config, EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter,
@@ -16,7 +21,7 @@ use crate::{
     meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
     source::{Source, SourceFactory, SourcePreserved, SourceTask},
     source_wrapper::{SourcePreservedWrapper, SourceTaskWrapper, SourceWrapper},
-    storage::{Storage, StorageSourceMgr, StorageTargetMgr},
+    storage::{QueryTransferMapFilter, Storage, StorageSourceMgr, StorageTargetMgr},
     target::{Target, TargetCheckPoint, TargetEngine, TargetFactory, TargetTask},
     target_wrapper::{TargetCheckPointWrapper, TargetTaskWrapper, TargetWrapper},
     task::{
@@ -782,7 +787,7 @@ impl Engine {
                 }
             };
 
-            let target_fill_meta = match checkpoint.info().target_meta.as_ref() {
+            let target_fill_meta = match checkpoint.info().target_meta {
                 Some(tm) => tm,
                 None => {
                     return Err(BackupError::ErrorState(format!(
@@ -848,6 +853,62 @@ impl Engine {
                     self.clone(),
                 ))
             })
+    }
+
+    pub(crate) async fn save_checkpoint_target_meta(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        target_meta: &[&str],
+    ) -> BackupResult<()> {
+        self.meta_storage
+            .save_target_meta(task_uuid, version, target_meta)
+            .await
+    }
+
+    pub(crate) async fn start_checkpoint_first(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+    ) -> BackupResult<()> {
+        self.meta_storage
+            .start_checkpoint_only_once_per_preserved_source(task_uuid, version)
+            .await
+    }
+
+    pub(crate) async fn update_checkpoint_status(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        new_status: CheckPointStatus,
+    ) -> BackupResult<()> {
+        self.meta_storage
+            .update_status(task_uuid, version, new_status)
+            .await
+    }
+
+    pub(crate) async fn add_transfer_map(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        item_path: &Path,
+        target_address: Option<&[u8]>,
+        info: &ChunkTransferInfo,
+    ) -> BackupResult<u64> {
+        self.meta_storage
+            .add_transfer_map(task_uuid, version, item_path, target_address, info)
+            .await
+    }
+
+    pub(crate) async fn query_transfer_map(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        filter: QueryTransferMapFilter<'_>,
+    ) -> BackupResult<HashMap<PathBuf, HashMap<Vec<u8>, Vec<ChunkTransferInfo>>>> {
+        self.meta_storage
+            .query_transfer_map(task_uuid, version, filter)
+            .await
     }
 }
 

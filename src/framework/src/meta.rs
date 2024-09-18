@@ -433,6 +433,65 @@ impl<
     >
     StorageItem<ServiceDirMetaType, ServiceFileMetaType, ServiceLinkMetaType, ServiceLogMetaType>
 {
+    pub fn find_by_full_path(&self, full_path: &Path) -> Option<&Self> {
+        // split full_path with '/'
+        let mut path_names = vec![];
+        for part in full_path.iter() {
+            path_names.push(PathBuf::from(part));
+        }
+
+        let empty_path = PathBuf::from("");
+        match path_names.first() {
+            Some(path) => {
+                if !path.as_os_str().is_empty() {
+                    path_names.push(empty_path.clone());
+                }
+            }
+            None => {
+                return Some(self);
+            }
+        }
+
+        if self.name() != PathBuf::from("/") {
+            path_names.remove(0);
+        }
+
+        // find the transfer-map follow the path-names in the transfer-map-cache
+        let first_path_name = match path_names.first() {
+            Some(path) => path,
+            None => return Some(self),
+        };
+
+        if first_path_name.as_os_str() != self.name().file_name().unwrap_or(empty_path.as_os_str())
+        {
+            return None;
+        }
+
+        path_names.remove(0);
+        let mut current_dir_transfer_info = self;
+        for path_name in path_names {
+            if path_name.as_os_str()
+                != current_dir_transfer_info
+                    .name()
+                    .file_name()
+                    .unwrap_or(empty_path.as_os_str())
+            {
+                return None;
+            }
+            current_dir_transfer_info = match current_dir_transfer_info {
+                StorageItem::Dir(dir, _) => {
+                    match dir.children.iter().find(|child| child.name() == path_name) {
+                        Some(child) => child,
+                        None => return None,
+                    }
+                }
+                _ => return None,
+            };
+        }
+
+        Some(current_dir_transfer_info)
+    }
+
     fn logs(&self) -> &[Option<FileLog<ServiceFileMetaType>>] {
         match self {
             StorageItem::Dir(_, logs) => logs.as_slice(),
@@ -571,9 +630,9 @@ impl<
                 continue;
             }
 
-            let mut dir_reader = reader.read_dir(parent_full_path).await?;
+            let dir_children = reader.read_dir(parent_full_path).await?;
 
-            while let Some(child) = dir_reader.next().await? {
+            for child in dir_children {
                 let parent_full_path = all_read_files[next_dir_index].2.as_path();
                 let child_name = child.path().to_path_buf();
                 let full_path = parent_full_path.join(&child_name);
@@ -592,7 +651,6 @@ impl<
                                 service_meta: None,
                                 hash,
                                 size: file_size,
-                                upload_bytes: 0,
                             },
                             vec![],
                         )
@@ -716,10 +774,10 @@ impl<
             let parent_full_path = all_read_files[parent_index].2.clone();
             next_dir_index += 1;
 
-            let mut dir_reader = reader.read_dir(parent_full_path.as_path()).await?;
+            let dir_children = reader.read_dir(parent_full_path.as_path()).await?;
             let mut children = HashSet::new();
 
-            while let Some(child) = dir_reader.next().await? {
+            for child in dir_children {
                 let child_name = child.path().to_path_buf();
                 let full_path = parent_full_path.join(&child_name);
 
@@ -801,7 +859,6 @@ impl<
                                         service_meta: exist_file_meta.clone(), // the `target` can use the history meta to reuse the space, and it should save it in a new space.
                                         hash,
                                         size: file_size,
-                                        upload_bytes: 0,
                                     },
                                     vec![],
                                 ))
@@ -829,7 +886,6 @@ impl<
                                         service_meta: None,
                                         hash,
                                         size: file_size,
-                                        upload_bytes: 0,
                                         diff_chunks: diffs,
                                     },
                                     vec![],
@@ -843,7 +899,6 @@ impl<
                                         service_meta: None,
                                         hash,
                                         size: file_size,
-                                        upload_bytes: 0,
                                     },
                                     vec![],
                                 ))
@@ -1087,7 +1142,6 @@ impl<
                                         service_meta: diff.service_meta.clone(),
                                         hash: diff.hash.clone(),
                                         size: diff.size,
-                                        upload_bytes: diff.upload_bytes,
                                     },
                                     vec![],
                                 )),
@@ -1272,7 +1326,6 @@ pub struct FileMeta<ServiceFileMetaType: MetaBound> {
     pub service_meta: Option<ServiceFileMetaType>,
     pub hash: String,
     pub size: u64,
-    pub upload_bytes: u64,
 }
 
 impl<ServiceFileMetaType: MetaBound> StorageItemField for FileMeta<ServiceFileMetaType> {
@@ -1296,7 +1349,6 @@ pub struct FileDiffChunk {
     pub length: u64,        // length of the bytes
     pub origin_offset: u64, // the offset the bytes were instead in the original chunk
     pub origin_length: u64, // the length of the original bytes will be instead.
-    pub upload_bytes: u64,
 }
 
 impl FileDiffChunk {
@@ -1312,7 +1364,6 @@ impl FileDiffChunk {
             length: reader.file_size().await?,
             origin_offset: 0,
             origin_length: base_reader.file_size().await?,
-            upload_bytes: 0,
         };
 
         Ok(vec![all_replace])
@@ -1331,7 +1382,6 @@ pub struct FileDiffMeta<ServiceDiffMetaType: MetaBound> {
     pub hash: String,
     pub size: u64,
     pub diff_chunks: Vec<FileDiffChunk>,
-    pub upload_bytes: u64,
 }
 
 impl<ServiceDiffMetaType: MetaBound> StorageItemField for FileDiffMeta<ServiceDiffMetaType> {

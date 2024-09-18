@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    checkpoint::{DirReader, LinkInfo, StorageReader},
+    checkpoint::{DirChildType, LinkInfo, StorageReader},
     engine::{SourceId, SourceInfo, SourceQueryBy, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
@@ -152,7 +152,7 @@ impl SourcePreservedWrapper {
 #[async_trait::async_trait]
 impl StorageReader for SourcePreservedWrapper {
     // for checkpoint
-    async fn read_dir(&self, path: &Path) -> BackupResult<Box<dyn DirReader>> {
+    async fn read_dir(&self, path: &Path) -> BackupResult<Vec<DirChildType>> {
         self.engine
             .get_source_preserved_impl(self.source_id, &self.task_uuid, self.preserved_state_id)
             .await?

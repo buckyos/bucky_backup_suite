@@ -34,6 +34,10 @@ impl TaskImpl {
             source: SourceTaskWrapper::new(source_id, uuid, engine),
         }
     }
+
+    pub fn info(&self) -> &TaskInfo {
+        &self.info
+    }
 }
 
 #[async_trait::async_trait]
@@ -201,7 +205,7 @@ impl Task<CheckPointMetaEngine> for TaskImpl {
                     break (
                         DirectoryMetaEngine::delta_from_reader(
                             &prev_meta.root,
-                            last_target_checkpoint.as_ref(),
+                            prev_checkpoint.as_ref(),
                             source_preserved.as_ref(),
                         )
                         .await?,

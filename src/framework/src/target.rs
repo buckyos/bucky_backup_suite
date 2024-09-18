@@ -89,7 +89,7 @@ pub trait TargetTask<
             ServiceLinkMetaType,
             ServiceLogMetaType,
         >,
-    ) -> BackupResult<(Vec<String>, Box<dyn TargetCheckPoint>)>;
+    ) -> BackupResult<Vec<String>>;
 
     async fn target_checkpoint_from_filled_meta(
         &self,
@@ -108,6 +108,7 @@ pub trait TargetTask<
 pub trait TargetCheckPoint: StorageReader + Send + Sync {
     fn checkpoint_version(&self) -> CheckPointVersion;
     async fn transfer(&self) -> BackupResult<()>;
+    async fn stop(&self) -> BackupResult<()>;
 }
 
 pub trait TargetFactoryEngine: TargetFactory<String, String, String, String, String> {}

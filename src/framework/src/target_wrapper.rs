@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    checkpoint::{DirReader, LinkInfo, StorageReader},
+    checkpoint::{DirChildType, LinkInfo, StorageReader},
     engine::{TargetId, TargetInfo, TargetQueryBy, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
@@ -98,10 +98,7 @@ impl TargetTask<String, String, String, String, String> for TargetTaskWrapper {
             .estimate_consume_size(meta)
             .await
     }
-    async fn fill_target_meta(
-        &self,
-        meta: &mut CheckPointMetaEngine,
-    ) -> BackupResult<(Vec<String>, Box<dyn TargetCheckPoint>)> {
+    async fn fill_target_meta(&self, meta: &mut CheckPointMetaEngine) -> BackupResult<Vec<String>> {
         self.engine
             .get_target_task_impl(self.target_id, &self.task_uuid)
             .await?
@@ -147,7 +144,7 @@ impl TargetCheckPointWrapper {
 
 #[async_trait::async_trait]
 impl StorageReader for TargetCheckPointWrapper {
-    async fn read_dir(&self, path: &Path) -> BackupResult<Box<dyn DirReader>> {
+    async fn read_dir(&self, path: &Path) -> BackupResult<Vec<DirChildType>> {
         self.engine
             .get_target_checkpoint_impl(self.target_id, &self.task_uuid, self.version)
             .await?
@@ -195,6 +192,14 @@ impl TargetCheckPoint for TargetCheckPointWrapper {
             .get_target_checkpoint_impl(self.target_id, &self.task_uuid, self.version)
             .await?
             .transfer()
+            .await
+    }
+
+    async fn stop(&self) -> BackupResult<()> {
+        self.engine
+            .get_target_checkpoint_impl(self.target_id, &self.task_uuid, self.version)
+            .await?
+            .stop()
             .await
     }
 }

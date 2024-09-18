@@ -1,7 +1,10 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use crate::{
-    checkpoint::{CheckPointInfo, CheckPointStatus, ItemTransferMap},
+    checkpoint::{CheckPointInfo, CheckPointStatus, ChunkTransferInfo},
     engine::{
         EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter, ListTaskFilter,
         SourceId, SourceInfo, SourceQueryBy, TargetId, TargetInfo, TargetQueryBy, TaskUuid,
@@ -202,13 +205,13 @@ pub trait StorageCheckPointMgr: Send + Sync {
 }
 
 pub struct QueryTransferMapFilterItem<'a> {
-    pub path: &'a [u8],
+    pub path: &'a Path,
     pub offset: u64,
     pub length: u64,
 }
 
 pub struct QueryTransferMapFilter<'a> {
-    pub items: Option<Vec<QueryTransferMapFilter<'a>>>,
+    pub items: Option<Vec<QueryTransferMapFilterItem<'a>>>,
     pub target_addresses: Option<Vec<&'a [u8]>>,
 }
 
@@ -221,17 +224,17 @@ pub trait StorageCheckPointTransferMapMgr: Send + Sync {
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
-        item_path: &[u8],
+        item_path: &Path,
         target_address: Option<&[u8]>,
-        info: &ItemTransferMap,
-    ) -> BackupResult<()>;
+        info: &ChunkTransferInfo,
+    ) -> BackupResult<u64>;
 
     async fn query_transfer_map<'a>(
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
         filter: QueryTransferMapFilter<'a>,
-    ) -> BackupResult<HashMap<Vec<u8>, HashMap<Vec<u8>, Vec<ItemTransferMap>>>>; // <target-address, <item-path, ItemTransferMap>>
+    ) -> BackupResult<HashMap<PathBuf, HashMap<Vec<u8>, Vec<ChunkTransferInfo>>>>; // <item-path, <target-address, ChunkTransferInfo>>
 }
 
 #[async_trait::async_trait]

@@ -1,8 +1,8 @@
 use crate::{
-    checkpoint::{DirReader, LinkInfo, StorageReader},
+    checkpoint::StorageReader,
     engine::{SourceId, SourceInfo, TaskUuid},
     error::BackupResult,
-    meta::{PreserveStateId, StorageItemAttributes},
+    meta::PreserveStateId,
     task::TaskInfo,
 };
 
