@@ -172,8 +172,8 @@ impl CheckPointImpl {
 
             self.engine
                 .save_checkpoint_target_meta(
-                    self.task_uuid(),
-                    self.version(),
+                    &self.task_uuid,
+                    self.version,
                     target_meta
                         .iter()
                         .map(|s| s.as_str())
@@ -187,7 +187,7 @@ impl CheckPointImpl {
 
         let target_checkpoint = self
             .engine
-            .get_target_checkpoint_impl(task.info().target_id, &self.task_uuid, self.version())
+            .get_target_checkpoint_impl(task.info().target_id, &self.task_uuid, self.version)
             .await?;
 
         target_checkpoint.transfer().await
@@ -199,7 +199,7 @@ impl CheckPointImpl {
     ) -> BackupResult<HashMap<PathBuf, HashMap<Vec<u8>, Vec<ChunkTransferInfo>>>> {
         let transfer_map = self
             .engine
-            .query_transfer_map(&self.task_uuid, self.version(), filter)
+            .query_transfer_map(&self.task_uuid, self.version, filter)
             .await?;
 
         let mut transfer_map_cache = self.transfer_map.lock().await;
@@ -477,7 +477,7 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointImpl {
     {
         let full_meta_guard = self.full_meta_ref().await?;
         let full_meta = full_meta_guard.as_ref().unwrap();
-        if let Some(item_full_paths) = item_full_paths {
+        if let Some(item_full_paths) = item_full_paths.as_ref() {
             for item_full_path in item_full_paths {
                 if full_meta.root.find_by_full_path(item_full_path).is_none() {
                     return Err(BackupError::NotFound(format!(
@@ -556,7 +556,7 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointImpl {
 impl CheckPointObserver for CheckPointImpl {
     async fn on_success(&self) -> BackupResult<()> {
         self.engine
-            .update_checkpoint_status(self.task_uuid(), self.version(), CheckPointStatus::Success)
+            .update_checkpoint_status(&self.task_uuid, self.version, CheckPointStatus::Success)
             .await?;
 
         self.info.write().await.status = CheckPointStatus::Success;
@@ -565,7 +565,7 @@ impl CheckPointObserver for CheckPointImpl {
     async fn on_failed(&self, err: BackupError) -> BackupResult<()> {
         let failed_status = CheckPointStatus::Failed(Some(err));
         self.engine
-            .update_checkpoint_status(self.task_uuid(), self.version(), failed_status.clone())
+            .update_checkpoint_status(&self.task_uuid, self.version, failed_status.clone())
             .await?;
         self.info.write().await.status = failed_status;
         Ok(())
@@ -653,8 +653,8 @@ impl CheckPointObserver for CheckPointImpl {
                 let prepared_chunk_id = self
                     .engine
                     .add_transfer_map(
-                        self.task_uuid(),
-                        self.version(),
+                        &self.task_uuid,
+                        self.version,
                         item_full_path,
                         target_address,
                         &new_chunk,
