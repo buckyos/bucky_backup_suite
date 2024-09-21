@@ -97,11 +97,11 @@ impl SourceTask for SourceTaskWrapper {
             .await
     }
 
-    async fn preserved_state(&self) -> BackupResult<Option<String>> {
+    async fn preserved_state(&self, original_state: &str) -> BackupResult<Option<String>> {
         self.engine
             .get_source_task_impl(self.source_id, &self.task_uuid)
             .await?
-            .preserved_state()
+            .preserved_state(original_state)
             .await
     }
 

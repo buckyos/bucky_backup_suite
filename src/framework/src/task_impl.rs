@@ -48,7 +48,10 @@ impl PreserveSourceState for TaskImpl {
             .egnine
             .save_source_original_state(&self.info.uuid, org_state.as_deref())
             .await?;
-        let preserved_state = self.source.preserved_state().await?;
+        let preserved_state = match org_state {
+            Some(org_state) => self.source.preserved_state(org_state.as_str()).await?,
+            None => None,
+        };
         self.egnine
             .save_source_preserved_state(state_id, preserved_state.as_deref())
             .await?;

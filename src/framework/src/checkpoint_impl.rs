@@ -591,7 +591,7 @@ impl CheckPointObserver for CheckPointImpl {
             {
                 let mut guard = self.transfer_map.lock().await;
                 let transfer_map = guard.find_by_full_path_mut(item_full_path, false);
-                if let Some(transfer_map) = transfer_map {
+                if transfer_map.is_some() {
                     break;
                 }
             }
