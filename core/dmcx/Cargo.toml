@@ -1,0 +1,12 @@
+[package]
+name = "dmcx"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chunk = { path = "../chunk" }
+sha2 = "0.10"
+base58 = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+async-trait = "0.1"
+tokio = { version = "1.0", features = ["full"] }

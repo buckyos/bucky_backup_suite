@@ -2,4 +2,4 @@
 .VSCodeCounter
 
 cargo.lock
-src/target/*
+target/
