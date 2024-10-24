@@ -1,7 +1,6 @@
 use std::{
     path::{Path},
     sync::Arc, 
-    pin::Pin, 
 };
 use async_trait::async_trait;
 use async_std::{
@@ -44,7 +43,7 @@ impl LocalStore {
 impl ChunkTarget for LocalStore {
     type Read = File;
 
-    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl BufRead + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
+    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl BufRead + Unpin + Send + Sync + 'static, _length: Option<u64>) -> ChunkResult<ChunkStatus> {
         let path = Path::new(self.base_path()).join(chunk_id.to_string());
         let mut file = File::create(path).await?;
         file.seek(std::io::SeekFrom::Start(offset)).await?;

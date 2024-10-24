@@ -1,4 +1,3 @@
-use std::pin::Pin;
 use async_trait::async_trait;
 use async_std::io::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -18,7 +17,7 @@ pub trait ChunkTarget {
     /// 将数据写入目标存储
     async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl BufRead + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus>;
 
-    type Read: Read + Seek;
+    type Read: 'static + Read + Seek + Unpin;
     /// 从目标存储读取数据
     async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Self::Read>;
 
