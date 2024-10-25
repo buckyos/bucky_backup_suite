@@ -1,3 +1,5 @@
+import threading
+
 # a demo local directory backup source
 
 class StorageReader:
@@ -54,7 +56,7 @@ class SourceTask:
             return 'readonly:{original_state for each item}'
 
 
-    def preserved_state(self, original_state: str) -> str:
+    def lock_state(self, original_state: str) -> str:
         if self.is_snapshot:
             # create a new snapshot with name in 'original_state', and return the path of the snapshot
             return 'path of the snapshot'
@@ -70,14 +72,14 @@ class SourceTask:
             # restore permissions of the items to the state in original_state
             pass
 
-    def source_preserved(self, preserved_state_id: int, preserved_state: str) -> 'SourcePreserved':
-        # preserved_state is the root directory that will be backupped
-        return SourcePreserved(self, preserved_state_id, preserved_state)
+    def source_locked(self, locked_state_id: int, locked_state: str) -> 'SourceLocked':
+        # locked_state is the root directory that will be backupped
+        return Sourcelocked(self, locked_state_id, locked_state)
 
-class SourcePreserved(StorageReader):
-    def __init__(self, source_task: 'SourceTask', preserved_state_id: int, root_path: str):
+class Sourcelocked(StorageReader):
+    def __init__(self, source_task: 'SourceTask', locked_state_id: int, root_path: str):
         self.source_task = source_task
-        self.preserved_state_id = preserved_state_id
+        self.locked_state_id = locked_state_id
         self.root_path = root_path
 
     def read_dir(self, path: str) -> list:
@@ -113,5 +115,18 @@ class SourcePreserved(StorageReader):
         full_path = os.path.join(self.root_path, path)
         # get the attributes of the item specified by full_path
         pass
+
+    def prepare(self):
+        source_thread = threading.Thread(target = source_scan_file_list, args=(task_info))
+        source_thread.start()
+
+
+def source_scan_file_list(source_entitiy):
+    for file in source_entitiy:
+        # calc diff, and it can be calc by engine in default way.
+        # dirs or links
+        files_db.add_file(file)
+
+    files_db.set_scan_finish()
 
 http.start_service() # todo
