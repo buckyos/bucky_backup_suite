@@ -320,6 +320,7 @@ class Chunk:
             file_block = compress(file_block)
 
         if is_new_block:
+            file_block.hash()
             chunk_db.add_file_block(file_block)
 
         if self.capacity - self.real_len() < FREE_LIMIT or # is full
