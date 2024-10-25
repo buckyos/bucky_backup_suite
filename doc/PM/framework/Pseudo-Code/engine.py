@@ -248,17 +248,16 @@ class Checkpoint(StorageReader):
 
 
     def next_chunk(self, capacities: list[int]):
-        if self.is_all_chunk_finish():
-            return None
-    
-        if not self.is_chunk_thread_start():
-            chunk_thread = threading.Thread(target = source_fill_chunk, args={files_db, capacities})
+        files = files_db.list_unpack_files()
+        if not files:
+            if self.source_locked.is_files_scan_finish():
+                return None
+            else:
+                self.source_locked.wait_new_file();
+                files = files_db.list_unpack_files()
 
-        chunk = self.chunk_db.get_next_ready_chunk()
-        if chunk:
-            return chunk
-    
-        chunk = self.wait_chunk_ready()
+        
+        chunk = chunk_db.add_new_chunk()
         return chunk
 
     def stop(self):
@@ -269,23 +268,6 @@ class Checkpoint(StorageReader):
         self.status = STATUS_TARGET_STOPPED
         self.status = STATUS_STOPPED
         # wait stop
-
-def source_fill_chunk(files_db, capacities):
-    while not is_finish:
-        chunks = chunk_db.list_unfinish_chunks()
-        files = files_db.list_unpack_files()
-        if not chunks:
-            chunks = generate_new_chunk(files, capacities)
-        ready_chunks = match_files_to_chunks(files, chunks)
-        self.notify_chunk_ready(ready_chunks)
-
-def generate_new_chunk(files, capacities):
-    total_size = get_checkpoint_size_of_last_version()
-    if not total_size:
-        total_size = files.total_size()
-
-    chunk_size = select_chunk_size(capacities, total_size)
-    chunk_db.add_new_chunk(chunk_size)
 
 class Chunk:
     def __init__(self, checkpoint: 'Checkpoint', is_compress: bool):
@@ -303,33 +285,42 @@ class Chunk:
             self.read_from_target(offset, len)
 
     def read_from_source(self, offset: int, len: int) -> bytes:
-        loop:
-            file_block = self.file_block_at(offset)
-            if not file_block:
+        is_new_block = False
+        file_block = self.file_block_at(offset)
+        if not file_block:
+            # need new block
+            is_new_block = True
+            files = files_db.list_unpack_files()
+            if not files:
                 if self.capacity - self.real_len() < FREE_LIMIT or # is full
-                    (self.file_scan_finish() and self.is_last_one()): # the last chunk will be not full
+                    self.file_scan_finish(): # the last chunk will be not full
                     chunk_db.set_finish()
                     return None
                 else:
-                    chunk_db.inc_proirity(self)
-                    wait()
+                    wait_new_files()
+                    files = files_db.list_unpack_files()
+            
+            file = self.select_file(files)
+            file_block = file
 
-        if self.checkpoint.is_delta:
-            if not file_block.file.is_diff():
-                file_diff = files_db.find_diff(file_block.file)
-                if not file_diff:
-                    last_version_file = self.checkpoint.get_file_in_last_version(file_block.file)
-                    file_diff = diff(last_version_file, file_block.file)
-                    files_db.add_file_diff(file_diff)
-                    file_block = file_diff
-            else:
-                # calc diff by source
-                pass
+            if self.checkpoint.is_delta:
+                if not file.is_diff():
+                    file_diff = files_db.find_diff(file)
+                    if not file_diff:
+                        last_version_file = self.checkpoint.get_file_in_last_version(file)
+                        file_diff = diff(last_version_file, file_block.file)
+                        files_db.add_file_diff(file_diff)
+                        file_block = file_diff
+                else:
+                    # calc diff by source
+                    pass
 
         if self.is_compress:
             # compress it when read
             file_block = compress(file_block)
-            file_db.add_compressed_file_block(file_block)
+
+        if is_new_block:
+            chunk_db.add_file_block(file_block)
 
         if self.capacity - self.real_len() < FREE_LIMIT or # is full
             (self.file_scan_finish() and self.is_last_one()): # the last chunk will be not full
