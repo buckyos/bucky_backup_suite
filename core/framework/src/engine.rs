@@ -87,9 +87,9 @@ pub trait TaskMgr {
         friendly_name: String,
         description: String,
         source_id: SourceId,
-        source_param: String, // Any parameters(address .eg) for the source, the source can get it from engine.
+        source_entitiy: String, // Any parameters(address .eg) for the source, the source can get it from engine.
         target_id: TargetId,
-        target_param: String, // Any parameters(address .eg) for the target, the target can get it from engine.
+        target_entitiy: String, // Any parameters(address .eg) for the target, the target can get it from engine.
         history_strategy: HistoryStrategy,
         priority: u32,
         attachment: String, // The application can save any attachment with task.

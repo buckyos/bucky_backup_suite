@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    ops::Range,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -13,105 +14,90 @@ use crate::{
     meta::{CheckPointVersion, PreserveStateId, StorageItemAttributes},
 };
 
+pub enum PendingStatus {
+    // operation has been post
+    Pending,
+    // A time-consuming operation has already started
+    Started,
+    // operation has done
+    Done,
+    // operation is failed
+    Failed(Option<BackupError>),
+}
+
+pub type SourcePendingStatus = PendingStatus;
+pub type TargetPendingStatus = PendingStatus;
+
 #[derive(Clone)]
 pub enum CheckPointStatus {
     Standby,
-    Start,
-    Transfering,
-    Stop,
+    Prepare(SourcePendingStatus),
+    Start(SourcePendingStatus, TargetPendingStatus),
+    Stop(SourcePendingStatus, TargetPendingStatus),
     Success,
     Failed(Option<BackupError>),
 }
 
-#[derive(Clone)]
-pub struct CheckPointInfo<MetaType> {
-    pub meta: MetaType,
-    pub target_meta: Option<Vec<String>>,
-    pub preserved_source_state_id: Option<PreserveStateId>,
-    pub status: CheckPointStatus,
-    pub last_status_changed_time: SystemTime,
+pub enum PendingAttribute<A> {
+    Pending(A),
+    Done(A),
+}
+
+pub struct PrepareProgress {
+    total_size: u64,
+    item_count: u64,
+}
+
+pub struct TransferProgress {
+    transfer_size: u64,
+    transfer_item_count: u64,
+    consume_size: u64,
+}
+
+pub enum ItemId {
+    Chunk(ChunkId),
+    Folder(DirChildType),
+}
+
+pub struct ItemTransferProgress {
+    to: ItemId,
+    source_range: Range<u64>,
+    target_range: Range<u64>,
 }
 
 #[async_trait::async_trait]
-pub trait CheckPoint<MetaType>: StorageReader {
+pub trait CheckPoint<MetaType>: DirReader {
     fn task_uuid(&self) -> &TaskUuid;
     fn version(&self) -> CheckPointVersion;
-    async fn info(&self) -> BackupResult<CheckPointInfo<MetaType>>;
-    // if is_delta: SUM(prev-checkpoints[])
-    // otherwise: self.info().meta
-    async fn full_meta(&self) -> BackupResult<MetaType>;
-    async fn transfer(&self) -> BackupResult<()>;
+
+    async fn prepare(&self) -> BackupResult<MetaType>;
+    async fn prepare_progress(&self) -> BackupResult<PendingAttribute<PrepareProgress>>;
+
+    async fn transfer(&self, is_compress: bool) -> BackupResult<()>;
+    async fn transfer_progress(&self) -> BackupResult<PendingAttribute<TransferProgress>>;
+    async fn item_transfer_progress(
+        &self,
+        id: &ItemId,
+    ) -> BackupResult<PendingAttribute<Vec<ItemTransferProgress>>>;
+
     async fn stop(&self) -> BackupResult<()>;
 
-    async fn target_meta(&self) -> BackupResult<Option<Vec<String>>>;
-
-    async fn transfer_map_by_item_path(
+    async fn enumerate_or_generate_chunk(
         &self,
-        paths: Option<Vec<&Path>>,
-    ) -> BackupResult<HashMap<PathBuf, HashMap<Vec<u8>, Vec<ChunkTransferInfo>>>>; // <item-path, target-address, ItemTransferInfo>
+        capacities: &[u64],
+    ) -> BackupResult<futures::stream::Iter<dyn ChunkReader>>;
 
-    async fn transfer_map_to_target_address(
+    async fn enumerate_or_generate_folder(
         &self,
-        target_addresses: Option<Vec<&[u8]>>,
-    ) -> BackupResult<HashMap<Vec<u8>, HashMap<PathBuf, Vec<ChunkTransferInfo>>>>; // <target-address, <item-path, ItemTransferInfo>>
-
-    async fn get_all_transfer_target_address(&self) -> BackupResult<Vec<Vec<u8>>>;
+    ) -> BackupResult<futures::stream::Iter<Box<dyn FolderReader>>>;
 
     async fn status(&self) -> BackupResult<CheckPointStatus>;
-}
-
-pub struct PrepareTransferChunkResult {
-    pub prepared_chunk_id: u64,
-    pub target_address: Vec<u8>,
-    pub info: ChunkTransferInfo,
-}
-
-// The targets will call these interfaces to notify the new status.
-#[async_trait::async_trait]
-pub trait CheckPointObserver {
-    async fn on_success(&self) -> BackupResult<()>;
-    async fn on_failed(&self, err: BackupError) -> BackupResult<()>;
-    async fn on_prepare_transfer_chunk(
-        &self,
-        item_full_path: &Path,
-        offset: u64,
-        length: u64,
-        target_address: Option<&[u8]>, // specific target address defined by target
-        detail: Option<&[u8]>,
-    ) -> BackupResult<PrepareTransferChunkResult>;
-    async fn on_item_transfer_done(
-        &self,
-        prepared_chunk_id: u64,
-        target_address: Option<&[u8]>, // specific target address defined by target
-        detail: Option<&[u8]>,
-    ) -> BackupResult<()>;
-    /*
-       Save values for key to avoid some status loss.
-
-       examples:
-       let value = checkpoint.get_key_value("my-key").await?;
-       let value = match value {
-           Some(v) => {
-               v
-           }
-           None => {
-               let value = generate_value();
-               checkpoint.save_key_value("my-key", &value, true).await?;
-               value
-           }
-       };
-
-       // We can reuse the `value` next time for the `consume_value` failed or crashed.
-       // Otherwise, we may not know if the value is consumed success or not when the `consume_value` timeout or crashed.
-       let result = consume_value(value).await?;
-    */
-    async fn save_key_value(&self, key: &str, value: &[u8], is_replace: bool) -> BackupResult<()>;
-    async fn get_key_value(&self, key: &str) -> BackupResult<Option<Vec<u8>>>;
-    async fn delete_key_value(&self, key: &str) -> BackupResult<()>;
+    async fn wait_status<F>(&self) -> BackupResult<StatusWaitor<CheckPointStatus>>;
 }
 
 pub enum DirChildType {
     File(PathBuf),
+    FileDiff(PathBuf),
     Dir(PathBuf),
     Link(PathBuf),
 }
@@ -120,10 +106,28 @@ impl DirChildType {
     pub fn path(&self) -> &Path {
         match self {
             DirChildType::File(path) => path,
+            DirChildType::FileDiff(path) => path,
             DirChildType::Dir(path) => path,
             DirChildType::Link(path) => path,
         }
     }
+}
+
+#[derive(Clone)]
+pub struct DefaultFileDiffHeader {
+    // todo: default file-diff header
+}
+
+#[derive(Clone)]
+pub struct CustomFileDiffHeader {
+    pub classify: String,
+    pub param: Vec<u8>,
+}
+
+#[derive(Clone)]
+pub enum FileDiffHeader {
+    Default(DefaultFileDiffHeader),
+    Custom(CustomFileDiffHeader),
 }
 
 #[derive(Clone)]
@@ -132,71 +136,101 @@ pub struct LinkInfo {
     pub is_hard: bool,
 }
 
-#[derive(Clone)]
-pub struct ChunkTransferInfo {
-    pub prepared_chunk_id: u64,
-    pub begin_time: SystemTime,
-    pub finish_time: Option<SystemTime>,
-    pub offset: u64,
-    pub length: u64,
-    pub detail: Option<Vec<u8>>, // special parse for different target.
-}
-
 #[async_trait::async_trait]
-pub trait StorageReader: Send + Sync {
+pub trait DirReader: Send + Sync {
     async fn read_dir(&self, path: &Path) -> BackupResult<Vec<DirChildType>>;
     async fn file_size(&self, path: &Path) -> BackupResult<u64>;
     async fn read_file(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>>;
+    async fn copy_file_to(
+        &self,
+        path: &Path,
+        to: &Path,
+    ) -> BackupResult<StatusWaitor<PendingStatus>>;
+    async fn file_diff_header(&self, path: &Path) -> BackupResult<FileDiffHeader>;
+    async fn read_file_diff(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>>;
     async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo>;
     async fn stat(&self, path: &Path) -> BackupResult<StorageItemAttributes>;
 }
 
-pub struct FileStreamReader<'a> {
-    reader: &'a dyn StorageReader,
-    path: &'a Path,
-    pos: u64,
-    chunk_size: u32,
+pub trait FileContentReader: Send + Sync {
+    async fn read(&self, offset: u64, length: u32) -> BackupResult<Vec<u8>>;
+    async fn copy_to(&self, to: &Path) -> BackupResult<StatusWaitor<PendingStatus>>;
 }
 
-impl<'a> FileStreamReader<'a> {
-    pub fn new(reader: &'a dyn StorageReader, path: &'a Path, pos: u64, chunk_size: u32) -> Self {
-        Self {
-            reader,
-            pos,
-            chunk_size,
-            path,
-        }
-    }
+pub trait FileDiffContentReader: Send + Sync {
+    async fn file_size(&self) -> BackupResult<u64>;
+    async fn get_header(&self) -> BackupResult<FileDiffHeader>;
+    async fn read(&self, offset: u64, length: u32) -> BackupResult<Vec<u8>>;
+}
 
-    pub fn pos(&self) -> u64 {
-        self.pos
-    }
+pub enum FolderItemContentReader {
+    Dir(Box<dyn DirReader>),
+    File(Box<dyn FileContentReader>),
+    FileDiff(Box<dyn FileDiffContentReader>),
+    Link(LinkInfo),
+}
 
-    pub async fn file_size(&self) -> BackupResult<u64> {
-        self.reader.file_size(self.path).await
-    }
+pub struct FolderReader {
+    size: u64,
+    stat: StorageItemAttributes,
+    path: PathBuf,
+    reader: Option<FolderItemContentReader>,
+}
 
-    pub async fn read_next(&mut self) -> BackupResult<Vec<u8>> {
-        let data = self
-            .reader
-            .read_file(&self.path, self.pos, self.chunk_size)
-            .await?;
+// pub struct FileStreamReader<'a> {
+//     reader: &'a dyn FolderReader,
+//     path: &'a Path,
+//     pos: u64,
+//     chunk_size: u32,
+// }
 
-        self.pos += data.len() as u64;
-        Ok(data)
-    }
+// impl<'a> FileStreamReader<'a> {
+//     pub fn new(reader: &'a dyn FolderReader, path: &'a Path, pos: u64, chunk_size: u32) -> Self {
+//         Self {
+//             reader,
+//             pos,
+//             chunk_size,
+//             path,
+//         }
+//     }
 
-    pub async fn hash(&mut self) -> BackupResult<String> {
-        let mut hasher = Sha256::new();
-        loop {
-            let chunk = self.read_next().await?;
-            if chunk.is_empty() {
-                break;
-            }
-            hasher.update(chunk);
-        }
-        let hash = hasher.finalize();
-        let hash = hash.as_slice().to_base58();
-        Ok(hash)
-    }
+//     pub fn pos(&self) -> u64 {
+//         self.pos
+//     }
+
+//     pub async fn file_size(&self) -> BackupResult<u64> {
+//         self.reader.file_size(self.path).await
+//     }
+
+//     pub async fn read_next(&mut self) -> BackupResult<Vec<u8>> {
+//         let data = self
+//             .reader
+//             .read_file(&self.path, self.pos, self.chunk_size)
+//             .await?;
+
+//         self.pos += data.len() as u64;
+//         Ok(data)
+//     }
+
+//     pub async fn hash(&mut self) -> BackupResult<String> {
+//         let mut hasher = Sha256::new();
+//         loop {
+//             let chunk = self.read_next().await?;
+//             if chunk.is_empty() {
+//                 break;
+//             }
+//             hasher.update(chunk);
+//         }
+//         let hash = hasher.finalize();
+//         let hash = hash.as_slice().to_base58();
+//         Ok(hash)
+//     }
+// }
+
+#[async_trait::async_trait]
+pub trait ChunkReader: Send + Sync {
+    async fn capacity(&self) -> BackupResult<u64>;
+    async fn len(&self) -> BackupResult<u64>;
+    async fn read(&self, offset: u64, length_limit: u32) -> BackupResult<Vec<u8>>;
+    async fn copy_file_to(&self, to: &Path) -> BackupResult<StatusWaitor<PendingStatus>>;
 }
