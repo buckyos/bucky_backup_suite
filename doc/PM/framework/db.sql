@@ -63,13 +63,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     friendly_name TEXT NOT NULL,
     description TEXT DEFAULT NULL,
     source_id INTEGER NOT NULL,
-    source_param TEXT DEFAULT NULL,
+    source_entitiy TEXT DEFAULT NULL,
     target_id INTEGER NOT NULL,
-    target_param TEXT DEFAULT NULL,
+    target_entitiy TEXT DEFAULT NULL,
     attachment TEXT DEFAULT NULL,
     priority INTEGER NOT NULL,
     history_strategy TEXT DEFAULT NULL,
-    flag: INTEGER DEFAULT 0,
+    flag INTEGER DEFAULT 0,
     FOREIGN KEY (source_id) REFERENCES sources (id),
     FOREIGN KEY (target_id) REFERENCES targets (id)
 );
@@ -77,15 +77,15 @@ CREATE TABLE IF NOT EXISTS tasks (
 -- create table `task_source_state` with the following columns:
 -- id: u64
 -- task_uuid: String
--- is_preserved: bool // false if the source has not preserved its state
+-- is_locked: bool // false if the source has not locked its state
 -- original_state: Option<String>,
--- preserved_state: Option<String>,
-CREATE TABLE IF NOT EXISTS task_source_state (
+-- locked_state: Option<String>,
+CREATE TABLE IF NOT EXISTS locked_source_state (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_uuid TEXT NOT NULL,
-    is_preserved INTEGER DEFAULT 0,
+    is_locked INTEGER DEFAULT 0,
     original_state TEXT DEFAULT NULL,
-    preserved_state TEXT DEFAULT NULL,
+    locked_state TEXT DEFAULT NULL,
     FOREIGN KEY (task_uuid) REFERENCES tasks (uuid)
 );
 
@@ -94,9 +94,7 @@ CREATE TABLE IF NOT EXISTS task_source_state (
 -- seq: u64, // +1 for each new checkpoint for the same task
 -- create_time: u64, // UTC in seconds
 -- last_status_changed_time: u64, // UTC in seconds
--- preserved_source_state_id: Option<u64>,
--- meta: String,
--- target_meta: Option<Vec<String>>,
+-- locked_source_state_id: u64,
 -- status: u64,
 -- error_msg: Option<String>,
 -- (task_uuid, seq, create_time) is primary key
@@ -106,16 +104,95 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     seq INTEGER NOT NULL,
     create_time INTEGER NOT NULL,
     last_status_changed_time INTEGER NOT NULL,
-    preserved_source_state_id INTEGER DEFAULT NULL,
-    meta TEXT NOT NULL,
-    target_meta TEXT DEFAULT NULL,
+    locked_source_state_id INTEGER NOT NULL,
     status INTEGER NOT NULL,
     error_msg TEXT DEFAULT NULL,
     PRIMARY KEY (task_uuid, seq, create_time),
     FOREIGN KEY (task_uuid) REFERENCES tasks (uuid),
-    FOREIGN KEY (preserved_source_state_id) REFERENCES task_source_state (id),
+    FOREIGN KEY (locked_source_state_id) REFERENCES locked_source_state (id),
     UNIQUE(task_uuid, seq)
 );
+
+CREATE TABLE IF NOT EXISTS folder_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_uuid TEXT NOT NULL,
+    checkpoint_seq INTEGER NOT NULL,
+    checkpoint_create_time INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    file_type INTEGER NOT NULL,
+    file_size INTEGER DEFAULT 0,
+    attributes TEXT NOT NULL,
+    update_action INTEGER DEFAULT NULL,
+    FOREIGN KEY (task_uuid, checkpoint_seq, checkpoint_create_time) REFERENCES checkpoints(task_uuid, seq, create_time),
+    UNIQUE (task_uuid, checkpoint_seq, checkpoint_create_time, file_path)
+)
+
+CREATE TABLE IF NOT EXISTS folder_file_custom_diffs (
+    file_id INTEGER PRIMARY KEY,
+    diff_size INTEGER NOT NULL,
+    diff_header TEXT NOT NULL,
+    FOREIGN KEY (file_id) REFERENCES folder_files(id)
+)
+
+CREATE TABLE IF NOT EXISTS folder_file_default_diffs (
+    file_id INTEGER PRIMARY KEY,
+    original_begin INTEGER NOT NULL,
+    original_end INTEGER DEFAULT NULL,
+    new_begin INTEGER NOT NULL,
+    new_end INTEGER DEFAULT NULL,
+    FOREIGN KEY (file_id) REFERENCES folder_files(id),
+    UNIQUE(file_id, original_begin),
+    UNIQUE(file_id, original_end),
+    UNIQUE(file_id, new_begin),
+    UNIQUE(file_id, new_end)
+)
+
+CREATE TABLE IF NOT EXISTS folder_file_links (
+    file_id INTEGER PRIMARY KEY,
+    target TEXT NOT NULL,
+    is_hard INTEGER DEFAULT 0,
+    FOREIGN KEY (file_id) REFERENCES folder_files(id)
+)
+
+-- `hash` and `size` will be set when the chunk is filled complete. 
+CREATE TABLE IF NOT EXISTS chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_uuid TEXT NOT NULL,
+    checkpoint_seq INTEGER NOT NULL,
+    checkpoint_create_time INTEGER NOT NULL,
+    chunk_hash TEXT DEFAULT NULL,
+    size INTEGER DEFAULT 0,
+    FOREIGN KEY (task_uuid, checkpoint_seq, checkpoint_create_time) REFERENCES checkpoints(task_uuid, checkpoint_seq, checkpoint_create_time),
+    UNIQUE(chunk_hash)
+)
+
+CREATE TABLE IF NOT EXISTS chunk_files (
+    chunk_file_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chunk_id INTEGER NOT NULL,
+    file_path TEXT NOT NULL,
+    file_type INTEGER NOT NULL,
+    attributes TEXT NOT NULL,
+    update_action INTEGER DEFAULT NULL,
+    FOREIGN KEY (chunk_id) REFERENCES chunks(id),
+    UNIQUE(chunk_id, file_path)
+)
+
+CREATE TABLE IF NOT EXISTS chunk_blocks (
+    chunk_file_id INTEGER PRIMARY KEY,
+    file_size INTEGER DEFAULT 0,
+    diff_size INTEGER DEFAULT NULL,
+    block_size INTEGER DEFAULT 0,
+    chunk_pos INTEGER NOT NULL,
+    file_offset INTEGER NOT NULL,
+    FOREIGN KEY (chunk_file_id) REFERENCES chunk_files(chunk_file_id),
+)
+
+CREATE TABLE IF NOT EXISTS chunk_links (
+    chunk_file_id INTEGER PRIMARY KEY,
+    target TEXT NOT NULL,
+    is_hard INTEGER DEFAULT 0,
+    FOREIGN KEY (chunk_file_id) REFERENCES chunk_files(chunk_file_id),
+)
 
 -- create table `checkpoint_transfer_map` with the following columns:
 -- task_uuid: String,

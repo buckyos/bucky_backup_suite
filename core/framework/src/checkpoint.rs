@@ -172,7 +172,7 @@ pub enum FolderItemContentReader {
 
 pub struct FolderReader {
     size: u64,
-    stat: StorageItemAttributes,
+    attr: StorageItemAttributes,
     path: PathBuf,
     reader: Option<FolderItemContentReader>,
 }
