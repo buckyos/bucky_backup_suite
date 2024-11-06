@@ -1,27 +1,27 @@
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::path::Path;
 
 use crate::{
-    checkpoint::{CheckPointInfo, CheckPointStatus, ChunkTransferInfo},
+    checkpoint::{CheckPointInfo, CheckPointStatus},
     engine::{
         EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter, ListTaskFilter,
         SourceId, SourceInfo, SourceQueryBy, TargetId, TargetInfo, TargetQueryBy, TaskUuid,
     },
     error::BackupResult,
-    meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
-    task::{ListCheckPointFilter, ListPreservedSourceStateFilter, SourceState, TaskInfo},
+    meta::{
+        CheckPointVersion, ChunkId, ChunkInfo, ChunkItem, DefaultFileDiffBlock, FolderItem,
+        LockedSourceStateId,
+    },
+    task::{ListCheckPointFilter, SourceState, TaskInfo},
 };
 
 pub trait Storage:
     StorageSourceMgr
     + StorageTargetMgr
     + StorageTaskMgr
-    + StorageSourceStateMgr
+    + StorageLockedSourceStateMgr
     + StorageCheckPointMgr
-    + StorageCheckPointTransferMapMgr
-    + StorageCheckPointKeyValueMgr
+    + StorageFolderFileMgr
+    + StorageChunkMgr
     + StorageConfig
 {
 }
@@ -94,9 +94,6 @@ pub trait StorageTargetMgr: Send + Sync {
 pub trait StorageTaskMgr: Send + Sync {
     async fn create_task(&self, task_info: &TaskInfo) -> BackupResult<()>;
 
-    async fn set_delete_flag(&self, by: &FindTaskBy, is_delete_on_target: bool)
-        -> BackupResult<()>;
-
     async fn delete_task(&self, by: &FindTaskBy) -> BackupResult<()>;
 
     async fn list_task(
@@ -119,30 +116,30 @@ pub trait StorageConfig: Send + Sync {
 }
 
 #[async_trait::async_trait]
-pub trait StorageSourceStateMgr: Send + Sync {
+pub trait StorageLockedSourceStateMgr: Send + Sync {
     async fn new_state(
         &self,
         task_uuid: &TaskUuid,
         original_state: Option<&str>,
-    ) -> BackupResult<PreserveStateId>;
+    ) -> BackupResult<LockedSourceStateId>;
 
-    async fn preserved_state(
+    async fn locked_state(
         &self,
-        state_id: PreserveStateId,
-        preserved_state: Option<&str>,
+        state_id: LockedSourceStateId,
+        locked_state: Option<&str>,
     ) -> BackupResult<()>;
 
-    async fn state(&self, state_id: PreserveStateId) -> BackupResult<SourceState>;
+    async fn state(&self, state_id: LockedSourceStateId) -> BackupResult<SourceState>;
 
-    async fn list_preserved_source_states(
-        &self,
-        task_uuid: &TaskUuid,
-        filter: ListPreservedSourceStateFilter,
-        offset: ListOffset,
-        limit: u32,
-    ) -> BackupResult<Vec<(PreserveStateId, SourceState)>>;
+    // async fn list_locked_source_states(
+    //     &self,
+    //     task_uuid: &TaskUuid,
+    //     filter: ListLockedSourceStateFilter,
+    //     offset: ListOffset,
+    //     limit: u32,
+    // ) -> BackupResult<Vec<(LockedSourceStateId, SourceState)>>;
 
-    async fn delete_source_state(&self, state_id: PreserveStateId) -> BackupResult<()>;
+    async fn delete_source_state(&self, state_id: LockedSourceStateId) -> BackupResult<()>;
 }
 
 #[async_trait::async_trait]
@@ -150,16 +147,8 @@ pub trait StorageCheckPointMgr: Send + Sync {
     async fn create_checkpoint(
         &self,
         task_uuid: &TaskUuid,
-        preserved_source_id: Option<PreserveStateId>, // It will be lost for `None`
-        meta: &CheckPointMetaEngine,
+        locked_source_id: Option<LockedSourceStateId>, // It will be lost for `None`
     ) -> BackupResult<CheckPointVersion>;
-
-    async fn set_delete_flag(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        is_delete_on_target: bool,
-    ) -> BackupResult<()>;
 
     async fn delete_checkpoint(
         &self,
@@ -178,16 +167,8 @@ pub trait StorageCheckPointMgr: Send + Sync {
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
         status: CheckPointStatus,
-    ) -> BackupResult<()>;
-
-    // Maybe formated by the target in special way.
-    // Save in string to avoid it changed by encode/decode.
-    async fn save_target_meta(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        meta: &[&str],
-    ) -> BackupResult<()>;
+        old_status: CheckPointStatus,
+    ) -> BackupResult<CheckPointStatus>;
 
     async fn list_checkpoints(
         &self,
@@ -195,232 +176,146 @@ pub trait StorageCheckPointMgr: Send + Sync {
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<CheckPointInfo<CheckPointMetaEngine>>>;
+    ) -> BackupResult<Vec<CheckPointInfo>>;
 
     async fn query_checkpoint(
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
-    ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>>;
+    ) -> BackupResult<Option<CheckPointInfo>>;
 }
 
-pub struct QueryTransferMapFilterItem<'a> {
-    pub path: &'a Path,
-    pub offset: u64,
-    pub length: u64,
+pub type FileSeq = u64;
+
+pub struct ListFolderFileFilter<'a> {
+    path: Option<&'a Path>,
+    parent: Option<&'a Path>,
+    min_seq: Option<FileSeq>,
+    max_seq: Option<FileSeq>,
+    version: Option<CheckPointVersion>,
 }
 
-pub struct QueryTransferMapFilter<'a> {
-    pub items: Option<Vec<QueryTransferMapFilterItem<'a>>>,
-    pub target_addresses: Option<Vec<&'a [u8]>>,
-}
-
-#[async_trait::async_trait]
-pub trait StorageCheckPointTransferMapMgr: Send + Sync {
-    // target_address: Where this chunk has been transferred to. users can get it from here.
-    // but it should be parsed by the `target` for specific protocol.
-    // the developer should remove the conflicting scope to update the transfer map.
-    async fn add_transfer_map(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        item_path: &Path,
-        target_address: Option<&[u8]>,
-        info: &ChunkTransferInfo,
-    ) -> BackupResult<u64>;
-
-    async fn query_transfer_map<'a>(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        filter: QueryTransferMapFilter<'a>,
-    ) -> BackupResult<HashMap<PathBuf, HashMap<Vec<u8>, Vec<ChunkTransferInfo>>>>; // <item-path, <target-address, ChunkTransferInfo>>
+pub struct ListDefaultDiffBlockFilter {
+    min_original_offset: Option<u64>,
+    min_new_file_offset: Option<u64>,
+    min_diff_file_offset: Option<u64>,
 }
 
 #[async_trait::async_trait]
-pub trait StorageCheckPointKeyValueMgr: Send + Sync {
-    async fn add_value(
+pub trait StorageFolderFileMgr: Send + Sync {
+    async fn add_file(
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
-        key: &str,
-        value: &[u8],
-        is_replace: bool,
-    ) -> BackupResult<()>;
-    async fn get_value(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        key: &str,
-    ) -> BackupResult<Option<Vec<u8>>>;
-}
+        file_meta: &FolderItem,
+    ) -> BackupResult<FileSeq>;
 
-#[async_trait::async_trait]
-pub trait StorageCheckPointMgrSql: Send + Sync {
-    async fn create_checkpoint(
-        &self,
-        task_uuid: &TaskUuid,
-        preserved_source_id: PreserveStateId,
-        meta: &str,
-    ) -> BackupResult<CheckPointVersion>;
-
-    async fn set_delete_flag(
+    async fn delete_files(
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
-        is_delete_on_target: bool,
+        filter: ListFolderFileFilter<'_>,
+    ) -> BackupResult<u32>;
+
+    async fn add_default_diff_block(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        file_path: &Path,
+        diff_block: &DefaultFileDiffBlock,
     ) -> BackupResult<()>;
 
-    async fn delete_checkpoint(
+    async fn list_file(
         &self,
         task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-    ) -> BackupResult<()>;
-
-    async fn start_checkpoint_only_once_per_preserved_source(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-    ) -> BackupResult<()>;
-
-    async fn update_status(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        status: CheckPointStatus,
-    ) -> BackupResult<()>;
-
-    // Maybe formated by the target in special way.
-    // Save in string to avoid it changed by encode/decode.
-    async fn save_target_meta(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        meta: &[&str],
-    ) -> BackupResult<()>;
-
-    async fn list_checkpoints(
-        &self,
-        task_uuid: &TaskUuid,
-        filter: &ListCheckPointFilter,
-        offset: ListOffset,
+        filter: ListFolderFileFilter<'_>,
+        offset: u32,
         limit: u32,
-    ) -> BackupResult<Vec<CheckPointInfo<CheckPointMetaEngine>>>;
+    ) -> BackupResult<Vec<FolderItem>>;
 
-    async fn query_checkpoint(
+    async fn list_default_diff_blocks(
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
-    ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>>;
+        file_path: &Path,
+        filter: &ListDefaultDiffBlockFilter,
+    ) -> BackupResult<Vec<DefaultFileDiffBlock>>;
+
+    async fn delete_default_diff_blocks(
+        &self,
+        task_uuid: &TaskUuid,
+        filter: &ListDefaultDiffBlockFilter,
+    ) -> BackupResult<u32>;
 }
 
-#[async_trait::async_trait]
-pub trait StorageCheckPointItemMgrSql: Send + Sync {
-    async fn insert_item(
+pub struct ListChunkFilter {
+    chunk_id: Option<ChunkId>,
+    version: Option<CheckPointVersion>,
+    min_chunk_id: Option<ChunkId>,
+    max_chunk_id: Option<ChunkId>,
+}
+
+pub struct ListChunkFileFilter<'a> {
+    path: Option<&'a Path>,
+    chunk_id: Option<ChunkId>,
+    verion: Option<CheckPointVersion>,
+}
+
+pub trait StorageChunkMgr: Send + Sync {
+    async fn new_chunk(
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
-        item_path: &[u8],
+        compress: Option<&str>,
+    ) -> BackupResult<ChunkId>;
+
+    async fn delete_chunks(
+        &self,
+        task_uuid: &TaskUuid,
+        filter: &ListChunkFilter,
+    ) -> BackupResult<u32>;
+
+    async fn finish_chunk(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        chunk_id: ChunkId,
+        hash: &str,
+        size: u64,
     ) -> BackupResult<()>;
-    async fn remove_items(
+
+    async fn list_chunks(
+        &self,
+        task_uuid: &TaskUuid,
+        filter: &ListChunkFilter,
+        offset: u32,
+        limit: u32,
+    ) -> BackupResult<Vec<ChunkInfo>>;
+
+    async fn add_chunk_file(
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
-    ) -> BackupResult<usize>;
+        file: &ChunkItem,
+    ) -> BackupResult<()>;
+
+    async fn delete_chunk_file(
+        &self,
+        task_uuid: &TaskUuid,
+        filter: ListChunkFileFilter<'_>,
+    ) -> BackupResult<u32>;
+
+    async fn list_chunk_file(
+        &self,
+        task_uuid: &TaskUuid,
+        filter: ListChunkFileFilter<'_>,
+        offset: u32,
+        limit: u32,
+    ) -> BackupResult<Vec<ChunkItem>>;
 }
 
 #[async_trait::async_trait]
 pub trait StorageTransaction: Send + Sync {
     async fn start_transaction(&self) -> BackupResult<()>;
     async fn commit_transaction(&self) -> BackupResult<()>;
-}
-
-#[async_trait::async_trait]
-impl<T> StorageCheckPointMgr for T
-where
-    T: StorageCheckPointMgrSql + StorageCheckPointItemMgrSql + StorageTransaction,
-{
-    async fn create_checkpoint(
-        &self,
-        task_uuid: &TaskUuid,
-        preserved_source_id: Option<PreserveStateId>,
-        meta: &CheckPointMetaEngine,
-    ) -> BackupResult<CheckPointVersion> {
-        self.start_transaction().await?;
-        // TODO: insert checkpoint
-        // insert items
-        self.commit_transaction().await?;
-        unimplemented!()
-    }
-
-    async fn set_delete_flag(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        is_delete_on_target: bool,
-    ) -> BackupResult<()> {
-        StorageCheckPointMgrSql::set_delete_flag(self, task_uuid, version, is_delete_on_target)
-            .await
-    }
-
-    async fn delete_checkpoint(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-    ) -> BackupResult<()> {
-        self.start_transaction().await?;
-        // TODO: delete items
-        // delete checkpoint
-        self.commit_transaction().await?;
-        unimplemented!()
-    }
-
-    async fn start_checkpoint_only_once_per_preserved_source(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-    ) -> BackupResult<()> {
-        StorageCheckPointMgrSql::start_checkpoint_only_once_per_preserved_source(
-            self, task_uuid, version,
-        )
-        .await
-    }
-
-    async fn update_status(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        status: CheckPointStatus,
-    ) -> BackupResult<()> {
-        StorageCheckPointMgrSql::update_status(self, task_uuid, version, status).await
-    }
-
-    // Maybe formated by the target in special way.
-    // Save in string to avoid it changed by encode/decode.
-    async fn save_target_meta(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        meta: &[&str],
-    ) -> BackupResult<()> {
-        StorageCheckPointMgrSql::save_target_meta(self, task_uuid, version, meta).await
-    }
-
-    async fn list_checkpoints(
-        &self,
-        task_uuid: &TaskUuid,
-        filter: &ListCheckPointFilter,
-        offset: ListOffset,
-        limit: u32,
-    ) -> BackupResult<Vec<CheckPointInfo<CheckPointMetaEngine>>> {
-        StorageCheckPointMgrSql::list_checkpoints(self, task_uuid, filter, offset, limit).await
-    }
-
-    async fn query_checkpoint(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-    ) -> BackupResult<Option<CheckPointInfo<CheckPointMetaEngine>>> {
-        StorageCheckPointMgrSql::query_checkpoint(self, task_uuid, version).await
-    }
 }

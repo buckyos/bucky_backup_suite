@@ -9,7 +9,7 @@ use base58::ToBase58;
 use tokio::sync::RwLock;
 
 use crate::{
-    checkpoint::{CheckPoint, CheckPointInfo, CheckPointStatus, ChunkTransferInfo},
+    checkpoint::{CheckPoint, CheckPointStatus},
     checkpoint_impl::{CheckPointImpl, CheckPointWrapper},
     engine::{
         Config, EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter,
@@ -18,22 +18,19 @@ use crate::{
     },
     error::{BackupError, BackupResult},
     handle_error,
-    meta::{CheckPointMetaEngine, CheckPointVersion, PreserveStateId},
-    source::{Source, SourceFactory, SourcePreserved, SourceTask},
+    meta::{CheckPointMetaEngine, CheckPointVersion, LockedSourceStateId},
+    source::{LockedSource, Source, SourceFactory, SourceTask},
     source_wrapper::{SourcePreservedWrapper, SourceTaskWrapper, SourceWrapper},
     storage::{QueryTransferMapFilter, Storage, StorageSourceMgr, StorageTargetMgr},
-    target::{Target, TargetCheckPoint, TargetEngine, TargetFactory, TargetTask},
+    target::{Target, TargetCheckPoint, TargetFactory, TargetTask},
     target_wrapper::{TargetCheckPointWrapper, TargetTaskWrapper, TargetWrapper},
-    task::{
-        HistoryStrategy, ListCheckPointFilter, ListPreservedSourceStateFilter, SourceState, Task,
-        TaskInfo,
-    },
+    task::{HistoryStrategy, ListCheckPointFilter, SourceState, Task, TaskInfo},
     task_impl::{TaskImpl, TaskWrapper},
 };
 
 struct SourceTaskCache {
     source_task: Arc<Box<dyn SourceTask>>,
-    source_preserveds: HashMap<PreserveStateId, Arc<Box<dyn SourcePreserved>>>,
+    source_preserveds: HashMap<LockedSourceStateId, Arc<Box<dyn LockedSource>>>,
 }
 
 struct SourceCache {
@@ -42,12 +39,12 @@ struct SourceCache {
 }
 
 struct TargetTaskCache {
-    target_task: Arc<Box<dyn TargetTask<String, String, String, String, String>>>,
+    target_task: Arc<Box<dyn TargetTask>>,
     target_checkpoints: HashMap<CheckPointVersion, Arc<Box<dyn TargetCheckPoint>>>,
 }
 
 struct TargetCache {
-    target: Arc<Box<dyn Target<String, String, String, String, String>>>,
+    target: Arc<Box<dyn Target>>,
     target_tasks: HashMap<TaskUuid, TargetTaskCache>,
 }
 
@@ -60,7 +57,7 @@ struct TaskCache {
 pub struct Engine {
     meta_storage: Arc<Box<dyn Storage>>,
     source_factory: Arc<Box<dyn SourceFactory>>,
-    target_factory: Arc<Box<dyn TargetFactory<String, String, String, String, String>>>,
+    target_factory: Arc<Box<dyn TargetFactory>>,
     sources: Arc<RwLock<HashMap<SourceId, SourceCache>>>,
     targets: Arc<RwLock<HashMap<TargetId, TargetCache>>>,
     config: Arc<RwLock<Option<EngineConfig>>>,
@@ -71,7 +68,7 @@ impl Engine {
     pub fn new(
         meta_storage: Box<dyn Storage>,
         source_factory: Box<dyn SourceFactory>,
-        target_factory: Box<dyn TargetFactory<String, String, String, String, String>>,
+        target_factory: Box<dyn TargetFactory>,
     ) -> Self {
         Self {
             meta_storage: Arc::new(meta_storage),
@@ -267,7 +264,7 @@ impl Engine {
     pub(crate) async fn get_target_impl(
         &self,
         by: &TargetQueryBy,
-    ) -> BackupResult<Option<Arc<Box<dyn Target<String, String, String, String, String>>>>> {
+    ) -> BackupResult<Option<Arc<Box<dyn Target>>>> {
         {
             let cache = self.targets.read().await;
             match by {
@@ -321,7 +318,7 @@ impl Engine {
         &self,
         target_id: TargetId,
         task_uuid: &TaskUuid,
-    ) -> BackupResult<Arc<Box<dyn TargetTask<String, String, String, String, String>>>> {
+    ) -> BackupResult<Arc<Box<dyn TargetTask>>> {
         loop {
             {
                 // read from cache

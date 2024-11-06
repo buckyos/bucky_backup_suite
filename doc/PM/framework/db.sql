@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     priority INTEGER NOT NULL,
     history_strategy TEXT DEFAULT NULL,
     flag INTEGER DEFAULT 0,
+    is_delete_from_target INTEGER DEFAULT NULL,
     FOREIGN KEY (source_id) REFERENCES sources (id),
     FOREIGN KEY (target_id) REFERENCES targets (id)
 );
@@ -103,10 +104,13 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     task_uuid TEXT NOT NULL,
     seq INTEGER NOT NULL,
     create_time INTEGER NOT NULL,
+    prev_version_seq INTEGER DEFAULT NULL,
+    prev_version_create_time INTEGER DEFAULT NULL,
     last_status_changed_time INTEGER NOT NULL,
     locked_source_state_id INTEGER NOT NULL,
     status INTEGER NOT NULL,
     error_msg TEXT DEFAULT NULL,
+    complete_time INTEGER DEFAULT NULL,
     PRIMARY KEY (task_uuid, seq, create_time),
     FOREIGN KEY (task_uuid) REFERENCES tasks (uuid),
     FOREIGN KEY (locked_source_state_id) REFERENCES locked_source_state (id),
@@ -118,33 +122,35 @@ CREATE TABLE IF NOT EXISTS folder_files (
     task_uuid TEXT NOT NULL,
     checkpoint_seq INTEGER NOT NULL,
     checkpoint_create_time INTEGER NOT NULL,
+    parent_id INTEGER DEFAULT NULL,
     file_path TEXT NOT NULL,
     file_type INTEGER NOT NULL,
     file_size INTEGER DEFAULT 0,
     attributes TEXT NOT NULL,
     update_action INTEGER DEFAULT NULL,
     FOREIGN KEY (task_uuid, checkpoint_seq, checkpoint_create_time) REFERENCES checkpoints(task_uuid, seq, create_time),
+    FOREIGN KEY (parent_id) REFERENCES folder_files(id),
     UNIQUE (task_uuid, checkpoint_seq, checkpoint_create_time, file_path)
 )
 
 CREATE TABLE IF NOT EXISTS folder_file_custom_diffs (
     file_id INTEGER PRIMARY KEY,
-    diff_size INTEGER NOT NULL,
+    diff_classify TEXT NOT NULL,
     diff_header TEXT NOT NULL,
     FOREIGN KEY (file_id) REFERENCES folder_files(id)
 )
 
-CREATE TABLE IF NOT EXISTS folder_file_default_diffs (
+CREATE TABLE IF NOT EXISTS folder_file_default_diff_blocks (
     file_id INTEGER PRIMARY KEY,
-    original_begin INTEGER NOT NULL,
-    original_end INTEGER DEFAULT NULL,
-    new_begin INTEGER NOT NULL,
-    new_end INTEGER DEFAULT NULL,
+    original_offset INTEGER NOT NULL,
+    original_len INTEGER DEFAULT NULL,
+    new_file_offset INTEGER DEFAULT NULL,
+    diff_file_offset INTEGER DEFAULT NULL,
+    new_len INTEGER DEFAULT NULL,
     FOREIGN KEY (file_id) REFERENCES folder_files(id),
-    UNIQUE(file_id, original_begin),
-    UNIQUE(file_id, original_end),
-    UNIQUE(file_id, new_begin),
-    UNIQUE(file_id, new_end)
+    UNIQUE(file_id, original_offset),
+    UNIQUE(file_id, new_file_offset),
+    UNIQUE(file_id, diff_file_offset)
 )
 
 CREATE TABLE IF NOT EXISTS folder_file_links (
@@ -162,6 +168,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     checkpoint_create_time INTEGER NOT NULL,
     chunk_hash TEXT DEFAULT NULL,
     size INTEGER DEFAULT 0,
+    compress TEXT DEFAULT NULL,
     FOREIGN KEY (task_uuid, checkpoint_seq, checkpoint_create_time) REFERENCES checkpoints(task_uuid, checkpoint_seq, checkpoint_create_time),
     UNIQUE(chunk_hash)
 )
@@ -170,10 +177,12 @@ CREATE TABLE IF NOT EXISTS chunk_files (
     chunk_file_id INTEGER PRIMARY KEY AUTOINCREMENT,
     chunk_id INTEGER NOT NULL,
     file_path TEXT NOT NULL,
+    parent_id INTEGER DEFAULT NULL,
     file_type INTEGER NOT NULL,
     attributes TEXT NOT NULL,
     update_action INTEGER DEFAULT NULL,
     FOREIGN KEY (chunk_id) REFERENCES chunks(id),
+    FOREIGN KEY (parent_id) REFERENCES chunk_files(chunk_file_id),
     UNIQUE(chunk_id, file_path)
 )
 
@@ -184,6 +193,7 @@ CREATE TABLE IF NOT EXISTS chunk_blocks (
     block_size INTEGER DEFAULT 0,
     chunk_pos INTEGER NOT NULL,
     file_offset INTEGER NOT NULL,
+    compressed_size INTEGER DEFAULT NULL,
     FOREIGN KEY (chunk_file_id) REFERENCES chunk_files(chunk_file_id),
 )
 

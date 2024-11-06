@@ -1,8 +1,16 @@
 use crate::{
-    checkpoint::{ItemId, StorageReader},
+    checkpoint::{ItemEnumerate, ItemId},
     engine::{SourceId, SourceInfo, TaskUuid},
     error::BackupResult,
+    meta::LockedSourceStateId,
 };
+
+pub enum SourceStatus {
+    StandBy,
+    Scaning,
+    Finish,
+    Failed,
+}
 
 #[async_trait::async_trait]
 pub trait SourceFactory: Send + Sync {
@@ -25,21 +33,23 @@ pub trait Source: Send + Sync {
 #[async_trait::async_trait]
 pub trait SourceTask: Send + Sync {
     fn task_uuid(&self) -> &TaskUuid;
-    // preserve
+
     async fn original_state(&self) -> BackupResult<Option<String>>;
     async fn lock_state(&self, original_state: &str) -> BackupResult<Option<String>>;
-    async fn restore_state(&self, original_state: &str) -> BackupResult<()>;
+    async fn unlock_state(&self, original_state: &str) -> BackupResult<()>;
 
     async fn locked_source(
         &self,
-        locked_state_id: LockedStateId,
+        locked_state_id: LockedSourceStateId,
         locked_state: Option<&str>,
     ) -> BackupResult<Box<dyn LockedSource>>;
 }
 
 #[async_trait::async_trait]
-pub trait LockedSource: StorageReader + Send + Sync {
-    fn locked_state_id(&self) -> LockedStateId;
+pub trait LockedSource: Send + Sync {
+    fn locked_state_id(&self) -> LockedSourceStateId;
     async fn prepare(&self) -> BackupResult<()>;
-    async fn item_iter(&self) -> BackupResult<futures::stream::Iter<ItemId>>;
+    async fn enumerate_item(&self) -> BackupResult<ItemEnumerate>;
+    async fn status(&self) -> BackupResult<SourceStatus>;
+    async fn wait_status<F>(&self) -> BackupResult<StatusWaitor<SourceStatus>>;
 }

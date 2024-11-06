@@ -1,16 +1,16 @@
 use std::{sync::Arc, time::SystemTime};
 
 use crate::{
-    checkpoint::{CheckPoint, CheckPointStatus},
+    checkpoint::{CheckPoint, CheckPointStatus, DeleteFromTarget},
     engine::{ListOffset, SourceId, TargetId, TaskUuid},
     error::{BackupError, BackupResult},
-    meta::{CheckPointVersion, PreserveStateId},
+    meta::{CheckPointVersion, LockedSourceStateId},
 };
 
 pub enum SourceState {
     None,
-    Original(Option<String>), // None if nothing for restore.
-    Preserved(Option<String>, Option<String>), // <original, preserved>
+    Original(Option<String>),               // None if nothing for restore.
+    Locked(Option<String>, Option<String>), // <original, locked>
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +26,7 @@ pub struct TaskInfo {
     pub history_strategy: HistoryStrategy,
     pub attachment: String, // The application can save any attachment with task.
     pub flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
+    pub is_delete: Option<DeleteFromTarget>,
 }
 
 pub enum ListCheckPointFilterTime {
@@ -44,10 +45,6 @@ pub trait Task<MetaType>: Send + Sync {
     async fn task_info(&self) -> BackupResult<TaskInfo>;
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()>;
 
-    // private
-    async fn lock_source(&self) -> BackupResult<()>;
-    async fn unlock_source(&self) -> BackupResult<()>;
-
     async fn create_checkpoint(
         &self,
         is_delta: bool,
@@ -64,7 +61,7 @@ pub trait Task<MetaType>: Send + Sync {
         &self,
         version: CheckPointVersion,
     ) -> BackupResult<Option<Arc<dyn CheckPoint<MetaType>>>>;
-    
+
     async fn remove_checkpoint(
         &self,
         version: CheckPointVersion,

@@ -11,8 +11,23 @@ use sha2::{Digest, Sha256};
 use crate::{
     engine::TaskUuid,
     error::{BackupError, BackupResult},
-    meta::{CheckPointVersion, PreserveStateId, StorageItemAttributes},
+    meta::{
+        CheckPointVersion, FileDiffHeader, FolderItemAttributes, LockedSourceStateId,
+        StorageItemAttributes,
+    },
 };
+
+#[derive(Clone)]
+pub struct CheckPointInfo {
+    pub task_uuid: String,
+    pub task_friendly_name: String,
+    pub version: CheckPointVersion,
+    pub prev_versions: Vec<CheckPointVersion>, // all versions this checkpoint depends on
+    pub complete_time: Option<SystemTime>,
+    pub locked_source_state_id: Option<LockedSourceStateId>,
+    pub status: CheckPointStatus,
+    pub last_status_changed_time: SystemTime,
+}
 
 pub enum PendingStatus {
     // operation has been post
@@ -28,6 +43,11 @@ pub enum PendingStatus {
 pub type SourcePendingStatus = PendingStatus;
 pub type TargetPendingStatus = PendingStatus;
 
+pub enum DeleteFromTarget {
+    Reserve,
+    Delete,
+}
+
 #[derive(Clone)]
 pub enum CheckPointStatus {
     Standby,
@@ -36,6 +56,7 @@ pub enum CheckPointStatus {
     Stop(SourcePendingStatus, TargetPendingStatus),
     Success,
     Failed(Option<BackupError>),
+    Delete(SourcePendingStatus, TargetPendingStatus, DeleteFromTarget),
 }
 
 pub enum PendingAttribute<A> {
@@ -89,7 +110,9 @@ pub trait CheckPoint<MetaType>: DirReader {
 
     async fn enumerate_or_generate_folder(
         &self,
-    ) -> BackupResult<futures::stream::Iter<Box<dyn FolderReader>>>;
+    ) -> BackupResult<futures::stream::Iter<FolderReader>>;
+
+    async fn enumerate_item(&self) -> BackupResult<ItemEnumerate>;
 
     async fn status(&self) -> BackupResult<CheckPointStatus>;
     async fn wait_status<F>(&self) -> BackupResult<StatusWaitor<CheckPointStatus>>;
@@ -111,23 +134,6 @@ impl DirChildType {
             DirChildType::Link(path) => path,
         }
     }
-}
-
-#[derive(Clone)]
-pub struct DefaultFileDiffHeader {
-    // todo: default file-diff header
-}
-
-#[derive(Clone)]
-pub struct CustomFileDiffHeader {
-    pub classify: String,
-    pub param: Vec<u8>,
-}
-
-#[derive(Clone)]
-pub enum FileDiffHeader {
-    Default(DefaultFileDiffHeader),
-    Custom(CustomFileDiffHeader),
 }
 
 #[derive(Clone)]
@@ -159,8 +165,8 @@ pub trait FileContentReader: Send + Sync {
 
 pub trait FileDiffContentReader: Send + Sync {
     async fn file_size(&self) -> BackupResult<u64>;
-    async fn get_header(&self) -> BackupResult<FileDiffHeader>;
     async fn read(&self, offset: u64, length: u32) -> BackupResult<Vec<u8>>;
+    async fn copy_to(&self, to: &Path) -> BackupResult<StatusWaitor<PendingStatus>>;
 }
 
 pub enum FolderItemContentReader {
@@ -172,7 +178,7 @@ pub enum FolderItemContentReader {
 
 pub struct FolderReader {
     size: u64,
-    attr: StorageItemAttributes,
+    attr: FolderItemAttributes,
     path: PathBuf,
     reader: Option<FolderItemContentReader>,
 }
@@ -233,4 +239,9 @@ pub trait ChunkReader: Send + Sync {
     async fn len(&self) -> BackupResult<u64>;
     async fn read(&self, offset: u64, length_limit: u32) -> BackupResult<Vec<u8>>;
     async fn copy_file_to(&self, to: &Path) -> BackupResult<StatusWaitor<PendingStatus>>;
+}
+
+pub enum ItemEnumerate {
+    Folder(futures::stream::Iter<FolderReader>),
+    Chunk(futures::stream::Iter<Box<dyn ChunkReader>>),
 }
