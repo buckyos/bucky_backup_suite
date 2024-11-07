@@ -1,2 +1,2 @@
 mod sector;
-pub use sector::*;
+mod server;

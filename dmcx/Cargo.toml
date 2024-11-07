@@ -3,8 +3,7 @@ resolver = "2"
 
 members = [
     "common", 
-    "user/journal",
-    "user/source"
+    "user",
 ]
 
 [profile.release]

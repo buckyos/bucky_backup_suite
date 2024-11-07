@@ -4,8 +4,8 @@ use dmc_tools_common::*;
 
 #[derive(Clone, Debug, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub enum SourceState {  
-    PreparingMerkle = 0,
-    PreparingStub = 1, 
+    PreparingLeafStub = 0, 
+    PreparingMerkle = 1, 
     Ready = 2, 
 }
 
@@ -27,8 +27,8 @@ impl TryFrom<u8> for SourceState {
     type Error = DmcError;
     fn try_from(code: u8) -> DmcResult<Self> {
         match code {
-            0 => Ok(Self::PreparingMerkle), 
-            1 => Ok(Self::PreparingStub), 
+            0 => Ok(Self::PreparingLeafStub), 
+            1 => Ok(Self::PreparingMerkle), 
             2 => Ok(Self::Ready), 
             _ => Err(DmcError::new(DmcErrorCode::InvalidData, format!("invalid sector state {}", code)))
         }
@@ -36,21 +36,12 @@ impl TryFrom<u8> for SourceState {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub enum SourceMerkleOptions {
-    Ready(DmcMerkleStub),
-    Prepare {
-        piece_size: u16
-    } 
+pub struct SourceMerkleOptions {
+    pub piece_size: u16, 
+    pub pieces_per_block: u16
+    
 }
 
-impl SourceMerkleOptions {
-    pub fn piece_size(&self) -> u16 {
-        match self {
-            SourceMerkleOptions::Ready(stub) => stub.piece_size,
-            SourceMerkleOptions::Prepare { piece_size } => *piece_size
-        }
-    }
-}
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct SourceStubOptions { 
@@ -75,7 +66,7 @@ pub struct SourceStub {
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
-pub struct MerklePathStub {
+pub struct MerkleBlockStub {
     pub source_id: u64, 
     pub index: u32, 
     pub content: Vec<u8>

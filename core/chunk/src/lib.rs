@@ -1,3 +1,4 @@
+#![allow(unused, dead_code)]
 mod error;
 mod chunk;
 mod target;

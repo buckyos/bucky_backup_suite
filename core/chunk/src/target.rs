@@ -17,7 +17,7 @@ pub trait ChunkTarget {
     /// 将数据写入目标存储
     async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl BufRead + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus>;
 
-    type Read: 'static + Read + Seek + Unpin;
+    type Read: 'static + Read + Seek + Unpin + Send + Sync;
     /// 从目标存储读取数据
     async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Self::Read>;
 

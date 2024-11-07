@@ -5,27 +5,20 @@ use std::{
 use async_std::{stream::StreamExt};
 use chrono::{DateTime, Utc};
 use serde::{Serialize, Deserialize};
-use tide::{Request, Response, Body};
+use tide::{Body, Request, Response, Server};
 
 use dmc_tools_common::*;
 #[cfg(feature = "sqlite")]
 use sqlx_sqlite as sqlx_types;
 #[cfg(feature = "mysql")]
 use sqlx_mysql as sqlx_types;
-use crate::{
+use super::{
     types::*
 };
 
 
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct JournalServerConfig {
-    pub host: String, 
-    pub sql_url: String, 
-}
-
 struct ServerImpl {
-    config: JournalServerConfig, 
     sql_pool: sqlx_types::SqlPool, 
 }
 
@@ -64,20 +57,21 @@ impl std::fmt::Display for JournalServer {
     }
 }
 
+pub trait AggregateJournalServer {
+    fn journal_server(&self) -> &JournalServer;
+}
+
 impl JournalServer {
-    pub async fn listen(self) -> DmcResult<()> {
-        let host = self.config().host.clone();        
-        let mut http_server = tide::with_state(self);
-    
-        http_server.at("/journal").post(|mut req: Request<Self>| async move {
+    pub async fn listen<T: 'static + AggregateJournalServer + Clone + Send + Sync>(http_server: &mut Server<T>) -> DmcResult<()> {
+        http_server.at("/journal").post(|mut req: Request<T>| async move {
             let event = req.body_json().await?;
             let mut resp = Response::new(200);
-            resp.set_body(Body::from_json(&req.state().append(event).await?)?);
+            resp.set_body(Body::from_json(&req.state().journal_server().append(event).await?)?);
             Ok(resp)
         });
     
-        http_server.at("/journal").get(|req: Request<Self>| async move {
-            debug!("{} http get {}", req.state(), req.url());
+        http_server.at("/journal").get(|req: Request<T>| async move {
+            debug!("{} http get {}", req.state().journal_server(), req.url());
 
             let mut query = JournalFilterAndNavigator::default();
             for (key, value) in req.url().query_pairs() {
@@ -85,10 +79,10 @@ impl JournalServer {
                     "event_type" => {
                         let event_type = u16::from_str_radix(&*value, 10)
                             .map_err(|err| {
-                                debug!("{} http get {}, value={}, err={}", req.state(), req.url(), &*value, err);
+                                debug!("{} http get {}, value={}, err={}", req.state().journal_server(), req.url(), &*value, err);
                                 err
                             })?.try_into().map_err(|err| {
-                                debug!("{} http get {}, value={}, err={}", req.state(), req.url(), &*value, err);
+                                debug!("{} http get {}, value={}, err={}", req.state().journal_server(), req.url(), &*value, err);
                                 err
                             })?;
                         if query.filter.event_type.is_none() {
@@ -100,27 +94,27 @@ impl JournalServer {
                     "source_id" => {
                         query.filter.source_id = Some(u64::from_str_radix(&*value, 10)
                             .map_err(|err| {
-                                debug!("{} http get {}, err={}", req.state(), req.url(), err);
+                                debug!("{} http get {}, err={}", req.state().journal_server(), req.url(), err);
                                 err
                             })?);
                     }
                     "order_id" => {
                         query.filter.order_id = Some(u64::from_str_radix(&*value, 10)
                             .map_err(|err| {
-                                debug!("{} http get {}, err={}", req.state(), req.url(), err);
+                                debug!("{} http get {}, err={}", req.state().journal_server(), req.url(), err);
                                 err
                             })?);
                     }
                     "page_size" => {
                         query.navigator.page_size = usize::from_str_radix(&*value, 10)
                             .map_err(|err| {
-                                debug!("{} http get {}, err={}", req.state(), req.url(), err);
+                                debug!("{} http get {}, err={}", req.state().journal_server(), req.url(), err);
                                 err
                             })?;
                     },
                     "from_id" => {
                         query.navigator.from_id = Some(u64::from_str_radix(&*value, 10) .map_err(|err| {
-                            debug!("{} http get {}, err={}", req.state(), req.url(), err);
+                            debug!("{} http get {}, err={}", req.state().journal_server(), req.url(), err);
                             err
                         })?);
                     }, 
@@ -128,23 +122,18 @@ impl JournalServer {
                 }
             }
             
-            // let query = req.query::<ContractFilterAndNavigator>()?;
             
             let mut resp = Response::new(200);
-            let logs = req.state().get(query.filter, query.navigator).await?;
+            let logs = req.state().journal_server().get(query.filter, query.navigator).await?;
             resp.set_body(Body::from_json(&logs)?);
             Ok(resp)
         });
 
-        let _ = http_server.listen(host.as_str()).await?;
-
         Ok(())
     }
 
-    pub async fn new(config: JournalServerConfig) -> DmcResult<Self> {
-        let sql_pool = sqlx_types::connect_pool(&config.sql_url).await?;
+    pub async fn with_sql_pool(sql_pool: sqlx_types::SqlPool) -> DmcResult<Self> {
         Ok(Self(Arc::new(ServerImpl {
-            config, 
             sql_pool,  
         })))
     }
@@ -165,10 +154,6 @@ impl JournalServer {
 
 
 impl JournalServer {
-    fn config(&self) -> &JournalServerConfig {
-        &self.0.config
-    }
-
     fn sql_pool(&self) -> &sqlx_types::SqlPool {
         &self.0.sql_pool
     }
