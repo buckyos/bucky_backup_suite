@@ -18,7 +18,7 @@ struct StoreImpl {
     base_path: String,
 }
 
-
+#[derive(Clone)]
 pub struct LocalStore(Arc<StoreImpl>);
 
 impl LocalStore {

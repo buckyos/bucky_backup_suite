@@ -8,6 +8,8 @@ pub enum ChunkError {
     Io(#[from] std::io::Error),
     #[error("HTTP Error: {0}")]
     Http(String),
+    #[error("数据库错误: {0}")]
+    Sqlx(#[from] sqlx::Error),
     #[error("unknown chunk error")]
     Unknown,
 }

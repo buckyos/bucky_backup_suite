@@ -1,2 +1,3 @@
-mod sector;
 mod server;
+
+pub use server::*;

@@ -16,3 +16,4 @@ async-std = { version = "1.12", features = ["attributes"] }
 surf = "2.3"  
 tide = "0.16" 
 http-types = '2.12'
+sqlx = { version = '0.6' }

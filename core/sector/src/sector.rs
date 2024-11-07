@@ -167,7 +167,7 @@ impl SectorBuilder {
         &self.chunks
     }
 
-    pub fn set_length_limit(&mut self, length_limit: u64) -> &mut Self {
+    pub fn set_length_limit(mut self, length_limit: u64) -> Self {
         if self.chunks.len() > 0 {
             assert!(false, "length_limit must be greater than the largest chunk");
             return self;
@@ -189,6 +189,10 @@ impl SectorBuilder {
         self.length += length;
         self.chunks.push((chunk_id, range.start..(range.start + length)));
         length
+    }
+
+    pub fn build(self) -> SectorMeta {
+        SectorMeta::new(None, self.chunks)
     }
 }
 

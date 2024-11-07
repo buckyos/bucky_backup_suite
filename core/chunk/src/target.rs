@@ -13,7 +13,7 @@ pub struct ChunkStatus {
 }
 
 #[async_trait]
-pub trait ChunkTarget {
+pub trait ChunkTarget: Send + Sync {
     /// 将数据写入目标存储
     async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl BufRead + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus>;
 
