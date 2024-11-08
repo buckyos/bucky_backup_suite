@@ -18,19 +18,19 @@ use crate::{
     },
     error::{BackupError, BackupResult},
     handle_error,
-    meta::{CheckPointMetaEngine, CheckPointVersion, LockedSourceStateId},
+    meta::{CheckPointVersion, LockedSourceStateId},
     source::{LockedSource, Source, SourceFactory, SourceTask},
-    source_wrapper::{SourcePreservedWrapper, SourceTaskWrapper, SourceWrapper},
-    storage::{QueryTransferMapFilter, Storage, StorageSourceMgr, StorageTargetMgr},
+    source_wrapper::{LockedSourceWrapper, SourceTaskWrapper, SourceWrapper},
+    storage::{ListLockedSourceStateFilter, Storage, StorageSourceMgr, StorageTargetMgr},
     target::{Target, TargetCheckPoint, TargetFactory, TargetTask},
     target_wrapper::{TargetCheckPointWrapper, TargetTaskWrapper, TargetWrapper},
-    task::{HistoryStrategy, ListCheckPointFilter, SourceState, Task, TaskInfo},
+    task::{HistoryStrategy, ListCheckPointFilter, SourceState, SourceStateInfo, Task, TaskInfo},
     task_impl::{TaskImpl, TaskWrapper},
 };
 
 struct SourceTaskCache {
     source_task: Arc<Box<dyn SourceTask>>,
-    source_preserveds: HashMap<LockedSourceStateId, Arc<Box<dyn LockedSource>>>,
+    source_lockeds: HashMap<LockedSourceStateId, Arc<Box<dyn LockedSource>>>,
 }
 
 struct SourceCache {
@@ -62,6 +62,7 @@ pub struct Engine {
     targets: Arc<RwLock<HashMap<TargetId, TargetCache>>>,
     config: Arc<RwLock<Option<EngineConfig>>>,
     tasks: Arc<RwLock<HashMap<TaskUuid, TaskCache>>>,
+    process_magic: u64,
 }
 
 impl Engine {
@@ -70,6 +71,7 @@ impl Engine {
         source_factory: Box<dyn SourceFactory>,
         target_factory: Box<dyn TargetFactory>,
     ) -> Self {
+        let magic: u32 = rand::random();
         Self {
             meta_storage: Arc::new(meta_storage),
             source_factory: Arc::new(source_factory),
@@ -78,7 +80,12 @@ impl Engine {
             targets: Arc::new(RwLock::new(HashMap::new())),
             config: Arc::new(RwLock::new(None)),
             tasks: Arc::new(RwLock::new(HashMap::new())),
+            process_magic: ((std::process::id() as u64) << 32) + magic,
         }
+    }
+
+    pub(crate) fn process_magic(&self) -> u64 {
+        self.process_magic
     }
 
     // should never call this function directly except `TaskWrapper`, use `Self::get_task` instead.
@@ -220,15 +227,14 @@ impl Engine {
                 }
             };
 
-            let source_task =
-                source
-                    .source_task(task.task_info().await?)
-                    .await
-                    .map_err(handle_error!(
-                        "get source task failed, source_id: {:?}, task_uuid: {}",
-                        source_id,
-                        task_uuid
-                    ))?;
+            let source_task = source
+                .source_task(task.uuid(), task.task_info().await?.source_entitiy.as_str())
+                .await
+                .map_err(handle_error!(
+                    "get source task failed, source_id: {:?}, task_uuid: {}",
+                    source_id,
+                    task_uuid
+                ))?;
 
             // insert into cache
             {
@@ -239,7 +245,7 @@ impl Engine {
                         *task_uuid,
                         SourceTaskCache {
                             source_task: source_task.clone(),
-                            source_preserveds: HashMap::new(),
+                            source_lockeds: HashMap::new(),
                         },
                     );
                     return Ok(source_task);
@@ -352,15 +358,14 @@ impl Engine {
                 }
             };
 
-            let target_task =
-                target
-                    .target_task(task.task_info().await?)
-                    .await
-                    .map_err(handle_error!(
-                        "get target task failed, target_id: {:?}, task_uuid: {}",
-                        target_id,
-                        task_uuid
-                    ))?;
+            let target_task = target
+                .target_task(task.uuid(), task.task_info().await?.target_entitiy.as_str())
+                .await
+                .map_err(handle_error!(
+                    "get target task failed, target_id: {:?}, task_uuid: {}",
+                    target_id,
+                    task_uuid
+                ))?;
 
             // insert into cache
             {
@@ -392,49 +397,65 @@ impl Engine {
             .map(|_| Arc::new(TargetTaskWrapper::new(target_id, *task_uuid, self.clone())))
     }
 
+    pub(crate) async fn new_source_state(
+        &self,
+        task_uuid: &TaskUuid,
+    ) -> BackupResult<LockedSourceStateId> {
+        self.meta_storage
+            .new_state(task_uuid, self.process_magic)
+            .await
+    }
+
     pub(crate) async fn save_source_original_state(
         &self,
-        task_uuid: &TaskUuid,
+        locked_state_id: LockedSourceStateId,
         original_state: Option<&str>,
-    ) -> BackupResult<PreserveStateId> {
-        self.meta_storage.new_state(task_uuid, original_state).await
-    }
-
-    pub(crate) async fn save_source_preserved_state(
-        &self,
-        preserved_state_id: PreserveStateId,
-        preserved_state: Option<&str>,
     ) -> BackupResult<()> {
         self.meta_storage
-            .preserved_state(preserved_state_id, preserved_state)
+            .original_state(locked_state_id, original_state)
             .await
     }
 
-    pub(crate) async fn delete_source_preserved_state(
+    pub(crate) async fn save_source_locked_state(
         &self,
-        preserved_state_id: PreserveStateId,
+        locked_state_id: LockedSourceStateId,
+        locked_state: Option<&str>,
     ) -> BackupResult<()> {
         self.meta_storage
-            .delete_source_state(preserved_state_id)
+            .locked_state(locked_state_id, locked_state)
             .await
     }
 
-    pub(crate) async fn load_source_preserved_state(
+    pub(crate) async fn delete_source_locked_state(
         &self,
-        preserved_state_id: PreserveStateId,
-    ) -> BackupResult<SourceState> {
-        self.meta_storage.state(preserved_state_id).await
+        filter: &ListLockedSourceStateFilter,
+    ) -> BackupResult<()> {
+        self.meta_storage.delete_source_state(filter).await
     }
 
-    pub(crate) async fn list_preserved_source_states(
+    pub(crate) async fn unlock_source_locked_state(
+        &self,
+        locked_state_id: LockedSourceStateId,
+    ) -> BackupResult<()> {
+        self.meta_storage.unlock_source_state(locked_state_id).await
+    }
+
+    pub(crate) async fn load_source_locked_state(
+        &self,
+        locked_state_id: LockedSourceStateId,
+    ) -> BackupResult<SourceStateInfo> {
+        self.meta_storage.state(locked_state_id).await
+    }
+
+    pub(crate) async fn list_locked_source_states(
         &self,
         task_uuid: &TaskUuid,
-        filter: ListPreservedSourceStateFilter,
+        filter: &ListLockedSourceStateFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<(PreserveStateId, SourceState)>> {
+    ) -> BackupResult<Vec<SourceStateInfo>> {
         self.meta_storage
-            .list_preserved_source_states(task_uuid, filter, offset, limit)
+            .list_locked_source_states(task_uuid, filter, offset, limit)
             .await
     }
 
@@ -454,12 +475,12 @@ impl Engine {
     pub(crate) async fn create_checkpoint_impl(
         &self,
         task_uuid: &TaskUuid,
-        preserved_source_id: Option<PreserveStateId>, // It will be lost for `None`
+        locked_source_id: Option<LockedSourceStateId>, // It will be lost for `None`
         meta: &mut CheckPointMetaEngine,
     ) -> BackupResult<Arc<CheckPointImpl>> {
         let version = self
             .meta_storage
-            .create_checkpoint(task_uuid, preserved_source_id, meta)
+            .create_checkpoint(task_uuid, locked_source_id, meta)
             .await?;
 
         meta.version = version;
@@ -485,7 +506,7 @@ impl Engine {
                         let checkpoint_info = CheckPointInfo::<CheckPointMetaEngine> {
                             meta: meta.clone(),
                             target_meta: None,
-                            preserved_source_state_id: preserved_source_id,
+                            locked_source_state_id: locked_source_id,
                             status: CheckPointStatus::Standby,
                             last_status_changed_time: SystemTime::now(),
                         };
@@ -502,11 +523,11 @@ impl Engine {
     pub(crate) async fn create_checkpoint(
         &self,
         task_uuid: &TaskUuid,
-        preserved_source_id: Option<PreserveStateId>, // It will be lost for `None`
+        locked_source_id: Option<LockedSourceStateId>, // It will be lost for `None`
         meta: &mut CheckPointMetaEngine,
     ) -> BackupResult<Arc<CheckPointWrapper>> {
         let checkpoint = self
-            .create_checkpoint_impl(task_uuid, preserved_source_id, meta)
+            .create_checkpoint_impl(task_uuid, locked_source_id, meta)
             .await?;
         Ok(Arc::new(CheckPointWrapper::new(
             *task_uuid,
@@ -638,23 +659,23 @@ impl Engine {
             })
     }
 
-    // load `SourcePreserved` from cache or `meta_storage`, is similar to `get_source_task_impl`.
-    pub(crate) async fn get_source_preserved_impl(
+    // load `LockedSource` from cache or `meta_storage`, is similar to `get_source_task_impl`.
+    pub(crate) async fn get_source_locked_impl(
         &self,
         source_id: SourceId,
         task_uuid: &TaskUuid,
-        preserved_state_id: PreserveStateId,
-    ) -> BackupResult<Arc<Box<dyn SourcePreserved>>> {
+        locked_state_id: LockedSourceStateId,
+    ) -> BackupResult<Arc<Box<dyn LockedSource>>> {
         loop {
             {
                 // read from cache
                 let cache = self.sources.read().await;
                 if let Some(source) = cache.get(&source_id) {
                     if let Some(source_task) = source.source_tasks.get(task_uuid) {
-                        if let Some(source_preserved) =
-                            source_task.source_preserveds.get(&preserved_state_id)
+                        if let Some(source_locked) =
+                            source_task.source_lockeds.get(&locked_state_id)
                         {
-                            return Ok(source_preserved.clone());
+                            return Ok(source_locked.clone());
                         }
                     }
                 }
@@ -676,17 +697,17 @@ impl Engine {
                 )));
             };
 
-            let preserved_state = self.load_source_preserved_state(preserved_state_id).await?;
-            if let SourceState::Preserved(_, perserved_state) = preserved_state {
+            let locked_state = self.load_source_locked_state(locked_state_id).await?;
+            if let SourceState::Locked(_, locked_state) = locked_state {
                 let source_task = self.get_source_task_impl(source_id, task_uuid).await?;
-                let source_preserved = source_task
-                    .source_preserved(preserved_state_id, perserved_state.as_deref())
+                let source_locked = source_task
+                    .source_locked(locked_state_id, locked_state.as_deref())
                     .await
                     .map_err(handle_error!(
-                        "create source preserved failed, source_id: {:?}, task_uuid: {}, state_id: {:?}",
+                        "create source locked failed, source_id: {:?}, task_uuid: {}, state_id: {:?}",
                         source_id,
                         task_uuid,
-                        preserved_state_id
+                        locked_state_id
                     ))?;
 
                 // insert into cache
@@ -694,12 +715,12 @@ impl Engine {
                     let mut cache = self.sources.write().await;
                     if let Some(source) = cache.get_mut(&source_id) {
                         if let Some(source_task) = source.source_tasks.get_mut(task_uuid) {
-                            let source_preserved = source_task
-                                .source_preserveds
-                                .entry(preserved_state_id)
-                                .or_insert_with(|| Arc::new(source_preserved))
+                            let source_locked = source_task
+                                .source_lockeds
+                                .entry(locked_state_id)
+                                .or_insert_with(|| Arc::new(source_locked))
                                 .clone();
-                            return Ok(source_preserved);
+                            return Ok(source_locked);
                         } else {
                             // source task maybe remove from the cache by other thread, retry it.
                         }
@@ -709,33 +730,33 @@ impl Engine {
                 }
             } else {
                 return Err(BackupError::ErrorState(format!(
-                    "source preserved state({:?}) is not preserved.",
-                    preserved_state_id
+                    "source locked state({:?}) is not locked.",
+                    locked_state_id
                 )));
             }
         }
     }
 
-    // get_source_preserved
-    pub(crate) async fn get_source_preserved(
+    // get_source_locked
+    pub(crate) async fn get_source_locked(
         &self,
         source_id: SourceId,
         task_uuid: &TaskUuid,
-        preserved_state_id: PreserveStateId,
-    ) -> BackupResult<Arc<SourcePreservedWrapper>> {
-        self.get_source_preserved_impl(source_id, task_uuid, preserved_state_id)
+        locked_state_id: LockedSourceStateId,
+    ) -> BackupResult<Arc<LockedSourceWrapper>> {
+        self.get_source_locked_impl(source_id, task_uuid, locked_state_id)
             .await
             .map(|_| {
-                Arc::new(SourcePreservedWrapper::new(
+                Arc::new(LockedSourceWrapper::new(
                     source_id,
                     *task_uuid,
-                    preserved_state_id,
+                    locked_state_id,
                     self.clone(),
                 ))
             })
     }
 
-    // get_target_checkpoint_impl, similar to `get_source_preserved_impl`.
+    // get_target_checkpoint_impl, similar to `get_source_locked_impl`.
     pub(crate) async fn get_target_checkpoint_impl(
         &self,
         target_id: TargetId,
@@ -869,7 +890,7 @@ impl Engine {
         version: CheckPointVersion,
     ) -> BackupResult<()> {
         self.meta_storage
-            .start_checkpoint_only_once_per_preserved_source(task_uuid, version)
+            .start_checkpoint_only_once_per_locked_source(task_uuid, version)
             .await
     }
 

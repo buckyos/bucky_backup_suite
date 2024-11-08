@@ -3,14 +3,24 @@ use std::{sync::Arc, time::SystemTime};
 use crate::{
     checkpoint::{CheckPoint, CheckPointStatus, DeleteFromTarget},
     engine::{ListOffset, SourceId, TargetId, TaskUuid},
-    error::{BackupError, BackupResult},
+    error::BackupResult,
     meta::{CheckPointVersion, LockedSourceStateId},
 };
 
 pub enum SourceState {
     None,
-    Original(Option<String>),               // None if nothing for restore.
-    Locked(Option<String>, Option<String>), // <original, locked>
+    Original,
+    Locked,
+    ConsumeCheckPoint(CheckPointVersion),
+    Unlocked(Option<CheckPointVersion>),
+}
+
+pub struct SourceStateInfo {
+    pub id: LockedSourceStateId,
+    pub state: SourceState,
+    pub original: Option<String>,
+    pub locked_state: Option<String>,
+    pub creator_magic: u64,
 }
 
 #[derive(Debug, Clone)]

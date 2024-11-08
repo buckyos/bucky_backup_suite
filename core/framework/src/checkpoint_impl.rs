@@ -143,6 +143,104 @@ impl CheckPointImpl {
             tokio::runtime::Handle::current().block_on(async move { info.read().await.clone() })
         })
     }
+    // async fn preserve(&self) -> BackupResult<LockedSourceStateId> {
+    //     let org_state = self.source.original_state().await?;
+    //     let state_id = self
+    //         .egnine
+    //         .save_source_original_state(&self.info.uuid, org_state.as_deref())
+    //         .await?;
+    //     let preserved_state = match org_state {
+    //         Some(org_state) => self.source.preserved_state(org_state.as_str()).await?,
+    //         None => None,
+    //     };
+    //     self.egnine
+    //         .save_source_preserved_state(state_id, preserved_state.as_deref())
+    //         .await?;
+    //     Ok(state_id)
+    // }
+
+    // async fn state(&self, state_id: LockedSourceStateId) -> BackupResult<SourceState> {
+    //     self.egnine.load_source_preserved_state(state_id).await
+    // }
+
+    // // Any preserved state for backup by source will be restored automatically when it done(success/fail/cancel).
+    // // But it should be restored by the application when no transfering start, because the engine is uncertain whether the user will use it to initiate the transfer task.
+    // // It will fail when a transfer task is valid, you should wait it done or cancel it.
+    // async fn restore(&self, state_id: LockedSourceStateId) -> BackupResult<()> {
+    //     todo!("check it's idle");
+    //     let state = self.egnine.load_source_preserved_state(state_id).await?;
+    //     let original_state = match state {
+    //         SourceState::None => return Ok(()),
+    //         SourceState::Original(original_state) => original_state,
+    //         SourceState::Preserved(original_state, _) => original_state,
+    //     };
+
+    //     if let Some(original_state) = &original_state {
+    //         self.source.restore_state(original_state.as_str()).await?;
+    //     }
+    //     self.egnine.delete_source_preserved_state(state_id).await
+    // }
+
+    // async fn restore_all_idle(&self) -> Result<usize, (BackupError, usize)> {
+    //     let mut success_count = 0;
+    //     let mut first_err = None;
+    //     let mut offset = 0;
+    //     loop {
+    //         let states = self
+    //             .egnine
+    //             .list_preserved_source_states(
+    //                 &self.info.uuid,
+    //                 ListPreservedSourceStateFilter {
+    //                     time: (None, None),
+    //                     idle: Some(true),
+    //                 },
+    //                 ListOffset::First(offset),
+    //                 16,
+    //             )
+    //             .await
+    //             .map_err(|e| (e, success_count))?;
+
+    //         if states.is_empty() {
+    //             return match first_err {
+    //                 Some(err) => Err((err, success_count)),
+    //                 None => Ok(success_count),
+    //             };
+    //         }
+
+    //         for (state_id, state) in states {
+    //             let original_state = match state {
+    //                 SourceState::None => None,
+    //                 SourceState::Original(original_state) => original_state,
+    //                 SourceState::Preserved(original_state, _) => original_state,
+    //             };
+
+    //             if let Some(original_state) = &original_state {
+    //                 if let Err(err) = self.source.restore_state(original_state.as_str()).await {
+    //                     if first_err.is_none() {
+    //                         first_err = Some(err);
+    //                     }
+    //                 } else {
+    //                     success_count += 1;
+    //                 }
+    //             }
+    //             self.egnine
+    //                 .delete_source_preserved_state(state_id)
+    //                 .await
+    //                 .map_err(|err| (err, success_count))?; // remove the preserved state.
+    //         }
+    //     }
+    // }
+
+    // async fn list_preserved_source_states(
+    //     &self,
+    //     filter: ListPreservedSourceStateFilter,
+    //     offset: ListOffset,
+    //     limit: u32,
+    // ) -> BackupResult<Vec<(LockedSourceStateId, SourceState)>> {
+    //     self.egnine
+    //         .list_preserved_source_states(&self.info.uuid, filter, offset, limit)
+    //         .await
+    // }
 
     pub(crate) async fn transfer_impl(&self) -> BackupResult<()> {
         let task = self

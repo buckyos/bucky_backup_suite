@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{path::Path, time::SystemTime};
 
 use crate::{
     checkpoint::{CheckPointInfo, CheckPointStatus},
@@ -11,7 +11,7 @@ use crate::{
         CheckPointVersion, ChunkId, ChunkInfo, ChunkItem, DefaultFileDiffBlock, FolderItem,
         LockedSourceStateId,
     },
-    task::{ListCheckPointFilter, SourceState, TaskInfo},
+    task::{ListCheckPointFilter, SourceStateInfo, TaskInfo},
 };
 
 pub trait Storage:
@@ -115,13 +115,34 @@ pub trait StorageConfig: Send + Sync {
     async fn set_config(&self, config: &EngineConfig) -> BackupResult<()>;
 }
 
+pub enum SourceState {
+    None,
+    Original,
+    Locked,
+    ConsumeCheckPoint,
+    Unlocked,
+}
+
+pub struct ListLockedSourceStateFilter {
+    pub state_id: Option<Vec<LockedSourceStateId>>,
+    // <begin-time, end-time>
+    pub time: (Option<SystemTime>, Option<SystemTime>),
+    pub state: Vec<SourceState>,
+}
+
 #[async_trait::async_trait]
 pub trait StorageLockedSourceStateMgr: Send + Sync {
     async fn new_state(
         &self,
         task_uuid: &TaskUuid,
-        original_state: Option<&str>,
+        creator_magic: u64,
     ) -> BackupResult<LockedSourceStateId>;
+
+    async fn original_state(
+        &self,
+        state_id: LockedSourceStateId,
+        original_state: Option<&str>,
+    ) -> BackupResult<()>;
 
     async fn locked_state(
         &self,
@@ -129,17 +150,19 @@ pub trait StorageLockedSourceStateMgr: Send + Sync {
         locked_state: Option<&str>,
     ) -> BackupResult<()>;
 
-    async fn state(&self, state_id: LockedSourceStateId) -> BackupResult<SourceState>;
+    async fn state(&self, state_id: LockedSourceStateId) -> BackupResult<SourceStateInfo>;
 
-    // async fn list_locked_source_states(
-    //     &self,
-    //     task_uuid: &TaskUuid,
-    //     filter: ListLockedSourceStateFilter,
-    //     offset: ListOffset,
-    //     limit: u32,
-    // ) -> BackupResult<Vec<(LockedSourceStateId, SourceState)>>;
+    async fn list_locked_source_states(
+        &self,
+        task_uuid: &TaskUuid,
+        filter: &ListLockedSourceStateFilter,
+        offset: ListOffset,
+        limit: u32,
+    ) -> BackupResult<Vec<SourceStateInfo>>;
 
-    async fn delete_source_state(&self, state_id: LockedSourceStateId) -> BackupResult<()>;
+    async fn unlock_source_state(&self, state_id: LockedSourceStateId) -> BackupResult<()>;
+
+    async fn delete_source_state(&self, filter: &ListLockedSourceStateFilter) -> BackupResult<()>;
 }
 
 #[async_trait::async_trait]
@@ -261,6 +284,7 @@ pub struct ListChunkFileFilter<'a> {
     verion: Option<CheckPointVersion>,
 }
 
+#[async_trait::async_trait]
 pub trait StorageChunkMgr: Send + Sync {
     async fn new_chunk(
         &self,

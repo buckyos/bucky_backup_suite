@@ -84,10 +84,15 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS locked_source_state (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_uuid TEXT NOT NULL,
-    is_locked INTEGER DEFAULT 0,
+    lock INTEGER DEFAULT 0, -- 0: None, 1: locked, 2: unlocked
     original_state TEXT DEFAULT NULL,
     locked_state TEXT DEFAULT NULL,
-    FOREIGN KEY (task_uuid) REFERENCES tasks (uuid)
+    check_point_seq INTEGER DEFAULT NULL,
+    check_point_create_time INTEGER DEFAULT NULL,
+    create_time INTEGER NOT NULL,
+    creator_magic INTEGER NOT NULL,
+    FOREIGN KEY (task_uuid) REFERENCES tasks (uuid),
+    UNIQUE(task_uuid, check_point_seq, check_point_create_time)
 );
 
 -- create table `checkpoints` with the following columns:

@@ -16,3 +16,4 @@ uuid = { version = "*", features = ["v4"] }
 sha2 = {version = '*'}
 base58 = "*"
 futures = "*"
+rand = "*"
