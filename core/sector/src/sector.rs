@@ -29,6 +29,7 @@ pub struct SectorHeader {
 
 pub struct SectorMeta {
     key: Option<SectorKey>,
+    block_size: usize,
     chunks: Vec<(ChunkId, Range<u64>)>,
 
     id: ChunkId,
@@ -38,7 +39,7 @@ pub struct SectorMeta {
 }
 
 impl SectorMeta {
-    pub fn new(key: Option<SectorKey>, chunks: Vec<(ChunkId, Range<u64>)>) -> Self {
+    fn new(block_size: usize, key: Option<SectorKey>, chunks: Vec<(ChunkId, Range<u64>)>) -> Self {
         let header_length = 0;
         let body_length = chunks.iter().map(|(_, range)| range.end - range.start).sum();
         let sector_length = header_length + body_length;
@@ -65,7 +66,7 @@ impl SectorMeta {
         Self {
             key,
             chunks,
-
+            block_size,
             header_length,
             body_length,
             sector_length,
@@ -89,13 +90,17 @@ impl SectorMeta {
         }
     }
 
-    fn iv_on_offset(&self, offset: u64) -> ChunkResult<Option<Iv<cbc::Encryptor<Aes256>>>> {
+    pub fn decryptor_on_offset(&self, offset: u64) -> ChunkResult<Option<cbc::Decryptor<Aes256>>> {
+        if let Some(iv) = self.iv_on_offset(offset)? {
+            Ok(Some(cbc::Decryptor::<Aes256>::new(self.key.as_ref().unwrap(), &iv)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn iv_on_offset(&self, _: u64) -> ChunkResult<Option<Iv<cbc::Encryptor<Aes256>>>> {
         if let Some(_) = &self.key {
-            if offset < self.header_length {
-                Ok(Some(GenericArray::<u8, U16>::from_slice(&[0u8; 16]).clone()))
-            } else {
-                Ok(Some(GenericArray::<u8, U16>::from_slice(&[0u8; 16]).clone()))
-            }
+            Ok(Some(GenericArray::<u8, U16>::from_slice(&[0u8; 16]).clone()))
         } else {
             Ok(None)
         }
@@ -142,6 +147,7 @@ impl SectorMeta {
 
 pub struct SectorBuilder {
     length_limit: u64,
+    block_size: usize,
     length: u64, 
     chunks: Vec<(ChunkId, Range<u64>)>,
 }
@@ -150,6 +156,7 @@ impl SectorBuilder {
     pub fn new() -> Self {
         Self {
             length_limit: u64::MAX,
+            block_size: 16 * 1024,
             length: 0,
             chunks: Vec::new(),
         }
@@ -167,12 +174,17 @@ impl SectorBuilder {
         &self.chunks
     }
 
-    pub fn set_length_limit(mut self, length_limit: u64) -> Self {
+    pub fn with_length_limit(mut self, length_limit: u64) -> Self {
         if self.chunks.len() > 0 {
             assert!(false, "length_limit must be greater than the largest chunk");
             return self;
         }
         self.length_limit = length_limit;
+        self
+    }
+
+    pub fn with_block_size(mut self, block_size: usize) -> Self {
+        self.block_size = block_size;
         self
     }
 
@@ -192,7 +204,7 @@ impl SectorBuilder {
     }
 
     pub fn build(self) -> SectorMeta {
-        SectorMeta::new(None, self.chunks)
+        SectorMeta::new(self.block_size, None, self.chunks)
     }
 }
 

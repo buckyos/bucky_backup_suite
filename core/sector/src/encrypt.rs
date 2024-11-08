@@ -1,4 +1,3 @@
-use std::cell::{OnceCell, RefCell};
 use std::future::Future;
 use std::io::SeekFrom;
 use std::pin::Pin;
@@ -89,18 +88,24 @@ pub struct SectorEncryptor {
 
 impl SectorEncryptor {
     pub async fn new<T: ChunkTarget>(meta: SectorMeta, chunk_target: T, offset: u64) -> ChunkResult<Self> {
-        let chunk_offset = std::cmp::max(offset, meta.header_length());
+        if offset > meta.header_length() && offset % meta.block_size() as u64 != 0 {
+            return Err(ChunkError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset must be a multiple of block size")));
+        }
+
+        
+        let mut_part = EncMutPart {
+            offset,
+            cached_result: None,
+            buffer: vec![0u8; Aes256::block_size()],
+            read_offset_in_buffer: None,
+            write_offset_in_buffer: None,
+            encryptor: meta.encryptor_on_offset(std::cmp::max(offset, meta.header_length())).unwrap(),
+            chunk_reader: Self::reader_of_chunks(&meta, &chunk_target, std::cmp::max(offset, meta.header_length())).await?,
+        };
+
         Ok(Self {
             header_part: meta.encrypt_to_vec(),
-            mut_part: Mutex::new(EncMutPart {
-                offset,
-                cached_result: None,
-                buffer: vec![0u8; Aes256::block_size()],
-                read_offset_in_buffer: None,
-                write_offset_in_buffer: None,
-                encryptor: meta.encryptor_on_offset(chunk_offset)?,
-                chunk_reader: Self::reader_of_chunks(&meta, &chunk_target, chunk_offset).await?,
-            }),
+            mut_part: Mutex::new(mut_part),
             meta,
         })
     }

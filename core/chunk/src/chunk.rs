@@ -8,7 +8,7 @@ use crate::error::*;
 
 /// Represents a unique identifier for a chunk of data.
 /// It consists of 32 bytes: 8 bytes for length and 24 bytes for a SHA256 hash prefix.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[derive(Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 pub struct ChunkId([u8; 32]);

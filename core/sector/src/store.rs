@@ -1,16 +1,23 @@
+use std::io::SeekFrom;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::{sync::Arc, time::Duration};
+use async_std::fs::File;
 use async_std::{io::BufReader, task};
+use async_std::io::prelude::*;
 use chunk::*;
 use serde::{Serialize, Deserialize};
 use sqlx::types::chrono::{self, DateTime, Utc};
+use crate::decrypt::ChunkDecryptor;
 use crate::{
-    sector::SectorBuilder, 
-    encrypt::SeekOnceSectorEncryptor,
+    decrypt::SectorDecryptor, 
+    encrypt::SeekOnceSectorEncryptor, 
+    sector::{SectorMeta, SectorBuilder},
 };
 
 struct StoreImpl<T: ChunkTarget> {
-    chunk_store: LocalStore,
-    sector_store: T, 
+    local_store: LocalStore,
+    remote_store: T, 
     sql_pool: sqlx::Pool<sqlx::Sqlite>, 
     config: SectorStoreConfig,
     collect_chunks_waker: async_std::channel::Sender<()>,
@@ -68,7 +75,7 @@ struct ChunksInSectorRow {
 }
 
 
-impl<T: 'static + ChunkTarget> SectorStore<T> {
+impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
     fn sql_create_chunks_table() -> &'static str {
         "CREATE TABLE IF NOT EXISTS chunks (
             chunk_id TEXT PRIMARY KEY, 
@@ -110,9 +117,9 @@ impl<T: 'static + ChunkTarget> SectorStore<T> {
         let (collect_chunks_waker, collect_chunks_waiter) = async_std::channel::bounded(1);
         Self {
             inner: Arc::new(StoreImpl {
-                chunk_store: LocalStore::new(config.base_path.clone()), 
+                local_store: LocalStore::new(config.base_path.clone()), 
                 sql_pool,  
-                sector_store,
+                remote_store: sector_store,
                 config,
                 collect_chunks_waker,
                 collect_chunks_waiter,
@@ -121,7 +128,7 @@ impl<T: 'static + ChunkTarget> SectorStore<T> {
     }
 
     pub async fn init(&self) -> ChunkResult<()> {
-        self.inner.chunk_store.init().await?;
+        self.inner.local_store.init().await?;
         sqlx::query(Self::sql_create_chunks_table()).execute(self.sql_pool()).await?;
         sqlx::query(Self::sql_create_sectors_table()).execute(self.sql_pool()).await?;
         sqlx::query(Self::sql_create_sector_chunks_table()).execute(self.sql_pool()).await?;    
@@ -132,8 +139,12 @@ impl<T: 'static + ChunkTarget> SectorStore<T> {
         &self.inner.config
     }
 
-    fn chunks(&self) -> &LocalStore {
-        &self.inner.chunk_store
+    fn local_store(&self) -> &LocalStore {
+        &self.inner.local_store
+    }
+
+    fn remote_store(&self) -> &T {
+        &self.inner.remote_store
     }
 
     pub async fn start(&self) -> ChunkResult<()> {
@@ -143,14 +154,10 @@ impl<T: 'static + ChunkTarget> SectorStore<T> {
                 let _ = store.post_sector_loop().await;
             });
         }
-        self.collect_sector_loop().await;
-        Ok(())
+        self.collect_sector_loop().await
     }
 
-
-    async fn post_sector_inner(&self, sector: SectorRow) -> ChunkResult<()> {
-        // 调用底层存储写入扇区数据
-        // 从数据库中获取该扇区包含的所有数据块信息
+    async fn query_sector_meta(&self, sector: &SectorRow) -> ChunkResult<SectorMeta> {
         let chunks = sqlx::query_as::<_, ChunksInSectorRow>(
             "SELECT * FROM chunks_in_sectors WHERE sector_id = ? ORDER BY offset_in_sector ASC"
         )
@@ -167,14 +174,20 @@ impl<T: 'static + ChunkTarget> SectorStore<T> {
             );
         }
 
-        let sector_meta = sector_builder.build();
+        Ok(sector_builder.build())
+    }
+
+    async fn post_sector_inner(&self, sector: SectorRow) -> ChunkResult<()> {
+        // 调用底层存储写入扇区数据
+        // 从数据库中获取该扇区包含的所有数据块信息
+        let sector_meta = self.query_sector_meta(&sector).await?;
 
         let sector_encryptor = SeekOnceSectorEncryptor::new(
             sector_meta, 
-            self.chunks().clone()
+            self.local_store().clone()
         );
         
-        let status = self.inner.sector_store.write(
+        let status = self.inner.remote_store.write(
             &sector.id.parse()?,  // 将sector id字符串解析为ChunkId
             0,  // 从头开始写入
             BufReader::new(sector_encryptor),
@@ -242,7 +255,7 @@ impl<T: 'static + ChunkTarget> SectorStore<T> {
         }
 
         let sector_builder = {
-            let mut sector_builder = SectorBuilder::new().set_length_limit(self.config().max_sector_size);
+            let mut sector_builder = SectorBuilder::new().with_length_limit(self.config().max_sector_size);
             let first_chunk = &chunks[0];
             let overtime = first_chunk.written_at.unwrap() + self.config().chunk_max_wait_time < chrono::Utc::now();
             for chunk in chunks {
@@ -315,15 +328,50 @@ impl<T: 'static + ChunkTarget> SectorStore<T> {
     }
 }
 
+pub enum SectorStoreRead<T: ChunkTarget> {
+    Remote(ChunkDecryptor<T>),
+    Local(File),
+}
 
+impl<T: 'static + ChunkTarget> Read for SectorStoreRead<T> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<std::io::Result<usize>> {
+        let mut_self = self.get_mut();
+        match mut_self {
+            Self::Remote(sector_decryptor) => Pin::new(sector_decryptor).poll_read(cx, buf),
+            Self::Local(file) => Pin::new(file).poll_read(cx, buf),
+        }
+    }
+}
 
+impl<T: 'static + ChunkTarget> Seek for SectorStoreRead<T> {
+    fn poll_seek(self: Pin<&mut Self>, cx: &mut Context<'_>, pos: SeekFrom) -> Poll<std::io::Result<u64>> {
+        let mut_self = self.get_mut();
+        match mut_self {
+            Self::Remote(sector_decryptor) => Pin::new(sector_decryptor).poll_seek(cx, pos),
+            Self::Local(file) => Pin::new(file).poll_seek(cx, pos),
+        }
+    }
+}
 
 #[async_trait::async_trait]
-impl<T: 'static + ChunkTarget> ChunkTarget for SectorStore<T> {
-    type Read = File;
+impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
+    type Read = SectorStoreRead<T>;
 
     async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Self::Read> {
-        todo!()
+        match self.local_store().read(chunk_id).await {
+            Ok(local) => {
+                return Ok(SectorStoreRead::Local(local));
+            }
+            Err(_) => {},
+        };
+
+        let sectors = self.sectors_of_chunk(chunk_id).await?;
+        let mut metas = vec![];
+        for sector in sectors {
+            metas.push(self.query_sector_meta(&sector).await?);
+        }
+
+        Ok(SectorStoreRead::Remote(ChunkDecryptor::new(metas, self.remote_store()).await?))
     }
 
     async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl async_std::io::BufRead + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
@@ -352,7 +400,7 @@ impl<T: 'static + ChunkTarget> ChunkTarget for SectorStore<T> {
         };
 
         // 写入成功后更新数据库
-        let chunk_status = self.inner.chunk_store.write(chunk_id, offset, reader, length).await?;
+        let chunk_status = self.inner.local_store.write(chunk_id, offset, reader, length).await?;
                 
         if chunk_status.written == chunk_id.length() {
             // 更新写入时间为当前时间
