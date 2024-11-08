@@ -1,10 +1,12 @@
 use crate::{
-    checkpoint::{ItemEnumerate, ItemId},
+    checkpoint::ItemEnumerate,
     engine::{SourceId, SourceInfo, TaskUuid},
     error::BackupResult,
     meta::LockedSourceStateId,
+    status_waiter::Waiter,
 };
 
+#[derive(Clone, Copy)]
 pub enum SourceStatus {
     StandBy,
     Scaning,
@@ -51,5 +53,5 @@ pub trait LockedSource: Send + Sync {
     async fn prepare(&self) -> BackupResult<()>;
     async fn enumerate_item(&self) -> BackupResult<ItemEnumerate>;
     async fn status(&self) -> BackupResult<SourceStatus>;
-    async fn wait_status<F>(&self) -> BackupResult<StatusWaitor<SourceStatus>>;
+    async fn status_waiter(&self) -> BackupResult<Waiter<SourceStatus>>;
 }

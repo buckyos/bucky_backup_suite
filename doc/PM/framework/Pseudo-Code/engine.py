@@ -112,7 +112,7 @@ class StorageReader:
         # return the target of the link specified by path
         pass
 
-    def stat(self, path: str) -> 'StorageItemAttributes':
+    def stat(self, path: str) -> 'Attributes':
         # return the attributes of the item specified by path
         pass
 

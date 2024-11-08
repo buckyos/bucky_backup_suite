@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::BackupResult,
-    meta::CheckPointMetaEngine,
     source::Source,
-    target::TargetEngine,
+    target::Target,
     task::{HistoryStrategy, Task},
 };
 
@@ -60,9 +59,9 @@ pub trait TargetMgr {
         filter: &ListTargetFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn TargetEngine>>>;
+    ) -> BackupResult<Vec<Arc<dyn Target>>>;
 
-    async fn query_by(&self, by: &TargetQueryBy) -> BackupResult<Option<Arc<dyn TargetEngine>>>;
+    async fn query_by(&self, by: &TargetQueryBy) -> BackupResult<Option<Arc<dyn Target>>>;
 
     async fn update(
         &self,
@@ -94,7 +93,7 @@ pub trait TaskMgr {
         priority: u32,
         attachment: String, // The application can save any attachment with task.
         flag: u64,          // Save any flags for the task. it will be filterd when list the tasks.
-    ) -> BackupResult<Arc<dyn Task<CheckPointMetaEngine>>>;
+    ) -> BackupResult<Arc<dyn Task>>;
 
     async fn remove_task(&self, by: &FindTaskBy, is_remove_on_target: bool) -> BackupResult<()>;
 
@@ -103,12 +102,9 @@ pub trait TaskMgr {
         filter: &ListTaskFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn Task<CheckPointMetaEngine>>>>;
+    ) -> BackupResult<Vec<Arc<dyn Task>>>;
 
-    async fn find_task(
-        &self,
-        by: &FindTaskBy,
-    ) -> BackupResult<Option<Arc<dyn Task<CheckPointMetaEngine>>>>;
+    async fn find_task(&self, by: &FindTaskBy) -> BackupResult<Option<Arc<dyn Task>>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

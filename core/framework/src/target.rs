@@ -1,11 +1,12 @@
 use crate::{
-    checkpoint::{ItemEnumerate, ItemId, StorageReader},
+    checkpoint::ItemEnumerate,
     engine::{TargetId, TargetInfo, TaskUuid},
     error::BackupResult,
-    meta::{CheckPointMeta, CheckPointVersion, MetaBound},
-    task::TaskInfo,
+    meta::CheckPointVersion,
+    status_waiter::Waiter,
 };
 
+#[derive(Clone, Copy)]
 pub enum TargetStatus {
     StandBy,
     Transfering,
@@ -37,15 +38,15 @@ pub trait TargetTask: Send + Sync {
     async fn target_checkpoint(
         &self,
         checkpoint_version: &CheckPointVersion,
-    ) -> BackupResult<dyn TargetCheckPoint>;
+    ) -> BackupResult<Box<dyn TargetCheckPoint>>;
 }
 
 #[async_trait::async_trait]
-pub trait TargetCheckPoint: StorageReader + Send + Sync {
+pub trait TargetCheckPoint: Send + Sync {
     fn checkpoint_version(&self) -> CheckPointVersion;
     async fn transfer(&self) -> BackupResult<()>;
     async fn stop(&self) -> BackupResult<()>;
     async fn enumerate_item(&self) -> BackupResult<ItemEnumerate>;
     async fn status(&self) -> BackupResult<TargetStatus>;
-    async fn wait_status<F>(&self) -> BackupResult<StatusWaitor<TargetStatus>>;
+    async fn status_waiter(&self) -> BackupResult<Waiter<TargetStatus>>;
 }

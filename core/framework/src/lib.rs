@@ -3,6 +3,7 @@ mod engine;
 mod error;
 mod meta;
 mod source;
+mod status_waiter;
 mod storage;
 mod target;
 mod task;

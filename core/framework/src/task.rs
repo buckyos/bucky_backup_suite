@@ -40,27 +40,24 @@ pub struct ListCheckPointFilter {
 }
 
 #[async_trait::async_trait]
-pub trait Task<MetaType>: Send + Sync {
+pub trait Task: Send + Sync {
     fn uuid(&self) -> &TaskUuid;
     async fn task_info(&self) -> BackupResult<TaskInfo>;
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()>;
 
-    async fn create_checkpoint(
-        &self,
-        is_delta: bool,
-    ) -> BackupResult<Arc<dyn CheckPoint<MetaType>>>;
+    async fn create_checkpoint(&self, is_delta: bool) -> BackupResult<Arc<dyn CheckPoint>>;
 
     async fn list_checkpoints(
         &self,
         filter: &ListCheckPointFilter,
         offset: ListOffset,
         limit: u32,
-    ) -> BackupResult<Vec<Arc<dyn CheckPoint<MetaType>>>>;
+    ) -> BackupResult<Vec<Arc<dyn CheckPoint>>>;
 
     async fn query_checkpoint(
         &self,
         version: CheckPointVersion,
-    ) -> BackupResult<Option<Arc<dyn CheckPoint<MetaType>>>>;
+    ) -> BackupResult<Option<Arc<dyn CheckPoint>>>;
 
     async fn remove_checkpoint(
         &self,

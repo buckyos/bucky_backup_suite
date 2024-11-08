@@ -40,7 +40,7 @@ pub struct CheckPointVersion {
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct FolderItemAttributes {
+pub struct Attributes {
     #[serde(
         serialize_with = "serialize_system_time",
         deserialize_with = "deserialize_system_time"
@@ -139,7 +139,7 @@ impl FolderItemField for FolderItem {
         }
     }
 
-    fn attributes(&self) -> &FolderItemAttributes {
+    fn attributes(&self) -> &Attributes {
         match self {
             FolderItem::Dir(d) => d.attributes(),
             FolderItem::File(f) => f.attributes(),
@@ -149,7 +149,7 @@ impl FolderItemField for FolderItem {
         }
     }
 
-    fn attributes_mut(&mut self) -> &mut FolderItemAttributes {
+    fn attributes_mut(&mut self) -> &mut Attributes {
         match self {
             FolderItem::Dir(d) => d.attributes_mut(),
             FolderItem::File(f) => f.attributes_mut(),
@@ -163,7 +163,7 @@ impl FolderItemField for FolderItem {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct DirectoryMeta {
     pub path: PathBuf,
-    pub attributes: FolderItemAttributes,
+    pub attributes: Attributes,
 }
 
 impl FolderItemField for DirectoryMeta {
@@ -171,11 +171,11 @@ impl FolderItemField for DirectoryMeta {
         &self.path
     }
 
-    fn attributes(&self) -> &FolderItemAttributes {
+    fn attributes(&self) -> &Attributes {
         &self.attributes
     }
 
-    fn attributes_mut(&mut self) -> &mut FolderItemAttributes {
+    fn attributes_mut(&mut self) -> &mut Attributes {
         &mut self.attributes
     }
 }
@@ -183,7 +183,7 @@ impl FolderItemField for DirectoryMeta {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FileMeta {
     pub path: PathBuf,
-    pub attributes: FolderItemAttributes,
+    pub attributes: Attributes,
     pub hash: String,
     pub size: u64,
 }
@@ -193,11 +193,11 @@ impl FolderItemField for FileMeta {
         &self.path
     }
 
-    fn attributes(&self) -> &FolderItemAttributes {
+    fn attributes(&self) -> &Attributes {
         &self.attributes
     }
 
-    fn attributes_mut(&mut self) -> &mut FolderItemAttributes {
+    fn attributes_mut(&mut self) -> &mut Attributes {
         &mut self.attributes
     }
 }
@@ -253,7 +253,7 @@ pub enum FileDiffHeader {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FileDiffMeta {
     pub path: PathBuf,
-    pub attributes: FolderItemAttributes,
+    pub attributes: Attributes,
     pub file_size: u64,
     pub file_hash: Option<String>,
     pub hash: String,
@@ -266,11 +266,11 @@ impl FolderItemField for FileDiffMeta {
         &self.path
     }
 
-    fn attributes(&self) -> &FolderItemAttributes {
+    fn attributes(&self) -> &Attributes {
         &self.attributes
     }
 
-    fn attributes_mut(&mut self) -> &mut FolderItemAttributes {
+    fn attributes_mut(&mut self) -> &mut Attributes {
         &mut self.attributes
     }
 }
@@ -278,7 +278,7 @@ impl FolderItemField for FileDiffMeta {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LinkMeta {
     pub path: PathBuf,
-    pub attributes: FolderItemAttributes,
+    pub attributes: Attributes,
     pub target: PathBuf,
     pub is_hard: bool,
 }
@@ -288,11 +288,11 @@ impl FolderItemField for LinkMeta {
         &self.path
     }
 
-    fn attributes(&self) -> &FolderItemAttributes {
+    fn attributes(&self) -> &Attributes {
         &self.attributes
     }
 
-    fn attributes_mut(&mut self) -> &mut FolderItemAttributes {
+    fn attributes_mut(&mut self) -> &mut Attributes {
         &mut self.attributes
     }
 }
@@ -337,7 +337,7 @@ impl<'de> Deserialize<'de> for LogAction {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct LogMeta {
     pub path: PathBuf,
-    pub attributes: FolderItemAttributes,
+    pub attributes: Attributes,
     pub action: LogAction,
 }
 
@@ -346,19 +346,19 @@ impl FolderItemField for LogMeta {
         &self.path
     }
 
-    fn attributes(&self) -> &FolderItemAttributes {
+    fn attributes(&self) -> &Attributes {
         &self.attributes
     }
 
-    fn attributes_mut(&mut self) -> &mut FolderItemAttributes {
+    fn attributes_mut(&mut self) -> &mut Attributes {
         &mut self.attributes
     }
 }
 
 pub trait FolderItemField {
     fn path(&self) -> &Path;
-    fn attributes(&self) -> &FolderItemAttributes;
-    fn attributes_mut(&mut self) -> &mut FolderItemAttributes;
+    fn attributes(&self) -> &Attributes;
+    fn attributes_mut(&mut self) -> &mut Attributes;
 }
 
 pub struct ChunkId(u64);
@@ -392,7 +392,7 @@ pub enum ChunkItem {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BlockMeta {
     pub path: PathBuf,
-    pub attributes: Option<FolderItemAttributes>,
+    pub attributes: Option<Attributes>,
     pub file_size: u64,
     pub file_hash: Option<String>,
     pub hash: String,
@@ -402,8 +402,8 @@ pub struct BlockMeta {
 
 pub trait ChunkItemField {
     fn path(&self) -> &Path;
-    fn attributes(&self) -> Option<&FolderItemAttributes>;
-    fn attributes_mut(&mut self) -> Option<&mut FolderItemAttributes>;
+    fn attributes(&self) -> Option<&Attributes>;
+    fn attributes_mut(&mut self) -> Option<&mut Attributes>;
 }
 
 impl ChunkItemField for BlockMeta {
@@ -411,11 +411,11 @@ impl ChunkItemField for BlockMeta {
         &self.path
     }
 
-    fn attributes(&self) -> Option<&FolderItemAttributes> {
+    fn attributes(&self) -> Option<&Attributes> {
         self.attributes.as_ref()
     }
 
-    fn attributes_mut(&mut self) -> Option<&mut FolderItemAttributes> {
+    fn attributes_mut(&mut self) -> Option<&mut Attributes> {
         self.attributes.as_mut()
     }
 }
@@ -428,11 +428,11 @@ where
         self.path::<FolderItemField>()
     }
 
-    fn attributes(&self) -> Option<&FolderItemAttributes> {
+    fn attributes(&self) -> Option<&Attributes> {
         Some(self.attributes::<FolderItemField>())
     }
 
-    fn attributes_mut(&mut self) -> Option<&mut FolderItemAttributes> {
+    fn attributes_mut(&mut self) -> Option<&mut Attributes> {
         Some(self.attributes_mut::<FolderItemField>())
     }
 }
@@ -446,7 +446,7 @@ impl ChunkItemField for ChunkBlockMeta {
         }
     }
 
-    fn attributes(&self) -> Option<&FolderItemAttributes> {
+    fn attributes(&self) -> Option<&Attributes> {
         let attr = match self {
             ChunkBlockMeta::File(file_meta) => file_meta.attributes::<ChunkItemField>(),
             ChunkBlockMeta::Block(block_meta) => return block_meta.attributes::<ChunkItemField>(),
@@ -457,7 +457,7 @@ impl ChunkItemField for ChunkBlockMeta {
         Some(attr)
     }
 
-    fn attributes_mut(&mut self) -> Option<&mut FolderItemAttributes> {
+    fn attributes_mut(&mut self) -> Option<&mut Attributes> {
         let attr = match self {
             ChunkBlockMeta::File(file_meta) => file_meta.attributes_mut::<ChunkItemField>(),
             ChunkBlockMeta::Block(block_meta) => {
@@ -481,7 +481,7 @@ impl ChunkItemField for ChunkItem {
         }
     }
 
-    fn attributes(&self) -> Option<&FolderItemAttributes> {
+    fn attributes(&self) -> Option<&Attributes> {
         let attr = match self {
             ChunkItem::Dir(directory_meta) => directory_meta.attributes(),
             ChunkItem::Link(link_meta) => link_meta.attributes(),
@@ -491,7 +491,7 @@ impl ChunkItemField for ChunkItem {
         Some(attr)
     }
 
-    fn attributes_mut(&mut self) -> Option<&mut FolderItemAttributes> {
+    fn attributes_mut(&mut self) -> Option<&mut Attributes> {
         let attr = match self {
             ChunkItem::Dir(directory_meta) => directory_meta.attributes_mut(),
             ChunkItem::Link(link_meta) => link_meta.attributes_mut(),
