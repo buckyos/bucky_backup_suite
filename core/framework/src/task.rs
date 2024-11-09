@@ -55,7 +55,11 @@ pub trait Task: Send + Sync {
     async fn task_info(&self) -> BackupResult<TaskInfo>;
     async fn update(&self, task_info: &TaskInfo) -> BackupResult<()>;
 
-    async fn create_checkpoint(&self, is_delta: bool) -> BackupResult<Arc<dyn CheckPoint>>;
+    async fn create_checkpoint(
+        &self,
+        is_delta: bool,
+        is_compress: bool,
+    ) -> BackupResult<Arc<dyn CheckPoint>>;
 
     async fn list_checkpoints(
         &self,
@@ -72,7 +76,7 @@ pub trait Task: Send + Sync {
     async fn remove_checkpoint(
         &self,
         version: CheckPointVersion,
-        is_remove_on_target: bool,
+        is_delete_on_target: DeleteFromTarget,
     ) -> BackupResult<()>;
 }
 

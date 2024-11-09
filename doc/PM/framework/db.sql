@@ -116,6 +116,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     status INTEGER NOT NULL,
     error_msg TEXT DEFAULT NULL,
     complete_time INTEGER DEFAULT NULL,
+    is_compress INTEGER DEFAULT 0,
     PRIMARY KEY (task_uuid, seq, create_time),
     FOREIGN KEY (task_uuid) REFERENCES tasks (uuid),
     FOREIGN KEY (locked_source_state_id) REFERENCES locked_source_state (id),
@@ -209,44 +210,44 @@ CREATE TABLE IF NOT EXISTS chunk_links (
     FOREIGN KEY (chunk_file_id) REFERENCES chunk_files(chunk_file_id),
 )
 
--- create table `checkpoint_transfer_map` with the following columns:
--- task_uuid: String,
--- seq: u64,
--- checkpoint_create_time: u64, // (task_uuid, seq, checkpoint_create_time) REFERENCES checkpoints
--- item_path: Vec<u8>, // (task_uuid, seq, checkpoint_create_time, item_path) is primary key
--- offset: u64,
--- length: u64,
--- begin_time: u64,
--- finish_time: u64,
--- target_address: Vec<u8>,
--- detail: Vec<u8>,
-CREATE TABLE IF NOT EXISTS `checkpoint_transfer_map` (
-    task_uuid TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    checkpoint_create_time INTEGER NOT NULL,
-    item_path BLOB NOT NULL,
-    offset INTEGER NOT NULL,
-    length INTEGER NOT NULL,
-    begin_time INTEGER NOT NULL,
-    finish_time INTEGER DEFAULT NULL,
-    target_address BLOB DEFAULT NULL,
-    detail BLOB DEFAULT NULL,
-    PRIMARY KEY (task_uuid, seq, checkpoint_create_time, item_path),
-    FOREIGN KEY (task_uuid, seq, checkpoint_create_time) REFERENCES checkpoints (task_uuid, seq, create_time)
-);
+-- -- create table `checkpoint_transfer_map` with the following columns:
+-- -- task_uuid: String,
+-- -- seq: u64,
+-- -- checkpoint_create_time: u64, // (task_uuid, seq, checkpoint_create_time) REFERENCES checkpoints
+-- -- item_path: Vec<u8>, // (task_uuid, seq, checkpoint_create_time, item_path) is primary key
+-- -- offset: u64,
+-- -- length: u64,
+-- -- begin_time: u64,
+-- -- finish_time: u64,
+-- -- target_address: Vec<u8>,
+-- -- detail: Vec<u8>,
+-- CREATE TABLE IF NOT EXISTS `checkpoint_transfer_map` (
+--     task_uuid TEXT NOT NULL,
+--     seq INTEGER NOT NULL,
+--     checkpoint_create_time INTEGER NOT NULL,
+--     item_path BLOB NOT NULL,
+--     offset INTEGER NOT NULL,
+--     length INTEGER NOT NULL,
+--     begin_time INTEGER NOT NULL,
+--     finish_time INTEGER DEFAULT NULL,
+--     target_address BLOB DEFAULT NULL,
+--     detail BLOB DEFAULT NULL,
+--     PRIMARY KEY (task_uuid, seq, checkpoint_create_time, item_path),
+--     FOREIGN KEY (task_uuid, seq, checkpoint_create_time) REFERENCES checkpoints (task_uuid, seq, create_time)
+-- );
 
--- create table `checkpoint_key_value` with the following columns:
--- task_uuid: String,
--- seq: u64,
--- checkpoint_create_time: u64, // (task_uuid, seq, checkpoint_create_time) REFERENCES checkpoints
--- key: Option<String>, // (task_uuid, seq, checkpoint_create_time, key) is primary key
--- value: String,
-CREATE TABLE IF NOT EXISTS `checkpoint_key_value` (
-    task_uuid TEXT NOT NULL,
-    seq INTEGER NOT NULL,
-    checkpoint_create_time INTEGER NOT NULL,
-    key TEXT DEFAULT NULL,
-    value TEXT NOT NULL,
-    PRIMARY KEY (task_uuid, seq, checkpoint_create_time, key),
-    FOREIGN KEY (task_uuid, seq, checkpoint_create_time) REFERENCES checkpoints (task_uuid, seq, create_time)
-);
+-- -- create table `checkpoint_key_value` with the following columns:
+-- -- task_uuid: String,
+-- -- seq: u64,
+-- -- checkpoint_create_time: u64, // (task_uuid, seq, checkpoint_create_time) REFERENCES checkpoints
+-- -- key: Option<String>, // (task_uuid, seq, checkpoint_create_time, key) is primary key
+-- -- value: String,
+-- CREATE TABLE IF NOT EXISTS `checkpoint_key_value` (
+--     task_uuid TEXT NOT NULL,
+--     seq INTEGER NOT NULL,
+--     checkpoint_create_time INTEGER NOT NULL,
+--     key TEXT DEFAULT NULL,
+--     value TEXT NOT NULL,
+--     PRIMARY KEY (task_uuid, seq, checkpoint_create_time, key),
+--     FOREIGN KEY (task_uuid, seq, checkpoint_create_time) REFERENCES checkpoints (task_uuid, seq, create_time)
+-- );

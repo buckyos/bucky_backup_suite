@@ -17,10 +17,10 @@ use crate::{
 
 #[derive(Clone)]
 pub struct CheckPointInfo {
-    pub task_uuid: String,
+    pub task_uuid: TaskUuid,
     pub task_friendly_name: String,
     pub version: CheckPointVersion,
-    pub prev_versions: Vec<CheckPointVersion>, // all versions this checkpoint depends on
+    pub prev_version: Option<CheckPointVersion>,
     pub complete_time: Option<SystemTime>,
     pub locked_source_state_id: Option<LockedSourceStateId>,
     pub status: CheckPointStatus,
@@ -41,6 +41,7 @@ pub enum PendingStatus {
 pub type SourcePendingStatus = PendingStatus;
 pub type TargetPendingStatus = PendingStatus;
 
+#[derive(Clone, Copy)]
 pub enum DeleteFromTarget {
     Reserve,
     Delete,
@@ -50,6 +51,7 @@ pub enum DeleteFromTarget {
 pub enum CheckPointStatus {
     Standby,
     Prepare(SourcePendingStatus),
+    StopPrepare(SourcePendingStatus),
     Start(SourcePendingStatus, TargetPendingStatus),
     Stop(SourcePendingStatus, TargetPendingStatus),
     Success,
@@ -92,7 +94,7 @@ pub trait CheckPoint: DirReader {
     async fn prepare(&self) -> BackupResult<()>;
     async fn prepare_progress(&self) -> BackupResult<PendingAttribute<PrepareProgress>>;
 
-    async fn transfer(&self, is_compress: bool) -> BackupResult<()>;
+    async fn transfer(&self) -> BackupResult<()>;
     async fn transfer_progress(&self) -> BackupResult<PendingAttribute<TransferProgress>>;
     async fn item_transfer_progress(
         &self,

@@ -171,6 +171,7 @@ pub trait StorageCheckPointMgr: Send + Sync {
         &self,
         task_uuid: &TaskUuid,
         locked_source_id: Option<LockedSourceStateId>, // It will be lost for `None`
+        prev_checkpoint_version: Option<CheckPointVersion>,
     ) -> BackupResult<CheckPointVersion>;
 
     async fn delete_checkpoint(

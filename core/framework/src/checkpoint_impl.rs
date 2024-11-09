@@ -10,134 +10,35 @@ use sha2::digest::typenum::Length;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
 use crate::{
-    checkpoint::{
-        CheckPoint, CheckPointInfo, CheckPointObserver, CheckPointStatus, ChunkTransferInfo,
-        DirChildType, LinkInfo, PrepareTransferChunkResult, StorageReader,
-    },
+    checkpoint::{CheckPoint, CheckPointInfo, DirChildType, DirReader, LinkInfo, PendingStatus},
     engine::{FindTaskBy, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
-    meta::{CheckPointMetaEngine, CheckPointVersion, StorageItemAttributes},
-    storage::{QueryTransferMapFilter, QueryTransferMapFilterItem},
+    meta::{Attributes, CheckPointVersion, FileDiffHeader},
+    status_waiter::Waiter,
 };
-
-struct FileTransferMap {
-    chunk_maps: HashMap<Vec<u8>, Vec<ChunkTransferInfo>>, // <target-address, ChunkTransferInfo>
-    speed: u64,                                           // bytes/s
-    transferred: u64,                                     // bytes
-}
-
-enum ItemTransferInfo {
-    File(FileTransferMap),
-    Dir(DirTransferInfo),
-}
-
-struct DirTransferInfo {
-    name: PathBuf,
-    children: HashMap<PathBuf, ItemTransferInfo>,
-}
-
-impl DirTransferInfo {
-    fn find_by_full_path_mut(
-        &mut self,
-        full_path: &Path,
-        is_insert_default: bool,
-    ) -> Option<&mut ItemTransferInfo> {
-        // split full_path with '/'
-        let mut path_names = vec![];
-        for part in full_path.iter() {
-            path_names.push(PathBuf::from(part));
-        }
-
-        // remove the first dir if it is empty
-        match path_names.first() {
-            Some(path) => {
-                if path.as_os_str().is_empty() {
-                    path_names.remove(0);
-                }
-            }
-            None => {
-                return None;
-            }
-        }
-
-        let file_name = match path_names.pop() {
-            Some(path) => path,
-            None => return None,
-        };
-
-        // find the transfer-map follow the path-names in the transfer-map-cache
-        let mut current_dir_transfer_info: &mut DirTransferInfo = self;
-        for path_name in path_names {
-            let entry = current_dir_transfer_info.children.entry(path_name.clone());
-            let found = match entry {
-                Entry::Occupied(entry) => entry.into_mut(),
-                Entry::Vacant(entry) => {
-                    if is_insert_default {
-                        entry.insert(ItemTransferInfo::Dir(DirTransferInfo {
-                            name: path_name.clone(),
-                            children: HashMap::new(),
-                        }))
-                    } else {
-                        return None;
-                    }
-                }
-            };
-
-            match found {
-                ItemTransferInfo::Dir(dir) => dir,
-                ItemTransferInfo::File(_) => {
-                    unreachable!("{} should be a dir", path_name.display())
-                }
-            };
-        }
-
-        let item_transfer_info = match current_dir_transfer_info.children.entry(file_name.clone()) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                if is_insert_default {
-                    entry.insert(ItemTransferInfo::File(FileTransferMap {
-                        chunk_maps: HashMap::new(),
-                        speed: 0,
-                        transferred: 0,
-                    }))
-                } else {
-                    return None;
-                }
-            }
-        };
-
-        Some(item_transfer_info)
-    }
-}
 
 pub(crate) struct CheckPointImpl {
     task_uuid: TaskUuid,
     version: CheckPointVersion,
-    info: Arc<RwLock<CheckPointInfo<CheckPointMetaEngine>>>,
-    full_meta: Arc<RwLock<Option<CheckPointMetaEngine>>>,
-    transfer_map: Arc<Mutex<DirTransferInfo>>,
+    info: Arc<RwLock<CheckPointInfo>>,
     engine: Engine,
 }
 
 impl CheckPointImpl {
-    pub(crate) fn new(info: CheckPointInfo<CheckPointMetaEngine>, engine: Engine) -> Self {
+    pub(crate) fn new(mut info: CheckPointInfo, engine: Engine) -> Self {
         let task_uuid = info.meta.task_uuid;
         let version = info.meta.version;
+        // todo: update status to static(as stop, success, failed...)
         Self {
             info: Arc::new(RwLock::new(info)),
-            full_meta: Arc::new(RwLock::new(None)),
             engine,
             task_uuid,
             version,
-            transfer_map: Arc::new(Mutex::new(DirTransferInfo {
-                name: PathBuf::new(),
-                children: HashMap::new(),
-            })),
         }
     }
 
-    pub(crate) fn info(&self) -> CheckPointInfo<CheckPointMetaEngine> {
+    pub(crate) fn info(&self) -> CheckPointInfo {
         let info = self.info.clone();
         tokio::task::block_in_place(move || {
             tokio::runtime::Handle::current().block_on(async move { info.read().await.clone() })
@@ -383,7 +284,7 @@ impl CheckPointImpl {
 }
 
 #[async_trait::async_trait]
-impl StorageReader for CheckPointImpl {
+impl DirReader for CheckPointImpl {
     async fn read_dir(&self, path: &Path) -> BackupResult<Vec<DirChildType>> {
         unimplemented!()
     }
@@ -393,16 +294,25 @@ impl StorageReader for CheckPointImpl {
     async fn read_file(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>> {
         unimplemented!()
     }
+    async fn copy_file_to(&self, path: &Path, to: &Path) -> BackupResult<Waiter<PendingStatus>> {
+        unimplemented!()
+    }
+    async fn file_diff_header(&self, path: &Path) -> BackupResult<FileDiffHeader> {
+        unimplemented!()
+    }
+    async fn read_file_diff(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>> {
+        unimplemented!()
+    }
     async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo> {
         unimplemented!()
     }
-    async fn stat(&self, path: &Path) -> BackupResult<StorageItemAttributes> {
+    async fn stat(&self, path: &Path) -> BackupResult<Attributes> {
         unimplemented!()
     }
 }
 
 #[async_trait::async_trait]
-impl CheckPoint<CheckPointMetaEngine> for CheckPointImpl {
+impl CheckPoint for CheckPointImpl {
     fn task_uuid(&self) -> &TaskUuid {
         &self.task_uuid
     }

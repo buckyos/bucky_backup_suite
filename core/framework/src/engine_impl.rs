@@ -9,7 +9,7 @@ use base58::ToBase58;
 use tokio::sync::RwLock;
 
 use crate::{
-    checkpoint::{CheckPoint, CheckPointStatus},
+    checkpoint::{CheckPoint, CheckPointInfo, CheckPointStatus, PendingStatus},
     checkpoint_impl::{CheckPointImpl, CheckPointWrapper},
     engine::{
         Config, EngineConfig, FindTaskBy, ListOffset, ListSourceFilter, ListTargetFilter,
@@ -476,14 +476,12 @@ impl Engine {
         &self,
         task_uuid: &TaskUuid,
         locked_source_id: Option<LockedSourceStateId>, // It will be lost for `None`
-        meta: &mut CheckPointMetaEngine,
+        prev_checkpoint_version: Option<CheckPointVersion>,
     ) -> BackupResult<Arc<CheckPointImpl>> {
         let version = self
             .meta_storage
-            .create_checkpoint(task_uuid, locked_source_id, meta)
+            .create_checkpoint(task_uuid, locked_source_id, prev_checkpoint_version)
             .await?;
-
-        meta.version = version;
 
         // insert into cache
         loop {
@@ -499,13 +497,17 @@ impl Engine {
 
             let mut cache = self.tasks.write().await;
             if let Some(task_cache) = cache.get_mut(task_uuid) {
+                let task_friendly_name = task_cache.task.info().friendly_name.clone();
                 let checkpoint = task_cache
                     .checkpoints
                     .entry(version)
                     .or_insert_with(|| {
-                        let checkpoint_info = CheckPointInfo::<CheckPointMetaEngine> {
-                            meta: meta.clone(),
-                            target_meta: None,
+                        let checkpoint_info = CheckPointInfo {
+                            task_uuid: task_uuid.clone(),
+                            task_friendly_name,
+                            version,
+                            prev_version: prev_checkpoint_version,
+                            complete_time: None,
                             locked_source_state_id: locked_source_id,
                             status: CheckPointStatus::Standby,
                             last_status_changed_time: SystemTime::now(),
@@ -524,10 +526,10 @@ impl Engine {
         &self,
         task_uuid: &TaskUuid,
         locked_source_id: Option<LockedSourceStateId>, // It will be lost for `None`
-        meta: &mut CheckPointMetaEngine,
+        prev_checkpoint_version: Option<CheckPointVersion>,
     ) -> BackupResult<Arc<CheckPointWrapper>> {
         let checkpoint = self
-            .create_checkpoint_impl(task_uuid, locked_source_id, meta)
+            .create_checkpoint_impl(task_uuid, locked_source_id, prev_checkpoint_version)
             .await?;
         Ok(Arc::new(CheckPointWrapper::new(
             *task_uuid,
@@ -560,22 +562,75 @@ impl Engine {
                 .list_checkpoints(task_uuid, filter, offset, limit)
                 .await?;
 
+            let mut load_new_checkpoints = vec![];
             let mut cache = self.tasks.write().await;
             if let Some(task_cache) = cache.get_mut(task_uuid) {
                 let checkpoints = checkpoint_infos
                     .into_iter()
                     .map(|info| {
-                        let version = info.meta.version;
+                        let version = info.version;
                         task_cache
                             .checkpoints
                             .entry(version)
-                            .or_insert_with(|| Arc::new(CheckPointImpl::new(info, self.clone())))
+                            .or_insert_with(|| {
+                                let old_status = info.status.clone();
+                                let checkpoint = Arc::new(CheckPointImpl::new(info, self.clone()));
+                                load_new_checkpoints.push((checkpoint.clone(), old_status));
+                                checkpoint
+                            })
                             .clone()
                     })
                     .collect();
+
+                if load_new_checkpoints.len() > 0 {
+                    let engine = self.clone();
+                    tokio::task::spawn(async move {
+                        futures::future::join_all(load_new_checkpoints.into_iter().map(
+                            |(checkpoint, old_status)| {
+                                engine.auto_resume_checkpoint_from_storage(checkpoint, old_status)
+                            },
+                        ))
+                        .await;
+                    });
+                }
+
                 return Ok(checkpoints);
             } else {
                 // task maybe remove from the cache by other thread, retry it.
+            }
+        }
+    }
+
+    async fn auto_resume_checkpoint_from_storage(
+        &self,
+        checkpoint: Arc<CheckPointImpl>,
+        old_status: CheckPointStatus,
+    ) -> BackupResult<()> {
+        match old_status {
+            CheckPointStatus::Standby
+            | CheckPointStatus::StopPrepare(_)
+            | CheckPointStatus::Stop(_, _)
+            | CheckPointStatus::Success
+            | CheckPointStatus::Failed(_) => Ok(()),
+            CheckPointStatus::Prepare(pending_status) => match pending_status {
+                PendingStatus::Pending | PendingStatus::Started => checkpoint.prepare().await,
+                PendingStatus::Done | PendingStatus::Failed(_) => Ok(()),
+            },
+            CheckPointStatus::Start(_, _) => checkpoint.transfer().await,
+            CheckPointStatus::Delete(_, _, delete_from_target) => {
+                let task = self
+                    .get_task(&FindTaskBy::Uuid(checkpoint.task_uuid().clone()))
+                    .await?
+                    .ok_or_else(|| {
+                        log::warn!(
+                            "owner task({}) of checkpoint({:?}) has been removed",
+                            checkpoint.task_uuid(),
+                            checkpoint.version()
+                        );
+                        BackupError::NotFound("task has been removed".to_owned())
+                    })?;
+                task.remove_checkpoint(checkpoint.version(), delete_from_target)
+                    .await
             }
         }
     }
@@ -628,16 +683,34 @@ impl Engine {
             match checkpoint_info {
                 None => return Ok(None),
                 Some(checkpoint_info) => {
+                    let mut load_new_checkpoint = None;
                     let mut cache = self.tasks.write().await;
                     if let Some(task_cache) = cache.get_mut(task_uuid) {
-                        let version = checkpoint_info.meta.version;
+                        let version = checkpoint_info.version;
                         let checkpoint = task_cache
                             .checkpoints
                             .entry(version)
                             .or_insert_with(|| {
-                                Arc::new(CheckPointImpl::new(checkpoint_info, self.clone()))
+                                let old_status: CheckPointStatus = checkpoint_info.status.clone();
+                                let checkpoint =
+                                    Arc::new(CheckPointImpl::new(checkpoint_info, self.clone()));
+                                load_new_checkpoint = Some((checkpoint.clone(), old_status));
+                                checkpoint
                             })
                             .clone();
+
+                        if let Some((load_new_checkpoint, old_status)) = load_new_checkpoint {
+                            let engine = self.clone();
+                            tokio::task::spawn(async move {
+                                engine
+                                    .auto_resume_checkpoint_from_storage(
+                                        load_new_checkpoint,
+                                        old_status,
+                                    )
+                                    .await;
+                            });
+                        }
+
                         return Ok(Some(checkpoint));
                     } else {
                         // task maybe remove from the cache by other thread, retry it.

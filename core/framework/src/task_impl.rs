@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::SystemTime};
 
 use crate::{
-    checkpoint::{CheckPoint, CheckPointStatus},
+    checkpoint::{CheckPoint, CheckPointStatus, DeleteFromTarget},
     engine::{FindTaskBy, ListOffset, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
@@ -123,14 +123,14 @@ impl TaskImpl {
 
         match running_checkpoint {
             Some(version) => {
-                log::warn!("a checkpoint({}) is running", version);
+                log::warn!("a checkpoint({:?}) is running", version);
                 Err(BackupError::ErrorState(
                     "a checkpoint is running".to_owned(),
                 ))
             }
             None => match another_lock_selected {
                 Some(state_id) => {
-                    log::warn!("another lock({}) is running", state_id);
+                    log::warn!("another lock({:?}) is running", state_id);
                     Err(BackupError::ErrorState(
                         "another lock is running".to_owned(),
                     ))
@@ -146,7 +146,7 @@ impl TaskImpl {
         self.egnine
             .save_source_original_state(state_id, org_state.as_deref())
             .await?;
-        let locked_state = match org_state {
+        let locked_state = match org_state.as_ref() {
             Some(org_state) => self.source.lock_state(org_state.as_str()).await?,
             None => None,
         };
@@ -178,95 +178,36 @@ impl Task for TaskImpl {
         self.egnine.update_task_info(task_info).await
     }
 
-    async fn create_checkpoint(&self, is_delta: bool) -> BackupResult<Arc<dyn CheckPoint>> {
+    async fn create_checkpoint(
+        &self,
+        is_delta: bool,
+        is_compress: bool,
+    ) -> BackupResult<Arc<dyn CheckPoint>> {
         let locked_state = self.lock_source().await?;
 
-        let (root_dir_meta, prev_checkpoint_version, prev_occupied_size, prev_consume_size) = loop {
-            if is_delta {
-                let last_finish_checkpoint = self
-                    .egnine
-                    .list_checkpoints(
-                        &self.info.uuid,
-                        &ListCheckPointFilter {
-                            time: ListCheckPointFilterTime::CompleteTime(None, None),
-                            status: Some(vec![CheckPointStatus::Success]),
-                        },
-                        ListOffset::Last(0),
-                        1,
-                    )
-                    .await?
-                    .pop();
-
-                if let Some(prev_checkpoint) = last_finish_checkpoint {
-                    let mut prev_meta = CheckPoint::full_meta(prev_checkpoint.as_ref()).await?;
-                    let prev_version = prev_meta.version;
-
-                    let last_target_checkpoint = self
-                        .egnine
-                        .get_target_checkpoint(self.info.target_id, &self.info.uuid, prev_version)
-                        .await?;
-
-                    let prev_occupied_size =
-                        prev_meta.all_prev_version_occupied_size + prev_meta.occupied_size;
-                    let prev_consume_size =
-                        prev_meta.all_prev_version_consume_size + prev_meta.consume_size;
-
-                    prev_meta.prev_versions.push(prev_version);
-
-                    let prev_version = prev_meta.prev_versions;
-                    break (
-                        DirectoryMetaEngine::delta_from_reader(
-                            &prev_meta.root,
-                            prev_checkpoint.as_ref(),
-                            source_preserved.as_ref(),
-                        )
-                        .await?,
-                        prev_version,
-                        prev_occupied_size,
-                        prev_consume_size,
-                    );
-                }
-            }
-
-            break (
-                DirectoryMetaEngine::from_reader(source_preserved.as_ref()).await?,
-                vec![],
-                0,
-                0,
-            );
+        let prev_checkpoint_version = if is_delta {
+            self.egnine
+                .list_checkpoints(
+                    &self.info.uuid,
+                    &ListCheckPointFilter {
+                        time: ListCheckPointFilterTime::CompleteTime(None, None),
+                        status: Some(vec![CheckPointStatus::Success]),
+                    },
+                    ListOffset::Last(0),
+                    1,
+                )
+                .await?
+                .pop()
+                .map(|prev_checkpoint| prev_checkpoint.version())
+        } else {
+            None
         };
-
-        let now = SystemTime::now();
-        let mut checkpoint_meta = CheckPointMeta {
-            task_friendly_name: self.info.friendly_name.clone(),
-            task_uuid: self.info.uuid,
-            version: CheckPointVersion { time: now, seq: 0 },
-            prev_versions: prev_checkpoint_version,
-            create_time: now,
-            complete_time: now,
-            root: StorageItem::Dir(root_dir_meta, vec![]),
-            occupied_size: 0,
-            consume_size: 0,
-            all_prev_version_occupied_size: prev_occupied_size,
-            all_prev_version_consume_size: prev_consume_size,
-            service_meta: None,
-        };
-
-        let occupied_size = checkpoint_meta.estimate_occupy_size();
-        checkpoint_meta.occupied_size = occupied_size;
-
-        let target_task = self
-            .egnine
-            .get_target_task(self.info.target_id, &self.info.uuid)
-            .await?;
-        let consume_size = target_task.estimate_consume_size(&checkpoint_meta).await?;
-        checkpoint_meta.consume_size = consume_size;
 
         self.egnine
             .create_checkpoint(
                 &self.info.uuid,
-                Some(preserved_source_state_id),
-                &mut checkpoint_meta,
+                Some(locked_state.id),
+                prev_checkpoint_version,
             )
             .await
             .map(|cp| cp as Arc<dyn CheckPoint>)
@@ -303,7 +244,7 @@ impl Task for TaskImpl {
     async fn remove_checkpoint(
         &self,
         version: CheckPointVersion,
-        is_remove_on_target: bool,
+        is_delete_on_target: DeleteFromTarget,
     ) -> BackupResult<()> {
         unimplemented!()
     }
@@ -369,10 +310,14 @@ impl Task for TaskWrapper {
         }
     }
 
-    async fn create_checkpoint(&self, is_delta: bool) -> BackupResult<Arc<dyn CheckPoint>> {
+    async fn create_checkpoint(
+        &self,
+        is_delta: bool,
+        is_compress: bool,
+    ) -> BackupResult<Arc<dyn CheckPoint>> {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
-            Some(t) => t.create_checkpoint(is_delta).await,
+            Some(t) => t.create_checkpoint(is_delta, is_compress).await,
             None => Err(BackupError::NotFound(format!(
                 "task({}) has been removed.",
                 self.uuid()
@@ -413,11 +358,11 @@ impl Task for TaskWrapper {
     async fn remove_checkpoint(
         &self,
         version: CheckPointVersion,
-        is_remove_on_target: bool,
+        is_delete_on_target: DeleteFromTarget,
     ) -> BackupResult<()> {
         let t = self.engine.get_task(&self.uuid).await?;
         match t {
-            Some(t) => t.remove_checkpoint(version, is_remove_on_target).await,
+            Some(t) => t.remove_checkpoint(version, is_delete_on_target).await,
             None => Err(BackupError::NotFound(format!(
                 "task({}) has been removed.",
                 self.uuid()
