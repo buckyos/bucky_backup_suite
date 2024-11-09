@@ -93,7 +93,7 @@ impl<T: ChunkTarget> DecMutPart<T> {
         if self.offset < meta.header_length() {
             return;
         }
-        if self.offset % meta.block_size() as u64 != 0 {
+        if self.offset % meta.header().block_size as u64 != 0 {
             return;
         }
         self.read_proc.as_mut().unwrap().decryptor = meta.decryptor_on_offset(self.offset).unwrap();
@@ -150,6 +150,9 @@ impl<T: 'static + ChunkTarget> SectorDecryptor<T> {
 
     fn seek(&mut self, cx: &mut Context<'_>, offset: u64) -> Poll<std::io::Result<u64>> {
         let mut mut_part = self.mut_part.lock().unwrap();
+        if offset == mut_part.offset {
+            return Poll::Ready(Ok(offset));
+        }
         let mut future = if let Some((dest_offset, _)) = &mut_part.seek_proc {
             if *dest_offset != offset {
                 return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "seek offset is not continuous")));
@@ -165,7 +168,7 @@ impl<T: 'static + ChunkTarget> SectorDecryptor<T> {
                 decryptor: self.meta.decryptor_on_offset(offset).unwrap().unwrap(),
                 sector_reader: read_proc.sector_reader,
             };
-            Box::pin(seek_proc.seek(self.meta.block_size() as u64))
+            Box::pin(seek_proc.seek(self.meta.header().block_size as u64))
         };
         match future.as_mut().poll(cx) {
             Poll::Ready(Ok(seek_proc)) => {
@@ -295,7 +298,9 @@ struct SectorStub<T: ChunkTarget> {
 }
 
 pub struct ChunkDecryptor<T: ChunkTarget> {
-    offset: u64,
+    chunk: ChunkId,
+    offset: u64, 
+    cached_result: Option<std::io::Result<usize>>,
     cur_stub: Option<SectorStub<T>>, 
     stubs: LinkedList<SectorStub<T>>,
 }
@@ -303,69 +308,105 @@ pub struct ChunkDecryptor<T: ChunkTarget> {
 
 impl<T: 'static + ChunkTarget> ChunkDecryptor<T> {
     pub async fn new(chunk: ChunkId, metas: Vec<SectorMeta>, chunk_target: &T) -> ChunkResult<Self> {
-        let mut stubs = vec![];
+        let mut stubs = LinkedList::new();
         for meta in metas {
-            let range = meta.chunks().iter().find(|(id, _)| *id == chunk).map(|(_, range)| range.clone()).unwrap();
+            let range = meta.header().chunks.iter().find(|(id, _)| *id == chunk).map(|(_, range)| range.clone()).unwrap();
             let reader = SectorDecryptor::new(meta,chunk_target).await?;
-            stubs.push(SectorStub {
+            stubs.push_back(SectorStub {
                 range,
                 reader,
             });
         }
         Ok(Self {
+            chunk,
             offset: 0,
+            cached_result: None,
+            cur_stub: None,
             stubs,
         })
     }
-}
 
-impl<T: 'static + ChunkTarget> Read for ChunkDecryptor<T> {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<std::io::Result<usize>> {  
-        let this = self.get_mut();
-        let mut stub_index = None;
-        for (i, stub) in this.stubs.iter().enumerate() {
-            if this.offset >= stub.range.start && this.offset < stub.range.end {
-                stub_index = Some(i);
-                break;
+    fn seek(&mut self, offset: u64) -> Poll<std::io::Result<u64>> {
+        if let Some(stub) = self.cur_stub.take() {
+            self.stubs.push_back(stub);
+        }
+        self.offset = offset;
+        Poll::Ready(Ok(offset))
+    }
+
+    fn read(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<std::io::Result<usize>> {
+        if let Some(result) = &self.cached_result {
+            match result {
+                Ok(n) => return Poll::Ready(Ok(*n)),
+                Err(e) => return Poll::Ready(Err(std::io::Error::new(e.kind(), e.to_string()))),
             }
         }
-
-        let stub_index = if let Some(index) = stub_index {
-            index
-        } else {
-            return Poll::Ready(Ok(0));
+        if self.cur_stub.is_none() {
+            let mut stub_index = None;
+            for (i, stub) in self.stubs.iter().enumerate() {
+                if self.offset >= stub.range.start && self.offset < stub.range.end {
+                    stub_index = Some(i);
+                    break;
+                }
+            }
+            if let Some(index) = stub_index {
+                let mut split = self.stubs.split_off(index);
+                self.cur_stub = split.pop_front();
+                self.stubs.append(&mut split);
+            } else {
+                return Poll::Ready(Ok(0));
+            }
         };
+        let stub = self.cur_stub.as_mut().unwrap();
 
-        let stub = &mut this.stubs[stub_index];
-        if stub.reader.offset() != this.offset {
-            match Pin::new(&mut stub.reader).poll_seek(cx, SeekFrom::Start(this.offset)) {
-                Poll::Ready(Ok(_)) => {},
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+        if stub.reader.offset() != self.offset - stub.range.start {
+            match Pin::new(&mut stub.reader).poll_seek(cx, SeekFrom::Start(self.offset - stub.range.start)) {
+                Poll::Ready(Err(e)) => {
+                    self.cached_result = Some(Err(std::io::Error::new(e.kind(), e.to_string())));
+                    return Poll::Ready(Err(e));
+                }
                 Poll::Pending => return Poll::Pending,
+                Poll::Ready(Ok(_)) => {},
             }
         }
-
-        let remain_len = stub.range.end - this.offset;
-        let read_len = if buf.len() as u64 > remain_len {
-            remain_len as usize
-        } else {
-            buf.len()
-        };
-
-        match Pin::new(&mut stub.reader).poll_read(cx, &mut buf[..read_len]) {
+        match Pin::new(&mut stub.reader).poll_read(cx, buf) {
             Poll::Ready(Ok(n)) => {
-                this.offset += n as u64;
+                self.offset += n as u64;
+                if self.offset >= stub.range.end {
+                    self.stubs.push_back(self.cur_stub.take().unwrap());
+                }
                 Poll::Ready(Ok(n))
-            },
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            }
+            Poll::Ready(Err(e)) => {
+                self.cached_result = Some(Err(std::io::Error::new(e.kind(), e.to_string())));
+                Poll::Ready(Err(e))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
 }
 
-// impl Seek for SectorDecryptor {
-//     fn poll_seek(self: Pin<&mut Self>, cx: &mut Context<'_>, pos: SeekFrom) -> Poll<std::io::Result<u64>> {
-//         todo!()
-//     }
-// }
+impl<T: 'static + ChunkTarget> Read for ChunkDecryptor<T> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<std::io::Result<usize>> {  
+        self.get_mut().read(cx, buf)
+    }
+}
+
+impl<T: 'static + ChunkTarget> Seek for ChunkDecryptor<T> {
+    fn poll_seek(self: Pin<&mut Self>, _: &mut Context<'_>, pos: SeekFrom) -> Poll<std::io::Result<u64>> {
+        let this = self.get_mut();
+        let offset = match pos {
+            SeekFrom::Start(offset) => offset,
+            SeekFrom::End(offset) => {this.chunk.length() - offset as u64},
+            SeekFrom::Current(offset) => {
+                if offset > 0 {
+                    this.offset + offset as u64
+                } else {
+                    this.offset - offset.abs() as u64
+                }
+            },
+        };
+        this.seek(offset)
+    }
+}
 

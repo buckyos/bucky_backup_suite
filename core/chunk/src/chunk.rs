@@ -14,6 +14,11 @@ use crate::error::*;
 pub struct ChunkId([u8; 32]);
 
 impl ChunkId {
+    pub fn with_data(data: &[u8]) -> ChunkResult<Self> {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        Self::with_hasher(data.len() as u64, hasher)
+    }
     /// Creates a new ChunkId with the given length and full SHA256 hash.
     /// Only the first 24 bytes of the hash are used.
     pub fn with_hash(length: u64, sha256: &[u8; 32]) -> ChunkResult<Self> {

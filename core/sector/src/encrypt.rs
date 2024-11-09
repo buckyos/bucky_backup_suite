@@ -24,7 +24,7 @@ impl EncMutPart {
         if self.offset < meta.header_length() {
             return;
         }
-        if self.offset % meta.block_size() as u64 != 0 {
+        if self.offset % meta.header().block_size as u64 != 0 {
             return;
         }
         self.encryptor = meta.encryptor_on_offset(self.offset).unwrap();
@@ -88,7 +88,7 @@ pub struct SectorEncryptor {
 
 impl SectorEncryptor {
     pub async fn new<T: ChunkTarget>(meta: SectorMeta, chunk_target: T, offset: u64) -> ChunkResult<Self> {
-        if offset > meta.header_length() && offset % meta.block_size() as u64 != 0 {
+        if offset > meta.header_length() && offset % meta.header().block_size as u64 != 0 {
             return Err(ChunkError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset must be a multiple of block size")));
         }
 
@@ -104,7 +104,7 @@ impl SectorEncryptor {
         };
 
         Ok(Self {
-            header_part: meta.encrypt_to_vec(),
+            header_part: meta.header().encrypt_to_vec(),
             mut_part: Mutex::new(mut_part),
             meta,
         })
@@ -158,7 +158,7 @@ impl SectorEncryptor {
             .chunk_on_offset(offset).ok_or(ChunkError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset out of range")))?;
         let mut chunk_upper_offset = offset_range.start;
         let mut chunks = vec![];
-        for (chunk_id, range) in meta.chunks()[chunk_index..].iter() {
+        for (chunk_id, range) in meta.header().chunks[chunk_index..].iter() {
             let mut chunk_reader = chunk_target.read(chunk_id).await?;
             if offset > chunk_upper_offset {
                 chunk_reader.seek(SeekFrom::Start(offset - chunk_upper_offset)).await?;

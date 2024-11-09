@@ -289,7 +289,7 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
         let mut transaction = self.sql_pool().begin().await?;
         
         let mut offset_in_sector = 0;
-        for (chunk_id, range_in_chunk) in sector_meta.chunks() {
+        for (chunk_id, range_in_chunk) in sector_meta.header().chunks.iter() {
             let length = range_in_chunk.end - range_in_chunk.start;
             sqlx::query(
                 "INSERT INTO chunks_in_sectors (chunk_id, sector_id, offset_in_chunk, length, offset_in_sector) 
@@ -371,7 +371,7 @@ impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
             metas.push(self.query_sector_meta(&sector).await?);
         }
 
-        Ok(SectorStoreRead::Remote(ChunkDecryptor::new(metas, self.remote_store()).await?))
+        Ok(SectorStoreRead::Remote(ChunkDecryptor::new(chunk_id.clone(), metas, self.remote_store()).await?))
     }
 
     async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl async_std::io::BufRead + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {

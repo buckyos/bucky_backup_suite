@@ -1,37 +1,97 @@
-use std::cell::{OnceCell, RefCell};
-use std::future::Future;
-use std::sync::Arc;
-use std::{io::SeekFrom, ops::Range};
-use std::pin::Pin;
-use async_std::io::prelude::*;
-use async_std::{future, task};
+use std::ops::Range;
 use generic_array::typenum::{U16, U32};
 use generic_array::GenericArray;
-use std::task::{Context, Poll, Waker};
 use aes::Aes256;
 use sha2::{Sha256, Digest}; 
-use cipher::{Block, BlockEncryptMut, BlockSizeUser, Iv, KeyIvInit};
+use cipher::{BlockSizeUser, Iv, KeyIvInit};
 use chunk::*;
 
 const SECTOR_MAGIC: u64 = 0x444d4358;
-const SECTOR_VERSION_0: u16 = 0;
+const SECTOR_VERSION_0: u32 = 0;
 const SECTOR_FLAGS_DEFAULT: u32 = 0;
 
 const SECTOR_KEY_SIZE: usize = 32;
 pub type SectorKey = GenericArray<u8, U32>;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone)]
 pub struct SectorHeader {
     pub version: u32,
-    pub flags: u32,
+    pub flags: u32, 
+    pub block_size: u16,
     pub key: Option<SectorKey>,
+    pub chunks: Vec<(ChunkId, Range<u64>)>,
+    pub reserved: [u8; 12],
 }
 
-pub struct SectorMeta {
-    key: Option<SectorKey>,
-    block_size: usize,
-    chunks: Vec<(ChunkId, Range<u64>)>,
+impl Default for SectorHeader {
+    fn default() -> Self {
+        Self {
+            version: SECTOR_VERSION_0,
+            flags: SECTOR_FLAGS_DEFAULT,
+            block_size: 16 * 1024,
+            key: None,
+            chunks: Vec::new(),
+            reserved: [0u8; 12],
+        }
+    }
+}
 
+impl SectorHeader {
+    fn calc_length(&self) -> usize {
+        let length = size_of::<u64>()    // SECTOR_MAGIC
+        + size_of::<u32>()  // version
+        + size_of::<u32>()  // flags
+        + size_of::<u16>() // block_size
+        + if self.key.is_some() {
+            SECTOR_KEY_SIZE // key length
+        } else {
+            0
+        }
+        + size_of::<u16>() // length of chunks
+        + self.chunks.iter().map(|(..)| {
+            size_of::<ChunkId>() + size_of::<u64>() + size_of::<u64>()
+        }).sum::<usize>()
+        + self.reserved.len(); // reserved
+        assert_eq!(length % Aes256::block_size() as usize, 0);
+        length as usize
+    }
+
+    pub fn encrypt_to_vec(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+        
+        // 写入魔数
+        result.extend_from_slice(&SECTOR_MAGIC.to_be_bytes());
+        
+        result.extend_from_slice(&self.version.to_be_bytes());
+
+        result.extend_from_slice(&self.flags.to_be_bytes());
+
+        result.extend_from_slice(&self.block_size.to_be_bytes());
+
+        if let Some(key) = &self.key {
+            result.extend_from_slice(key);
+        }
+    
+        result.extend_from_slice(&(self.chunks.len() as u16).to_be_bytes());
+        
+        // 写入每个块的信息
+        for (chunk_id, range) in &self.chunks {
+            // 写入块ID
+            result.extend_from_slice(chunk_id.as_ref());
+            // 写入范围
+            result.extend_from_slice(&range.start.to_be_bytes());
+            result.extend_from_slice(&range.end.to_be_bytes());
+        }
+
+        result.extend_from_slice(&self.reserved);
+        
+        result
+    }
+}
+
+#[derive(Clone)]
+pub struct SectorMeta {
+    header: SectorHeader,
     id: ChunkId,
     header_length: u64,
     body_length: u64,
@@ -39,9 +99,9 @@ pub struct SectorMeta {
 }
 
 impl SectorMeta {
-    fn new(block_size: usize, key: Option<SectorKey>, chunks: Vec<(ChunkId, Range<u64>)>) -> Self {
-        let header_length = 0;
-        let body_length = chunks.iter().map(|(_, range)| range.end - range.start).sum();
+    pub fn new(header: SectorHeader) -> Self {
+        let header_length = header.calc_length() as u64;
+        let body_length = header.chunks.iter().map(|(_, range)| range.end - range.start).sum();
         let sector_length = header_length + body_length;
         let sector_length = if sector_length % Aes256::block_size() as u64 != 0 {
             sector_length / Aes256::block_size() as u64 * Aes256::block_size() as u64 + Aes256::block_size() as u64
@@ -50,23 +110,20 @@ impl SectorMeta {
         };
         let mut hasher = Sha256::new();
         
-        if let Some(key) = &key {
+        if let Some(key) = &header.key {
             hasher.update(key);
         }
         
         // 添加所有chunk的信息到哈希计算中
-        for (chunk_id, range) in &chunks {
+        for (chunk_id, range) in &header.chunks {
             hasher.update(chunk_id.as_ref());
             hasher.update(&range.start.to_be_bytes());
             hasher.update(&range.end.to_be_bytes());
         }
         let id = ChunkId::with_hasher(sector_length, hasher).unwrap();
 
-
         Self {
-            key,
-            chunks,
-            block_size,
+            header,
             header_length,
             body_length,
             sector_length,
@@ -74,17 +131,17 @@ impl SectorMeta {
         }
     }
 
+    pub fn header(&self) -> &SectorHeader {
+        &self.header
+    }
+
     pub fn sector_id(&self) -> &ChunkId {
         &self.id
     }
 
-    pub fn block_size(&self) -> usize {
-        16 * 1024 
-    }
-
     pub fn encryptor_on_offset(&self, offset: u64) -> ChunkResult<Option<cbc::Encryptor<Aes256>>> {
         if let Some(iv) = self.iv_on_offset(offset)? {
-            Ok(Some(cbc::Encryptor::<Aes256>::new(self.key.as_ref().unwrap(), &iv)))
+            Ok(Some(cbc::Encryptor::<Aes256>::new(self.header.key.as_ref().unwrap(), &iv)))
         } else {
             Ok(None)
         }
@@ -92,22 +149,18 @@ impl SectorMeta {
 
     pub fn decryptor_on_offset(&self, offset: u64) -> ChunkResult<Option<cbc::Decryptor<Aes256>>> {
         if let Some(iv) = self.iv_on_offset(offset)? {
-            Ok(Some(cbc::Decryptor::<Aes256>::new(self.key.as_ref().unwrap(), &iv)))
+            Ok(Some(cbc::Decryptor::<Aes256>::new(self.header.key.as_ref().unwrap(), &iv)))
         } else {
             Ok(None)
         }
     }
 
     fn iv_on_offset(&self, _: u64) -> ChunkResult<Option<Iv<cbc::Encryptor<Aes256>>>> {
-        if let Some(_) = &self.key {
+        if let Some(_) = &self.header.key {
             Ok(Some(GenericArray::<u8, U16>::from_slice(&[0u8; 16]).clone()))
         } else {
             Ok(None)
         }
-    }
-
-    pub fn chunks(&self) -> &Vec<(ChunkId, Range<u64>)> {
-        &self.chunks
     }
 
     pub fn sector_length(&self) -> u64 {
@@ -125,9 +178,9 @@ impl SectorMeta {
     pub fn chunk_on_offset(&self, offset: u64) -> Option<(usize, u64, Range<u64>)> {
         let offset = offset - self.header_length;
         let mut in_offset = 0;
-        for (i, (_, range)) in self.chunks.iter().enumerate() {
+        for (i, (_, range)) in self.header.chunks.iter().enumerate() {
             if offset >= in_offset && offset < in_offset + range.end - range.start  {
-                if i == self.chunks.len() - 1 {
+                if i == self.header.chunks.len() - 1 {
                     return Some((i, offset - in_offset, range.start + in_offset..self.sector_length));
                 } else {
                     return Some((i, offset - in_offset, range.start + in_offset..range.end));
@@ -138,27 +191,23 @@ impl SectorMeta {
         None
     }
 
-    pub fn encrypt_to_vec(&self) -> Vec<u8> {
-       todo!()
-    }
+   
 }
 
 
 
 pub struct SectorBuilder {
     length_limit: u64,
-    block_size: usize,
     length: u64, 
-    chunks: Vec<(ChunkId, Range<u64>)>,
+    header: SectorHeader,
 }
 
 impl SectorBuilder {
     pub fn new() -> Self {
         Self {
             length_limit: u64::MAX,
-            block_size: 16 * 1024,
             length: 0,
-            chunks: Vec::new(),
+            header: SectorHeader::default(),
         }
     }
 
@@ -170,12 +219,8 @@ impl SectorBuilder {
         self.length_limit
     }
 
-    pub fn chunks(&self) -> &Vec<(ChunkId, Range<u64>)> {
-        &self.chunks
-    }
-
     pub fn with_length_limit(mut self, length_limit: u64) -> Self {
-        if self.chunks.len() > 0 {
+        if self.header.chunks.len() > 0 {
             assert!(false, "length_limit must be greater than the largest chunk");
             return self;
         }
@@ -183,8 +228,8 @@ impl SectorBuilder {
         self
     }
 
-    pub fn with_block_size(mut self, block_size: usize) -> Self {
-        self.block_size = block_size;
+    pub fn with_block_size(mut self, block_size: u16) -> Self {
+        self.header.block_size = block_size;
         self
     }
 
@@ -199,12 +244,12 @@ impl SectorBuilder {
             length
         };
         self.length += length;
-        self.chunks.push((chunk_id, range.start..(range.start + length)));
+        self.header.chunks.push((chunk_id, range.start..(range.start + length)));
         length
     }
 
     pub fn build(self) -> SectorMeta {
-        SectorMeta::new(self.block_size, None, self.chunks)
+        SectorMeta::new(self.header)
     }
 }
 
