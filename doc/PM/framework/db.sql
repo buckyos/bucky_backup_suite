@@ -178,10 +178,10 @@ CREATE TABLE IF NOT EXISTS chunks (
     UNIQUE(chunk_hash)
 )
 
-CREATE TABLE IF NOT EXISTS chunk_files (
-    chunk_file_id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS chunk_items (
+    chunk_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
     chunk_id INTEGER NOT NULL,
-    file_path TEXT NOT NULL,
+    file_path_or_chunk_hash TEXT NOT NULL, -- file-path for files, chunk-hash for chunk
     parent_id INTEGER DEFAULT NULL,
     file_type INTEGER NOT NULL,
     attributes TEXT NOT NULL,
@@ -192,7 +192,7 @@ CREATE TABLE IF NOT EXISTS chunk_files (
 )
 
 CREATE TABLE IF NOT EXISTS chunk_blocks (
-    chunk_file_id INTEGER PRIMARY KEY,
+    chunk_item_id INTEGER PRIMARY KEY,
     file_size INTEGER DEFAULT 0,
     diff_size INTEGER DEFAULT NULL,
     block_size INTEGER DEFAULT 0,
@@ -203,7 +203,7 @@ CREATE TABLE IF NOT EXISTS chunk_blocks (
 )
 
 CREATE TABLE IF NOT EXISTS chunk_links (
-    chunk_file_id INTEGER PRIMARY KEY,
+    chunk_item_id INTEGER PRIMARY KEY,
     target TEXT NOT NULL,
     is_hard INTEGER DEFAULT 0,
     FOREIGN KEY (chunk_file_id) REFERENCES chunk_files(chunk_file_id),

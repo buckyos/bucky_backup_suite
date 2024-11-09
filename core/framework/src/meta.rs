@@ -374,6 +374,7 @@ pub enum ChunkBlockMeta {
     File(FileMeta),
     Block(BlockMeta),
     FileDiff(FileDiffMeta),
+    Chunk(BlockOwnerChunk),
 }
 
 pub struct ChunkBlock {
@@ -389,26 +390,58 @@ pub enum ChunkItem {
     Block(ChunkBlock),
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct BlockMeta {
+pub struct BlockOwnerFile {
     pub path: PathBuf,
     pub attributes: Option<Attributes>,
     pub file_size: u64,
     pub file_hash: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct BlockOwnerFileDiff {
+    pub path: PathBuf,
+    pub attributes: Option<Attributes>,
+    pub file_size: Option<u64>,
+    pub file_hash: Option<String>,
+    pub diff_hash: Option<String>,
+    pub diff_size: u64,
+    pub header: Option<FileDiffHeader>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct BlockOwnerChunk {
+    pub block_hash: String,
+    pub block_size: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum BlockOwner {
+    File(BlockOwnerFile),
+    FileDiff(BlockOwnerFileDiff),
+    Chunk(BlockOwnerChunk),
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct BlockMeta {
+    pub owner: BlockOwner,
     pub hash: String,
     pub offset: u64,
     pub len: u64,
 }
 
 pub trait ChunkItemField {
-    fn path(&self) -> &Path;
+    fn path(&self) -> Option<&Path>;
     fn attributes(&self) -> Option<&Attributes>;
     fn attributes_mut(&mut self) -> Option<&mut Attributes>;
 }
 
 impl ChunkItemField for BlockMeta {
-    fn path(&self) -> &Path {
-        &self.path
+    fn path(&self) -> Option<&Path> {
+        match self.owner.as_ref() {
+            BlockOwner::File(file) => Some(file.path.as_path()),
+            BlockOwner::FileDiff(diff) => Some(diff.path.as_path()),
+            BlockOwner::Chunk(_) => None,
+        }
     }
 
     fn attributes(&self) -> Option<&Attributes> {
@@ -424,8 +457,8 @@ impl<T> ChunkItemField for T
 where
     T: FolderItemField,
 {
-    fn path(&self) -> &Path {
-        self.path::<FolderItemField>()
+    fn path(&self) -> Option<&Path> {
+        Some(self.path::<FolderItemField>())
     }
 
     fn attributes(&self) -> Option<&Attributes> {
@@ -438,11 +471,14 @@ where
 }
 
 impl ChunkItemField for ChunkBlockMeta {
-    fn path(&self) -> &Path {
+    fn path(&self) -> Option<&Path> {
         match self {
-            ChunkBlockMeta::File(file_meta) => file_meta.path::<ChunkItemField>(),
+            ChunkBlockMeta::File(file_meta) => Some(file_meta.path::<FolderItemField>()),
             ChunkBlockMeta::Block(block_meta) => block_meta.path::<ChunkItemField>(),
-            ChunkBlockMeta::FileDiff(file_diff_meta) => file_diff_meta.path::<ChunkItemField>(),
+            ChunkBlockMeta::FileDiff(file_diff_meta) => {
+                Some(file_diff_meta.path::<FolderItemField>())
+            }
+            ChunkBlockMeta::Chunk(block_owner_chunk) => None,
         }
     }
 
@@ -453,6 +489,7 @@ impl ChunkItemField for ChunkBlockMeta {
             ChunkBlockMeta::FileDiff(file_diff_meta) => {
                 file_diff_meta.attributes::<ChunkItemField>()
             }
+            ChunkBlockMeta::Chunk(block_owner_chunk) => None,
         };
         Some(attr)
     }
@@ -466,17 +503,18 @@ impl ChunkItemField for ChunkBlockMeta {
             ChunkBlockMeta::FileDiff(file_diff_meta) => {
                 file_diff_meta.attributes_mut::<ChunkItemField>()
             }
+            ChunkBlockMeta::Chunk(block_owner_chunk) => None,
         };
         Some(attr)
     }
 }
 
 impl ChunkItemField for ChunkItem {
-    fn path(&self) -> &Path {
+    fn path(&self) -> Option<&Path> {
         match self {
-            ChunkItem::Dir(directory_meta) => directory_meta.path(),
-            ChunkItem::Link(link_meta) => link_meta.path(),
-            ChunkItem::Log(log_meta) => log_meta.path(),
+            ChunkItem::Dir(directory_meta) => Some(directory_meta.path::<FolderItemField>()),
+            ChunkItem::Link(link_meta) => Some(link_meta.path::<FolderItemField>()),
+            ChunkItem::Log(log_meta) => Some(log_meta.path::<FolderItemField>()),
             ChunkItem::Block(chunk_block) => chunk_block.path(),
         }
     }
