@@ -63,7 +63,7 @@ impl<T: ChunkTarget> DecReadProc<T> {
 struct DecSeekProc<T: ChunkTarget> {
     dest_offset: u64, 
     read_offset_in_buffer: usize, 
-    decryptor: cbc::Decryptor<Aes256>,
+    decryptor: Option<cbc::Decryptor<Aes256>>,
     buffer: Vec<u8>, 
     sector_reader: T::Read,
 }
@@ -73,7 +73,9 @@ impl<T: ChunkTarget> DecSeekProc<T> {
         let block_offset = self.dest_offset / block_size * block_size;
         self.sector_reader.seek(SeekFrom::Start(block_offset)).await?;
         self.sector_reader.read_exact(&mut self.buffer[..]).await?;
-        self.decryptor.decrypt_block_mut(Block::<Aes256>::from_mut_slice(&mut self.buffer[..]));
+        if let Some(decryptor) = &mut self.decryptor {
+            decryptor.decrypt_block_mut(Block::<Aes256>::from_mut_slice(&mut self.buffer[..]));
+        }
         self.read_offset_in_buffer = (self.dest_offset % block_size) as usize;
         Ok(self)
     }
@@ -165,10 +167,10 @@ impl<T: 'static + ChunkTarget> SectorDecryptor<T> {
                 dest_offset: offset,
                 read_offset_in_buffer: 0,
                 buffer: read_proc.buffer,
-                decryptor: self.meta.decryptor_on_offset(offset).unwrap().unwrap(),
+                decryptor: self.meta.decryptor_on_offset(offset).unwrap(),
                 sector_reader: read_proc.sector_reader,
             };
-            Box::pin(seek_proc.seek(self.meta.header().block_size as u64))
+            Box::pin(seek_proc.seek(aes::Aes256::block_size() as u64))
         };
         match future.as_mut().poll(cx) {
             Poll::Ready(Ok(seek_proc)) => {
@@ -176,7 +178,7 @@ impl<T: 'static + ChunkTarget> SectorDecryptor<T> {
                     buffer: seek_proc.buffer,
                     read_offset_in_buffer: Some(seek_proc.read_offset_in_buffer),
                     write_offset_in_buffer: None,
-                    decryptor: Some(seek_proc.decryptor),
+                    decryptor: seek_proc.decryptor,
                     sector_reader: seek_proc.sector_reader,
                 });
                 mut_part.offset = offset;
@@ -293,7 +295,8 @@ impl<T: 'static + ChunkTarget> Seek for SectorDecryptor<T> {
 }
 
 struct SectorStub<T: ChunkTarget> {
-    range: Range<u64>,
+    offset_in_sector: u64,
+    chunk_range: Range<u64>,
     reader: SectorDecryptor<T>,
 }
 
@@ -310,10 +313,11 @@ impl<T: 'static + ChunkTarget> ChunkDecryptor<T> {
     pub async fn new(chunk: ChunkId, metas: Vec<SectorMeta>, chunk_target: &T) -> ChunkResult<Self> {
         let mut stubs = LinkedList::new();
         for meta in metas {
-            let range = meta.header().chunks.iter().find(|(id, _)| *id == chunk).map(|(_, range)| range.clone()).unwrap();
+            let (offset_in_sector, chunk_range) = meta.offset_of_chunk(&chunk).unwrap();
             let reader = SectorDecryptor::new(meta,chunk_target).await?;
             stubs.push_back(SectorStub {
-                range,
+                offset_in_sector,
+                chunk_range,
                 reader,
             });
         }
@@ -344,7 +348,7 @@ impl<T: 'static + ChunkTarget> ChunkDecryptor<T> {
         if self.cur_stub.is_none() {
             let mut stub_index = None;
             for (i, stub) in self.stubs.iter().enumerate() {
-                if self.offset >= stub.range.start && self.offset < stub.range.end {
+                if self.offset >= stub.chunk_range.start && self.offset < stub.chunk_range.end {
                     stub_index = Some(i);
                     break;
                 }
@@ -359,8 +363,9 @@ impl<T: 'static + ChunkTarget> ChunkDecryptor<T> {
         };
         let stub = self.cur_stub.as_mut().unwrap();
 
-        if stub.reader.offset() != self.offset - stub.range.start {
-            match Pin::new(&mut stub.reader).poll_seek(cx, SeekFrom::Start(self.offset - stub.range.start)) {
+        let offset_in_sector = stub.offset_in_sector + self.offset - stub.chunk_range.start;
+        if stub.reader.offset() != offset_in_sector {
+            match Pin::new(&mut stub.reader).poll_seek(cx, SeekFrom::Start(offset_in_sector)) {
                 Poll::Ready(Err(e)) => {
                     self.cached_result = Some(Err(std::io::Error::new(e.kind(), e.to_string())));
                     return Poll::Ready(Err(e));
@@ -372,7 +377,7 @@ impl<T: 'static + ChunkTarget> ChunkDecryptor<T> {
         match Pin::new(&mut stub.reader).poll_read(cx, buf) {
             Poll::Ready(Ok(n)) => {
                 self.offset += n as u64;
-                if self.offset >= stub.range.end {
+                if self.offset >= stub.chunk_range.end {
                     self.stubs.push_back(self.cur_stub.take().unwrap());
                 }
                 Poll::Ready(Ok(n))

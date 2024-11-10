@@ -5,7 +5,25 @@ use rand::RngCore;
 use sha2::{Sha256, Digest};
 
 pub async fn setup_test_env() -> PathBuf {
-    let test_dir = PathBuf::from("target/test_tmp");
+    use std::io::Write;
+    env_logger::builder().filter_level(log::LevelFilter::Info)
+    .filter_module("tide", log::LevelFilter::Off)
+    .filter_module("sqlx", log::LevelFilter::Off)
+    .format(|buf, record| {
+        writeln!(
+            buf,
+            "{}:{} {} - {}",
+            record.file().unwrap_or("unknown"),
+            record.line().unwrap_or(0),
+            record.level(),
+            record.args()
+        )
+    }).init();
+
+    let exe_path = std::env::current_exe().unwrap();
+    let exe_dir = exe_path.parent().unwrap();   
+    let test_dir = exe_dir.join("target/test_tmp");
+
     if test_dir.exists() {
         fs::remove_dir_all(&test_dir).await.unwrap();
     }
@@ -31,9 +49,7 @@ pub async fn create_random_chunk(store: &LocalStore, length: u64) -> ChunkId {
     let mut rng = rand::thread_rng();
     let mut data = vec![0u8; length as usize];
     rng.fill_bytes(&mut data);
-    let mut hasher = ChunkId::hasher();
-    hasher.update(&data);
-    let chunk_id = ChunkId::with_hasher(length, hasher).unwrap();
+    let chunk_id = ChunkId::with_data(&data[..]).unwrap();
     store.write(&chunk_id, 0, Cursor::new(data), Some(length)).await.unwrap();
     chunk_id
 }

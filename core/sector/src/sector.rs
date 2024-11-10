@@ -89,6 +89,12 @@ impl SectorHeader {
     }
 }
 
+pub struct ChunkOnOffset {
+    pub chunk_index: usize,
+    pub range_in_sector: Range<u64>,
+    pub range_in_chunk: Range<u64>,
+}
+
 #[derive(Clone)]
 pub struct SectorMeta {
     header: SectorHeader,
@@ -175,22 +181,38 @@ impl SectorMeta {
         self.body_length
     }
 
-    pub fn chunk_on_offset(&self, offset: u64) -> Option<(usize, u64, Range<u64>)> {
-        let offset = offset - self.header_length;
-        let mut in_offset = 0;
+    pub fn chunk_on_offset(&self, offset: u64) -> Option<ChunkOnOffset> {
+        let offset_in_chunks = offset - self.header_length;
+        let mut start_offset_in_chunks = 0;
         for (i, (_, range)) in self.header.chunks.iter().enumerate() {
-            if offset >= in_offset && offset < in_offset + range.end - range.start  {
+            if offset_in_chunks >= start_offset_in_chunks && offset < start_offset_in_chunks + range.end - range.start  {
                 if i == self.header.chunks.len() - 1 {
-                    return Some((i, offset - in_offset, range.start + in_offset..self.sector_length));
+                    return Some(ChunkOnOffset {
+                        chunk_index: i,
+                        range_in_sector: self.header_length + start_offset_in_chunks..self.sector_length,
+                        range_in_chunk: range.clone(),
+                    });
                 } else {
-                    return Some((i, offset - in_offset, range.start + in_offset..range.end));
+                    return Some(ChunkOnOffset {
+                        chunk_index: i,
+                        range_in_sector: self.header_length + start_offset_in_chunks..self.header_length + start_offset_in_chunks + range.end - range.start,
+                        range_in_chunk: range.clone(),
+                    });
                 }
             }
-            in_offset += range.end - range.start;
+            start_offset_in_chunks += range.end - range.start;
         }
         None
     }
 
+    pub fn offset_of_chunk(&self, chunk_id: &ChunkId) -> Option<(u64, Range<u64>)> {
+        if let Some((index, _)) = self.header.chunks.iter().enumerate().find(|(_, (id, _))| id == chunk_id) {
+            let offset: u64 = self.header.chunks[..index].iter().map(|(_, range)| range.end - range.start).sum();
+            Some((self.header_length + offset, self.header.chunks[index].1.clone()))
+        } else {
+            None
+        }
+    }
    
 }
 
@@ -217,6 +239,11 @@ impl SectorBuilder {
 
     pub fn length_limit(&self) -> u64 {
         self.length_limit
+    }
+
+    pub fn with_key(mut self, key: Vec<u8>) -> Self {
+        self.header.key = Some(SectorKey::clone_from_slice(&key[0..SECTOR_KEY_SIZE]));
+        self
     }
 
     pub fn with_length_limit(mut self, length_limit: u64) -> Self {

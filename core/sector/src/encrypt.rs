@@ -111,12 +111,17 @@ impl SectorEncryptor {
     }
 
     async fn reader_of_chunks<T: ChunkTarget>(meta: &SectorMeta, chunk_target: &T, offset: u64) -> ChunkResult<Box<dyn Read + Unpin + Send>> {
+        struct ChunkStub {
+            end_offset_in_sector: u64,
+            chunk_reader: Box<dyn Read + Unpin + Send>
+        }
+        
         struct ChunksReader {
             offset: u64,
             pedding_length: u64, 
             source_length: u64,
-            chunk_index: usize,
-            chunks: Vec<(Box<dyn Read + Unpin + Send>, u64)>,
+            chunk_stub_index: usize,
+            chunk_stubs: Vec<ChunkStub>,
         }
 
         impl Read for ChunksReader {
@@ -137,13 +142,13 @@ impl SectorEncryptor {
                     return Poll::Ready(Ok(read));
                 }
 
-                let (chunk_reader, chunk_upper_offset) = &mut reader.chunks[reader.chunk_index];
+                let chunk_stub = &mut reader.chunk_stubs[reader.chunk_stub_index];
 
-                match Pin::new(chunk_reader.as_mut()).poll_read(cx, &mut buf[..]) {
+                match Pin::new(chunk_stub.chunk_reader.as_mut()).poll_read(cx, &mut buf[..]) {
                     Poll::Ready(Ok(n)) => {
                         reader.offset += n as u64;
-                        if reader.offset >= *chunk_upper_offset {
-                            reader.chunk_index += 1;
+                        if reader.offset >= chunk_stub.end_offset_in_sector {
+                            reader.chunk_stub_index += 1;
                         }
                         return Poll::Ready(Ok(n));
                     }
@@ -154,24 +159,40 @@ impl SectorEncryptor {
             }
         }
 
-        let (chunk_index, _, offset_range) = meta
+        let chunk_on_offset = meta
             .chunk_on_offset(offset).ok_or(ChunkError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset out of range")))?;
-        let mut chunk_upper_offset = offset_range.start;
-        let mut chunks = vec![];
-        for (chunk_id, range) in meta.header().chunks[chunk_index..].iter() {
-            let mut chunk_reader = chunk_target.read(chunk_id).await?;
-            if offset > chunk_upper_offset {
-                chunk_reader.seek(SeekFrom::Start(offset - chunk_upper_offset)).await?;
+        let mut chunk_stubs = vec![];
+        {
+            let mut chunk_reader = chunk_target.read(&meta.header().chunks[chunk_on_offset.chunk_index].0).await?;
+            if offset > chunk_on_offset.range_in_sector.start {
+                chunk_reader.seek(SeekFrom::Start(offset - chunk_on_offset.range_in_sector.start + chunk_on_offset.range_in_chunk.start)).await?;
             }
-            chunk_upper_offset += range.end - range.start;
-            chunks.push((Box::new(chunk_reader) as Box<dyn Read + Unpin + Send>, chunk_upper_offset));
+            chunk_stubs.push(ChunkStub {
+                end_offset_in_sector: chunk_on_offset.range_in_sector.end,
+                chunk_reader: Box::new(chunk_reader) as Box<dyn Read + Unpin + Send>,
+            });
+        }
+        
+        let mut end_offset_in_sector = chunk_on_offset.range_in_sector.end;
+        if chunk_on_offset.chunk_index < meta.header().chunks.len() - 1 {
+            for (chunk_id, range_in_chunk) in meta.header().chunks[chunk_on_offset.chunk_index + 1..].iter() {
+                let mut chunk_reader = chunk_target.read(&chunk_id).await?;
+                if range_in_chunk.start > 0 {
+                    chunk_reader.seek(SeekFrom::Start(range_in_chunk.start)).await?;
+                }
+                end_offset_in_sector += range_in_chunk.end - range_in_chunk.start;
+                chunk_stubs.push(ChunkStub {
+                    end_offset_in_sector,
+                    chunk_reader: Box::new(chunk_reader) as Box<dyn Read + Unpin + Send>,
+                });
+            }
         }
         Ok(Box::new(ChunksReader {
             offset,
             pedding_length: meta.sector_length() - offset,
             source_length: meta.body_length(),
-            chunk_index,
-            chunks,
+            chunk_stub_index: 0,
+            chunk_stubs,
         }))
     }
 
