@@ -1,6 +1,6 @@
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
-    path::{Path, PathBuf},
+    path::{Display, Path, PathBuf},
     sync::Arc,
     time::SystemTime,
     u64,
@@ -10,12 +10,21 @@ use sha2::digest::typenum::Length;
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
 
 use crate::{
-    checkpoint::{CheckPoint, CheckPointInfo, DirChildType, DirReader, LinkInfo, PendingStatus},
-    engine::{FindTaskBy, TaskUuid},
+    checkpoint::{
+        CheckPoint, CheckPointInfo, CheckPointStatus, ChunkReader, DirChildType, DirReader,
+        FolderReader, ItemEnumerate, ItemId, ItemTransferProgress, LinkInfo, PendingAttribute,
+        PendingStatus, PrepareProgress, TransferProgress,
+    },
+    engine::{FindTaskBy, SourceId, TaskUuid},
     engine_impl::Engine,
     error::{BackupError, BackupResult},
     meta::{Attributes, CheckPointVersion, FileDiffHeader},
-    status_waiter::Waiter,
+    source::{LockedSource, SourceStatus},
+    source_wrapper::LockedSourceWrapper,
+    status_waiter::{self, Waiter},
+    target::TargetStatus,
+    task::Task,
+    task_impl::TaskWrapper,
 };
 
 pub(crate) struct CheckPointImpl {
@@ -23,263 +32,203 @@ pub(crate) struct CheckPointImpl {
     version: CheckPointVersion,
     info: Arc<RwLock<CheckPointInfo>>,
     engine: Engine,
+    source: LockedSourceWrapper,
+    status: Arc<Mutex<crate::status_waiter::Status<CheckPointStatus>>>,
+    status_waiter: crate::status_waiter::Waiter<CheckPointStatus>,
+    source_status: crate::status_waiter::Status<SourceStatus>,
+    source_status_waiter: crate::status_waiter::Waiter<SourceStatus>,
+    target_status: crate::status_waiter::Status<TargetStatus>,
+    target_status_waiter: crate::status_waiter::Waiter<TargetStatus>,
+}
+
+impl std::fmt::Display for CheckPointImpl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.task_uuid, self.version)
+    }
 }
 
 impl CheckPointImpl {
-    pub(crate) fn new(mut info: CheckPointInfo, engine: Engine) -> Self {
-        let task_uuid = info.meta.task_uuid;
-        let version = info.meta.version;
-        // todo: update status to static(as stop, success, failed...)
+    pub(crate) fn new(mut info: CheckPointInfo, source_id: SourceId, engine: Engine) -> Self {
+        let task_uuid = info.task_uuid;
+        let version = info.version;
+        let locked_state_id = info.locked_source_state_id;
+
+        let pending_static = |pending_status: &PendingStatus| -> PendingStatus {
+            match pending_status {
+                PendingStatus::None | PendingStatus::Pending | PendingStatus::Started => {
+                    PendingStatus::None
+                }
+                PendingStatus::Done | PendingStatus::Failed(_) => pending_status.clone(),
+            }
+        };
+
+        let source_status = match &info.source_status {
+            SourceStatus::StandBy
+            | SourceStatus::Finish
+            | SourceStatus::Stopped
+            | SourceStatus::Failed(_)
+            | SourceStatus::Delete => info.source_status,
+            SourceStatus::Scaning | SourceStatus::Stoping | SourceStatus::Deleting => {
+                SourceStatus::Stopped
+            }
+        };
+
+        let target_status = match &info.target_status {
+            TargetStatus::StandBy
+            | TargetStatus::Finish
+            | TargetStatus::Stopped
+            | TargetStatus::Failed(_)
+            | TargetStatus::Delete => info.source_status,
+            TargetStatus::Transfering | TargetStatus::Stoping | TargetStatus::Deleting => {
+                TargetStatus::Stopped
+            }
+        };
+
+        let checkpoint_status = match &info.status {
+            CheckPointStatus::Standby
+            | CheckPointStatus::StopPrepare
+            | CheckPointStatus::Success
+            | CheckPointStatus::Stop
+            | CheckPointStatus::Failed(_)
+            | CheckPointStatus::DeleteAbort(_) => info.status,
+            CheckPointStatus::Prepare => {
+                if let SourceStatus::Finish = source_status {
+                    info.status
+                } else {
+                    CheckPointStatus::StopPrepare
+                }
+            }
+            CheckPointStatus::Start => CheckPointStatus::Stop,
+            CheckPointStatus::Delete(delete_from_target) => {
+                CheckPointStatus::DeleteAbort(delete_from_target)
+            }
+        };
+
+        info.status = checkpoint_status;
+        info.source_status = source_status;
+        info.target_status = target_status;
+
+        let (status, waiter) = crate::status_waiter::StatusWaiter::new(checkpoint_status);
+        let (source_status, source_waiter) = crate::status_waiter::StatusWaiter::new(source_status);
+        let (target_status, target_waiter) = crate::status_waiter::StatusWaiter::new(target_status);
+
         Self {
             info: Arc::new(RwLock::new(info)),
-            engine,
+            engine: engine.clone(),
             task_uuid,
             version,
+            source: LockedSourceWrapper::new(source_id, task_uuid, locked_state_id, engine),
+            status,
+            status_waiter: Arc::new(Mutex::new(waiter)),
+            source_status,
+            source_status_waiter: source_waiter,
+            target_status: target_status,
+            target_status_waiter: target_waiter,
         }
     }
 
     pub(crate) fn info(&self) -> CheckPointInfo {
         let info = self.info.clone();
-        tokio::task::block_in_place(move || {
-            tokio::runtime::Handle::current().block_on(async move { info.read().await.clone() })
-        })
-    }
-    // async fn preserve(&self) -> BackupResult<LockedSourceStateId> {
-    //     let org_state = self.source.original_state().await?;
-    //     let state_id = self
-    //         .egnine
-    //         .save_source_original_state(&self.info.uuid, org_state.as_deref())
-    //         .await?;
-    //     let preserved_state = match org_state {
-    //         Some(org_state) => self.source.preserved_state(org_state.as_str()).await?,
-    //         None => None,
-    //     };
-    //     self.egnine
-    //         .save_source_preserved_state(state_id, preserved_state.as_deref())
-    //         .await?;
-    //     Ok(state_id)
-    // }
-
-    // async fn state(&self, state_id: LockedSourceStateId) -> BackupResult<SourceState> {
-    //     self.egnine.load_source_preserved_state(state_id).await
-    // }
-
-    // // Any preserved state for backup by source will be restored automatically when it done(success/fail/cancel).
-    // // But it should be restored by the application when no transfering start, because the engine is uncertain whether the user will use it to initiate the transfer task.
-    // // It will fail when a transfer task is valid, you should wait it done or cancel it.
-    // async fn restore(&self, state_id: LockedSourceStateId) -> BackupResult<()> {
-    //     todo!("check it's idle");
-    //     let state = self.egnine.load_source_preserved_state(state_id).await?;
-    //     let original_state = match state {
-    //         SourceState::None => return Ok(()),
-    //         SourceState::Original(original_state) => original_state,
-    //         SourceState::Preserved(original_state, _) => original_state,
-    //     };
-
-    //     if let Some(original_state) = &original_state {
-    //         self.source.restore_state(original_state.as_str()).await?;
-    //     }
-    //     self.egnine.delete_source_preserved_state(state_id).await
-    // }
-
-    // async fn restore_all_idle(&self) -> Result<usize, (BackupError, usize)> {
-    //     let mut success_count = 0;
-    //     let mut first_err = None;
-    //     let mut offset = 0;
-    //     loop {
-    //         let states = self
-    //             .egnine
-    //             .list_preserved_source_states(
-    //                 &self.info.uuid,
-    //                 ListPreservedSourceStateFilter {
-    //                     time: (None, None),
-    //                     idle: Some(true),
-    //                 },
-    //                 ListOffset::First(offset),
-    //                 16,
-    //             )
-    //             .await
-    //             .map_err(|e| (e, success_count))?;
-
-    //         if states.is_empty() {
-    //             return match first_err {
-    //                 Some(err) => Err((err, success_count)),
-    //                 None => Ok(success_count),
-    //             };
-    //         }
-
-    //         for (state_id, state) in states {
-    //             let original_state = match state {
-    //                 SourceState::None => None,
-    //                 SourceState::Original(original_state) => original_state,
-    //                 SourceState::Preserved(original_state, _) => original_state,
-    //             };
-
-    //             if let Some(original_state) = &original_state {
-    //                 if let Err(err) = self.source.restore_state(original_state.as_str()).await {
-    //                     if first_err.is_none() {
-    //                         first_err = Some(err);
-    //                     }
-    //                 } else {
-    //                     success_count += 1;
-    //                 }
-    //             }
-    //             self.egnine
-    //                 .delete_source_preserved_state(state_id)
-    //                 .await
-    //                 .map_err(|err| (err, success_count))?; // remove the preserved state.
-    //         }
-    //     }
-    // }
-
-    // async fn list_preserved_source_states(
-    //     &self,
-    //     filter: ListPreservedSourceStateFilter,
-    //     offset: ListOffset,
-    //     limit: u32,
-    // ) -> BackupResult<Vec<(LockedSourceStateId, SourceState)>> {
-    //     self.egnine
-    //         .list_preserved_source_states(&self.info.uuid, filter, offset, limit)
-    //         .await
-    // }
-
-    pub(crate) async fn transfer_impl(&self) -> BackupResult<()> {
-        let task = self
-            .engine
-            .get_task_impl(&FindTaskBy::Uuid(self.task_uuid))
-            .await?;
-
-        let task = match task {
-            Some(task) => task,
-            None => {
-                return Err(BackupError::NotFound(format!(
-                    "task({}) has been removed.",
-                    self.task_uuid
-                )));
-            }
-        };
-
-        let mut info = self.info.read().await.clone();
-        if info.target_meta.is_none() {
-            // `service-meta` has not been filled by the `target`.
-            // so we need to fill it by ourselves.
-            let target_task = self
-                .engine
-                .get_target_task_impl(task.info().target_id, &self.task_uuid)
-                .await?;
-            let target_meta = target_task.fill_target_meta(&mut info.meta).await?;
-
-            self.engine
-                .save_checkpoint_target_meta(
-                    &self.task_uuid,
-                    self.version,
-                    target_meta
-                        .iter()
-                        .map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .as_slice(),
-                )
-                .await?;
-
-            self.info.write().await.meta = info.meta.clone();
-        }
-
-        let target_checkpoint = self
-            .engine
-            .get_target_checkpoint_impl(task.info().target_id, &self.task_uuid, self.version)
-            .await?;
-
-        target_checkpoint.transfer().await
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move { info.read().await.clone() })
     }
 
-    async fn load_transfer_map(
-        &self,
-        filter: QueryTransferMapFilter<'_>,
-    ) -> BackupResult<HashMap<PathBuf, HashMap<Vec<u8>, Vec<ChunkTransferInfo>>>> {
-        let transfer_map = self
-            .engine
-            .query_transfer_map(&self.task_uuid, self.version, filter)
-            .await?;
-
-        let mut transfer_map_cache = self.transfer_map.lock().await;
-
-        let mut load_transfer_map = HashMap::new();
-
-        for (full_path, target_address_map) in transfer_map {
-            let load_transfer_map = load_transfer_map
-                .entry(full_path.clone())
-                .or_insert_with(HashMap::new);
-
-            // find the transfer-map follow the path-names in the transfer-map-cache
-            let item_transfer_info =
-                match transfer_map_cache.find_by_full_path_mut(full_path.as_path(), true) {
-                    Some(item_transfer_info) => item_transfer_info,
-                    None => continue,
-                };
-
-            match item_transfer_info {
-                ItemTransferInfo::File(file) => {
-                    for (target_address, mut chunk_transfer_infos) in target_address_map {
-                        let load_transfer_map_items = load_transfer_map
-                            .entry(target_address.clone())
-                            .or_insert_with(Vec::new);
-
-                        let chunk_infos_cache =
-                            file.chunk_maps.entry(target_address).or_insert(vec![]);
-                        // insert the chunk_transfer_info into the chunk_infos_cache ascendingly by the chunk_transfer_info.offset if the prepared_chunk_id is not exists in the chunk_infos_cache
-                        // 1. sort the chunk_transfer_infos by the offset
-                        chunk_transfer_infos.sort_by_key(|k| k.offset);
-
-                        // 2. insert the chunk_transfer_info into the chunk_infos_cache
-                        let mut find_pos = 0;
-                        for chunk_transfer_info in chunk_transfer_infos {
-                            let pos = chunk_infos_cache.as_slice()[find_pos..]
-                                .iter()
-                                .position(|c| c.offset >= chunk_transfer_info.offset);
-
-                            match pos {
-                                Some(pos) => {
-                                    let info_at_pos = chunk_infos_cache.get(pos).unwrap();
-                                    let is_dup = info_at_pos.offset == chunk_transfer_info.offset;
-                                    find_pos = pos;
-                                    if !is_dup {
-                                        load_transfer_map_items.push(chunk_transfer_info.clone());
-                                        chunk_infos_cache.insert(pos, chunk_transfer_info);
-                                    } else {
-                                        load_transfer_map_items.push(info_at_pos.clone());
-                                    }
+    pub(crate) async fn prepare_without_check_status(&self) -> BackupResult<()> {
+        match self.source.prepare().await {
+            Ok(_) => {
+                // wait
+                let checkpoint = self.clone();
+                tokio::task::spawn(async move {
+                    let waiter = checkpoint.source.status_waiter().await?;
+                    let wait_prepare_start = async move {
+                        loop {
+                            let source_status = waiter
+                                .wait(|s| s != crate::source::SourceStatus::StandBy)
+                                .await?;
+                            let status = match source_status {
+                                SourceStatus::StandBy => {
+                                    continue;
                                 }
-                                None => {
-                                    load_transfer_map_items.push(chunk_transfer_info.clone());
-                                    chunk_infos_cache.push(chunk_transfer_info);
-                                }
+                                _ => source_status,
+                            };
+                            break Ok(status);
+                        }
+                    };
+
+                    loop {
+                        let source_status = match wait_prepare_start.await {
+                            Ok(status) => status,
+                            Err(err) => PendingStatus::Failed(Some(err)),
+                        };
+
+                        let new_checkpoint_status = {
+                            let checkpoint_status = self.status.lock().await;
+                            self.source_status.set(source_status);
+
+                            if let SourceStatus::Failed(err) = source_status {
+                                checkpoint_status.set(CheckPointStatus::Failed(err.clone()));
+                                Some(CheckPointStatus::Failed(err))
+                            } else {
+                                None
                             }
+                        };
+
+                        checkpoint
+                            .engine
+                            .update_checkpoint_status(
+                                &checkpoint.task_uuid,
+                                checkpoint.version,
+                                source_status,
+                                None,
+                            )
+                            .await;
+
+                        if let Some(new_checkpoint_status) = new_checkpoint_status {
+                            self.engine
+                                .update_checkpoint_status(
+                                    &checkpoint.task_uuid,
+                                    checkpoint.version,
+                                    new_checkpoint_status,
+                                    None,
+                                )
+                                .await;
                         }
                     }
-                }
-                ItemTransferInfo::Dir(_) => {
-                    unreachable!("{} should be a file", full_path.display())
-                }
+                });
+
+                Ok(())
+            }
+            Err(err) => {
+                let checkpoint_status = self.status.lock().await;
+                self.source_status
+                    .set(SourceStatus::Failed(Some(err.clone())));
+                checkpoint_status.set(CheckPointStatus::Failed(Some(err.clone())));
+
+                self.engine
+                    .update_checkpoint_source_status(
+                        &self.task_uuid,
+                        self.version,
+                        SourceStatus::Failed(Some(err.clone())),
+                        None,
+                    )
+                    .await;
+                self.engine
+                    .update_checkpoint_status(
+                        &self.task_uuid,
+                        self.version,
+                        CheckPointStatus::Failed(Some(err.clone())),
+                        None,
+                    )
+                    .await;
+
+                Err(err)
             }
         }
-
-        Ok(load_transfer_map)
     }
 
-    async fn full_meta_ref(
-        &self,
-    ) -> BackupResult<RwLockReadGuard<'_, Option<CheckPointMetaEngine>>> {
-        {
-            let full_meta_reader = self.full_meta.read().await;
-            if full_meta_reader.is_some() {
-                return Ok(full_meta_reader);
-            }
-        }
-
-        self.full_meta().await?;
-
-        let full_meta_reader = self.full_meta.read().await;
-        Ok(full_meta_reader)
+    pub(crate) async fn transfer_impl(&self) -> BackupResult<()> {
+        unimplemented!()
     }
 }
 
@@ -319,396 +268,166 @@ impl CheckPoint for CheckPointImpl {
     fn version(&self) -> CheckPointVersion {
         self.version
     }
-    async fn info(&self) -> BackupResult<CheckPointInfo<CheckPointMetaEngine>> {
+    async fn info(&self) -> BackupResult<CheckPointInfo> {
         Ok(self.info.read().await.clone())
     }
-    async fn full_meta(&self) -> BackupResult<CheckPointMetaEngine> {
-        if let Some(full_meta) = self.full_meta.read().await.clone() {
-            return Ok(full_meta);
-        }
 
-        let meta = self.info.read().await.meta.clone();
-        let full_meta = if meta.prev_versions.is_empty() {
-            meta.clone()
-        } else {
-            let mut prev_checkpoint_results = futures::future::join_all(
-                meta.prev_versions
-                    .iter()
-                    .map(|version| self.engine.get_checkpoint_impl(self.task_uuid(), *version)),
-            )
-            .await;
-
-            // fail if there is any error
-            let mut prev_checkpoints = Vec::with_capacity(meta.prev_versions.len());
-            for i in 0..meta.prev_versions.len() {
-                let checkpoint = prev_checkpoint_results.remove(0);
-                match checkpoint {
-                    Ok(cp) => match cp {
-                        Some(cp) => prev_checkpoints.push(cp),
-                        None => {
-                            return Err(BackupError::NotFound(format!(
-                                "prev-checkpoint(version: {:?}) has been removed.",
-                                meta.prev_versions[i],
-                            )));
-                        }
-                    },
-                    Err(err) => return Err(err),
+    async fn prepare(&self) -> BackupResult<()> {
+        let update_status_with_check = async move {
+            let checkpoint_status = self.status.lock().await;
+            let source_status = self.source_status.get_status();
+            let check_result = match checkpoint_status.get_status() {
+                CheckPointStatus::Standby => Ok(true),
+                CheckPointStatus::Prepare | CheckPointStatus::Start => {
+                    Ok(if let SourceStatus::Failed(_) = source_status {
+                        true
+                    } else {
+                        false
+                    })
                 }
-            }
+                CheckPointStatus::StopPrepare
+                | CheckPointStatus::Stop
+                | CheckPointStatus::Failed(_) => match source_status {
+                    SourceStatus::Stopped | SourceStatus::Failed(_) => Ok(true),
+                    SourceStatus::StandBy | SourceStatus::Scaning | SourceStatus::Stoping => {
+                        log::warn!("the checkpoint({}) is busy for a `stop` is pending.", self);
+                        Err(BackupError::ErrorState(
+                            "the checkpoint is busy for a `stop` is pending".to_owned(),
+                        ))
+                    }
+                    SourceStatus::Finish => Ok(false),
+                    SourceStatus::Delete | SourceStatus::Deleting => {
+                        unreachable!()
+                    }
+                },
+                CheckPointStatus::Success => Ok(false),
+                CheckPointStatus::Delete(_) | CheckPointStatus::DeleteAbort(_) => {
+                    log::warn!(
+                        "the checkpoint({}) is delete, you should not do anything.",
+                        self
+                    );
+                    Err(BackupError::ErrorState(
+                        "the checkpoint is delete, you should not do anything".to_owned(),
+                    ))
+                }
+            };
 
-            // merge all prev checkpoints
-            let mut prev_checkpoint_metas = Vec::with_capacity(meta.prev_versions.len() + 1);
-            for cp in prev_checkpoints {
-                let meta = cp.info.read().await.meta.clone();
-                prev_checkpoint_metas.push(meta);
+            match check_result? {
+                true => {
+                    checkpoint_status.set(CheckPointStatus::Prepare);
+                    self.source_status.set(SourceStatus::StandBy);
+                    Ok(true)
+                }
+                false => Ok(false),
             }
-            prev_checkpoint_metas.push(meta);
-
-            CheckPointMetaEngine::combine_previous_versions(
-                prev_checkpoint_metas.iter().collect::<Vec<_>>().as_slice(),
-            )?
         };
 
-        *self.full_meta.write().await = Some(full_meta.clone());
-        Ok(full_meta)
-    }
-
-    async fn transfer(&self) -> BackupResult<()> {
-        let info = self.info.read().await.clone();
-        match info.status {
-            CheckPointStatus::Success => {
-                return Err(BackupError::ErrorState(format!(
-                    "the checkpoint({}-{:?}) has successed.",
-                    self.task_uuid, self.version
-                )))
-            }
-            CheckPointStatus::Transfering => {
-                return Err(BackupError::ErrorState(format!(
-                    "the checkpoint({}-{:?}) is transferring.",
-                    self.task_uuid, self.version
-                )))
-            }
-            CheckPointStatus::Standby => {
-                self.engine
-                    .start_checkpoint_first(self.task_uuid(), self.version())
-                    .await?;
-            }
-            _ => {
-                self.engine
-                    .update_checkpoint_status(
-                        self.task_uuid(),
-                        self.version(),
-                        CheckPointStatus::Start,
-                    )
-                    .await?;
-            }
-        }
-
-        self.info.write().await.status = CheckPointStatus::Transfering;
-
-        if let Err(err) = self.transfer_impl().await {
-            let new_status = CheckPointStatus::Failed(Some(err.clone()));
-            self.engine
-                .update_checkpoint_status(
-                    self.task_uuid(),
-                    self.version(),
-                    CheckPointStatus::Failed(Some(err.clone())),
-                )
-                .await?;
-            let mut info = self.info.write().await;
-            match info.status {
-                CheckPointStatus::Success => {}
-                _ => info.status = new_status,
-            }
-            Err(err)
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn stop(&self) -> BackupResult<()> {
-        let info = self.info.read().await.clone();
-        let task = self
-            .engine
-            .get_task_impl(&FindTaskBy::Uuid(info.meta.task_uuid))
-            .await?
-            .map_or(
-                Err(BackupError::NotFound(format!(
-                    "task({}) has been removed.",
-                    self.task_uuid
-                ))),
-                |task| Ok(task),
-            )?;
-
-        match info.status {
-            CheckPointStatus::Success => {
-                return Err(BackupError::ErrorState(format!(
-                    "the checkpoint({}-{:?}) has successed.",
-                    self.task_uuid, self.version
-                )))
-            }
-            CheckPointStatus::Transfering => {
-                let target_checkpoint = self
-                    .engine
-                    .get_target_checkpoint_impl(
-                        task.info().target_id,
-                        self.task_uuid(),
-                        self.version(),
-                    )
-                    .await?;
-                target_checkpoint.stop().await?;
-            }
-            CheckPointStatus::Standby => {
-                return Err(BackupError::ErrorState(format!(
-                    "the checkpoint({}-{:?}) has not started.",
-                    self.task_uuid, self.version
-                )));
-            }
-            _ => {}
+        if !update_status_with_check? {
+            return Ok(());
         }
 
         self.engine
-            .update_checkpoint_status(self.task_uuid(), self.version(), CheckPointStatus::Stop)
-            .await?;
-        self.info.write().await.status = CheckPointStatus::Stop;
-        Ok(())
+            .update_checkpoint_status(
+                &self.task_uuid,
+                self.version,
+                CheckPointStatus::Prepare,
+                None,
+            )
+            .await;
+
+        self.prepare_without_check_status().await
     }
 
-    async fn target_meta(&self) -> BackupResult<Option<Vec<String>>> {
-        Ok(self.info.read().await.target_meta.clone())
+    async fn prepare_progress(&self) -> BackupResult<PendingAttribute<PrepareProgress>> {
+        unimplemented!()
     }
 
-    async fn transfer_map_by_item_path(
+    async fn transfer(&self) -> BackupResult<()> {
+        unimplemented!()
+    }
+
+    async fn transfer_progress(&self) -> BackupResult<PendingAttribute<TransferProgress>> {
+        unimplemented!()
+    }
+
+    async fn item_transfer_progress(
         &self,
-        item_full_paths: Option<Vec<&Path>>,
-    ) -> BackupResult<HashMap<PathBuf, HashMap<Vec<u8>, Vec<ChunkTransferInfo>>>> // <item-full-path, target-address, ItemTransferInfo>
-    {
-        let full_meta_guard = self.full_meta_ref().await?;
-        let full_meta = full_meta_guard.as_ref().unwrap();
-        if let Some(item_full_paths) = item_full_paths.as_ref() {
-            for item_full_path in item_full_paths {
-                if full_meta.root.find_by_full_path(item_full_path).is_none() {
-                    return Err(BackupError::NotFound(format!(
-                        "item({}) not found",
-                        item_full_path.display()
-                    )));
-                }
-            }
-        }
-
-        self.load_transfer_map(QueryTransferMapFilter {
-            items: item_full_paths.map(|pv| {
-                pv.into_iter()
-                    .map(|p| QueryTransferMapFilterItem {
-                        path: p,
-                        offset: 0,
-                        length: u64::MAX,
-                    })
-                    .collect()
-            }),
-            target_addresses: None,
-        })
-        .await
+        id: &ItemId,
+    ) -> BackupResult<PendingAttribute<Vec<ItemTransferProgress>>> {
+        unimplemented!()
     }
 
-    async fn transfer_map_to_target_address(
+    async fn stop(&self) -> BackupResult<()> {
+        unimplemented!()
+        // let info = self.info.read().await.clone();
+        // let task = self
+        //     .engine
+        //     .get_task_impl(&FindTaskBy::Uuid(info.meta.task_uuid))
+        //     .await?
+        //     .map_or(
+        //         Err(BackupError::NotFound(format!(
+        //             "task({}) has been removed.",
+        //             self.task_uuid
+        //         ))),
+        //         |task| Ok(task),
+        //     )?;
+
+        // match info.status {
+        //     CheckPointStatus::Success => {
+        //         return Err(BackupError::ErrorState(format!(
+        //             "the checkpoint({}-{:?}) has successed.",
+        //             self.task_uuid, self.version
+        //         )))
+        //     }
+        //     CheckPointStatus::Transfering => {
+        //         let target_checkpoint = self
+        //             .engine
+        //             .get_target_checkpoint_impl(
+        //                 task.info().target_id,
+        //                 self.task_uuid(),
+        //                 self.version(),
+        //             )
+        //             .await?;
+        //         target_checkpoint.stop().await?;
+        //     }
+        //     CheckPointStatus::Standby => {
+        //         return Err(BackupError::ErrorState(format!(
+        //             "the checkpoint({}-{:?}) has not started.",
+        //             self.task_uuid, self.version
+        //         )));
+        //     }
+        //     _ => {}
+        // }
+
+        // self.engine
+        //     .update_checkpoint_status(self.task_uuid(), self.version(), CheckPointStatus::Stop)
+        //     .await?;
+        // self.info.write().await.status = CheckPointStatus::Stop;
+        // Ok(())
+    }
+
+    async fn enumerate_or_generate_chunk(
         &self,
-        target_addresses: Option<Vec<&[u8]>>,
-    ) -> BackupResult<HashMap<Vec<u8>, HashMap<PathBuf, Vec<ChunkTransferInfo>>>> // <target-address, <item-full-path, ItemTransferInfo>>
-    {
-        let transfer_map = self
-            .load_transfer_map(QueryTransferMapFilter {
-                items: None,
-                target_addresses,
-            })
-            .await?;
-
-        let mut transfer_map_by_target_address = HashMap::new();
-        for (item_full_path, target_address_map) in transfer_map {
-            for (target_address, chunk_transfer_infos) in target_address_map {
-                transfer_map_by_target_address
-                    .entry(target_address)
-                    .or_insert_with(HashMap::new)
-                    .entry(item_full_path.clone())
-                    .or_insert_with(Vec::new)
-                    .extend(chunk_transfer_infos);
-            }
-        }
-
-        Ok(transfer_map_by_target_address)
+        capacities: &[u64],
+    ) -> BackupResult<futures::stream::Iter<Box<dyn ChunkReader>>> {
+        unimplemented!()
     }
 
-    async fn get_all_transfer_target_address(&self) -> BackupResult<Vec<Vec<u8>>> {
-        let transfer_map = self
-            .load_transfer_map(QueryTransferMapFilter {
-                items: None,
-                target_addresses: None,
-            })
-            .await?;
+    async fn enumerate_or_generate_folder(
+        &self,
+    ) -> BackupResult<futures::stream::Iter<FolderReader>> {
+        unimplemented!()
+    }
 
-        let mut target_addresses = HashSet::new();
-        for (_, target_address_map) in transfer_map {
-            for (target_address, _) in target_address_map {
-                target_addresses.insert(target_address);
-            }
-        }
-        Ok(target_addresses.into_iter().collect())
+    async fn enumerate_item(&self) -> BackupResult<ItemEnumerate> {
+        unimplemented!()
     }
 
     async fn status(&self) -> BackupResult<CheckPointStatus> {
         Ok(self.info.read().await.status.clone())
     }
-}
 
-#[async_trait::async_trait]
-impl CheckPointObserver for CheckPointImpl {
-    async fn on_success(&self) -> BackupResult<()> {
-        self.engine
-            .update_checkpoint_status(&self.task_uuid, self.version, CheckPointStatus::Success)
-            .await?;
-
-        self.info.write().await.status = CheckPointStatus::Success;
-        Ok(())
-    }
-    async fn on_failed(&self, err: BackupError) -> BackupResult<()> {
-        let failed_status = CheckPointStatus::Failed(Some(err));
-        self.engine
-            .update_checkpoint_status(&self.task_uuid, self.version, failed_status.clone())
-            .await?;
-        self.info.write().await.status = failed_status;
-        Ok(())
-    }
-    async fn on_prepare_transfer_chunk(
-        &self,
-        item_full_path: &Path,
-        offset: u64,
-        length: u64,
-        target_address: Option<&[u8]>, // specific target address
-        detail: Option<&[u8]>,
-    ) -> BackupResult<PrepareTransferChunkResult> {
-        let full_meta_guard = self.full_meta_ref().await?;
-        let full_meta = full_meta_guard.as_ref().unwrap();
-        if full_meta.root.find_by_full_path(item_full_path).is_none() {
-            return Err(BackupError::NotFound(format!(
-                "item({}) not found",
-                item_full_path.display()
-            )));
-        }
-
-        loop {
-            {
-                let mut guard = self.transfer_map.lock().await;
-                let transfer_map = guard.find_by_full_path_mut(item_full_path, false);
-                if transfer_map.is_some() {
-                    break;
-                }
-            }
-
-            self.load_transfer_map(QueryTransferMapFilter {
-                items: Some(vec![QueryTransferMapFilterItem {
-                    path: item_full_path,
-                    offset: 0,
-                    length: u64::MAX,
-                }]),
-                target_addresses: None,
-            })
-            .await?;
-            break;
-        }
-
-        let mut guard = self.transfer_map.lock().await;
-        let transfer_map = guard.find_by_full_path_mut(item_full_path, true).unwrap();
-
-        match transfer_map {
-            ItemTransferInfo::File(transfer_map) => {
-                let mut is_dup = false;
-                for (ta, chunks) in transfer_map.chunk_maps.iter() {
-                    if let Some(pos) = chunks.iter().position(|ck| {
-                        !(((ck.offset <= offset) && ((ck.offset + ck.length) <= offset))
-                            || (ck.offset >= (offset + length))
-                                && ((ck.offset + ck.length) >= (offset + length)))
-                    }) {
-                        // duplicate chunk
-                        is_dup = true;
-                        let chunk = chunks.get(pos).unwrap();
-                        if chunk.finish_time.is_none() {
-                            return Ok(PrepareTransferChunkResult {
-                                prepared_chunk_id: chunk.prepared_chunk_id,
-                                target_address: ta.clone(),
-                                info: chunk.clone(),
-                            });
-                        }
-                    }
-                }
-                if is_dup {
-                    return Err(BackupError::ErrorState(format!(
-                        "the chunk({}-{}-{}) is duplicated with finished chunk.",
-                        item_full_path.display(),
-                        offset,
-                        length
-                    )));
-                }
-
-                let mut new_chunk = ChunkTransferInfo {
-                    prepared_chunk_id: 0,
-                    begin_time: SystemTime::now(),
-                    finish_time: None,
-                    offset,
-                    length,
-                    detail: detail.map(|d| d.to_vec()), // special parse for different target.
-                };
-
-                let prepared_chunk_id = self
-                    .engine
-                    .add_transfer_map(
-                        &self.task_uuid,
-                        self.version,
-                        item_full_path,
-                        target_address,
-                        &new_chunk,
-                    )
-                    .await?;
-
-                new_chunk.prepared_chunk_id = prepared_chunk_id;
-
-                let chunks = transfer_map
-                    .chunk_maps
-                    .entry(target_address.unwrap_or(&[]).to_vec())
-                    .or_insert_with(Vec::new);
-                let pos = chunks.iter().position(|ck| ck.offset > offset);
-                match pos {
-                    Some(pos) => chunks.insert(pos, new_chunk.clone()),
-                    None => chunks.push(new_chunk.clone()),
-                }
-
-                Ok(PrepareTransferChunkResult {
-                    prepared_chunk_id,
-                    target_address: target_address.unwrap_or(&[]).to_vec(),
-                    info: new_chunk,
-                })
-            }
-            ItemTransferInfo::Dir(_) => Err(BackupError::InvalidArgument(format!(
-                "the item({}) is a directory.",
-                item_full_path.display()
-            ))),
-        }
-    }
-
-    async fn on_item_transfer_done(
-        &self,
-        prepared_chunk_id: u64,
-        target_address: Option<&[u8]>, // specific target address defined by target
-        detail: Option<&[u8]>,
-    ) -> BackupResult<()> {
-        unimplemented!()
-    }
-    async fn save_key_value(&self, key: &str, value: &[u8], is_replace: bool) -> BackupResult<()> {
-        unimplemented!()
-    }
-    async fn get_key_value(&self, key: &str) -> BackupResult<Option<Vec<u8>>> {
-        unimplemented!()
-    }
-    async fn delete_key_value(&self, key: &str) -> BackupResult<()> {
+    async fn status_waiter(&self) -> BackupResult<Waiter<CheckPointStatus>> {
         unimplemented!()
     }
 }
@@ -730,7 +449,7 @@ impl CheckPointWrapper {
 }
 
 #[async_trait::async_trait]
-impl StorageReader for CheckPointWrapper {
+impl DirReader for CheckPointWrapper {
     async fn read_dir(&self, path: &Path) -> BackupResult<Vec<DirChildType>> {
         match self
             .engine
@@ -773,6 +492,46 @@ impl StorageReader for CheckPointWrapper {
         }
     }
 
+    async fn copy_file_to(&self, path: &Path, to: &Path) -> BackupResult<Waiter<PendingStatus>> {
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.copy_file_to(path, to).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
+    }
+    async fn file_diff_header(&self, path: &Path) -> BackupResult<FileDiffHeader> {
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.file_diff_header(path).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
+    }
+    async fn read_file_diff(&self, path: &Path, offset: u64, length: u32) -> BackupResult<Vec<u8>> {
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => cp.read_file_diff(path, offset, length).await,
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
+    }
+
     async fn read_link(&self, path: &Path) -> BackupResult<LinkInfo> {
         match self
             .engine
@@ -787,7 +546,7 @@ impl StorageReader for CheckPointWrapper {
         }
     }
 
-    async fn stat(&self, path: &Path) -> BackupResult<StorageItemAttributes> {
+    async fn stat(&self, path: &Path) -> BackupResult<Attributes> {
         match self
             .engine
             .get_checkpoint_impl(&self.task_uuid, self.version)
@@ -803,7 +562,7 @@ impl StorageReader for CheckPointWrapper {
 }
 
 #[async_trait::async_trait]
-impl CheckPoint<CheckPointMetaEngine> for CheckPointWrapper {
+impl CheckPoint for CheckPointWrapper {
     fn task_uuid(&self) -> &TaskUuid {
         &self.task_uuid
     }
@@ -812,7 +571,7 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointWrapper {
         self.version
     }
 
-    async fn info(&self) -> BackupResult<CheckPointInfo<CheckPointMetaEngine>> {
+    async fn info(&self) -> BackupResult<CheckPointInfo> {
         match self
             .engine
             .get_checkpoint_impl(&self.task_uuid, self.version)
@@ -826,13 +585,26 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointWrapper {
         }
     }
 
-    async fn full_meta(&self) -> BackupResult<CheckPointMetaEngine> {
+    async fn prepare(&self) -> BackupResult<()> {
         match self
             .engine
             .get_checkpoint_impl(&self.task_uuid, self.version)
             .await?
         {
-            Some(cp) => Ok(cp.full_meta().await?),
+            Some(cp) => Ok(cp.prepare().await.clone()),
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
+    }
+    async fn prepare_progress(&self) -> BackupResult<PendingAttribute<PrepareProgress>> {
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => Ok(cp.prepare_progress().await.clone()),
             None => Err(BackupError::NotFound(format!(
                 "checkpoint({}-{:?}) has been removed.",
                 self.task_uuid, self.version
@@ -854,6 +626,37 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointWrapper {
         }
     }
 
+    async fn transfer_progress(&self) -> BackupResult<PendingAttribute<TransferProgress>> {
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => Ok(cp.transfer_progress().await.clone()),
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
+    }
+
+    async fn item_transfer_progress(
+        &self,
+        id: &ItemId,
+    ) -> BackupResult<PendingAttribute<Vec<ItemTransferProgress>>> {
+        match self
+            .engine
+            .get_checkpoint_impl(&self.task_uuid, self.version)
+            .await?
+        {
+            Some(cp) => Ok(cp.item_transfer_progress(id).await.clone()),
+            None => Err(BackupError::NotFound(format!(
+                "checkpoint({}-{:?}) has been removed.",
+                self.task_uuid, self.version
+            ))),
+        }
+    }
+
     async fn stop(&self) -> BackupResult<()> {
         match self
             .engine
@@ -868,31 +671,16 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointWrapper {
         }
     }
 
-    async fn target_meta(&self) -> BackupResult<Option<Vec<String>>> {
-        match self
-            .engine
-            .get_checkpoint_impl(&self.task_uuid, self.version)
-            .await?
-        {
-            Some(cp) => cp.target_meta().await,
-            None => Err(BackupError::NotFound(format!(
-                "checkpoint({}-{:?}) has been removed.",
-                self.task_uuid, self.version
-            ))),
-        }
-    }
-
-    async fn transfer_map_by_item_path(
+    async fn enumerate_or_generate_chunk(
         &self,
-        item_full_paths: Option<Vec<&Path>>,
-    ) -> BackupResult<HashMap<PathBuf, HashMap<Vec<u8>, Vec<ChunkTransferInfo>>>> // <item-full-path, target-address, ItemTransferInfo>
-    {
+        capacities: &[u64],
+    ) -> BackupResult<futures::stream::Iter<Box<dyn ChunkReader>>> {
         match self
             .engine
             .get_checkpoint_impl(&self.task_uuid, self.version)
             .await?
         {
-            Some(cp) => cp.transfer_map_by_item_path(item_full_paths).await,
+            Some(cp) => Ok(cp.enumerate_or_generate_chunk(capacities).await.clone()),
             None => Err(BackupError::NotFound(format!(
                 "checkpoint({}-{:?}) has been removed.",
                 self.task_uuid, self.version
@@ -900,17 +688,15 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointWrapper {
         }
     }
 
-    async fn transfer_map_to_target_address(
+    async fn enumerate_or_generate_folder(
         &self,
-        target_addresses: Option<Vec<&[u8]>>,
-    ) -> BackupResult<HashMap<Vec<u8>, HashMap<PathBuf, Vec<ChunkTransferInfo>>>> // <target-address, <item-full-path, ItemTransferInfo>>
-    {
+    ) -> BackupResult<futures::stream::Iter<FolderReader>> {
         match self
             .engine
             .get_checkpoint_impl(&self.task_uuid, self.version)
             .await?
         {
-            Some(cp) => cp.transfer_map_to_target_address(target_addresses).await,
+            Some(cp) => Ok(cp.enumerate_or_generate_folder().await.clone()),
             None => Err(BackupError::NotFound(format!(
                 "checkpoint({}-{:?}) has been removed.",
                 self.task_uuid, self.version
@@ -918,13 +704,13 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointWrapper {
         }
     }
 
-    async fn get_all_transfer_target_address(&self) -> BackupResult<Vec<Vec<u8>>> {
+    async fn enumerate_item(&self) -> BackupResult<ItemEnumerate> {
         match self
             .engine
             .get_checkpoint_impl(&self.task_uuid, self.version)
             .await?
         {
-            Some(cp) => cp.get_all_transfer_target_address().await,
+            Some(cp) => Ok(cp.enumerate_item().await.clone()),
             None => Err(BackupError::NotFound(format!(
                 "checkpoint({}-{:?}) has been removed.",
                 self.task_uuid, self.version
@@ -945,119 +731,14 @@ impl CheckPoint<CheckPointMetaEngine> for CheckPointWrapper {
             ))),
         }
     }
-}
 
-#[async_trait::async_trait]
-impl CheckPointObserver for CheckPointWrapper {
-    async fn on_success(&self) -> BackupResult<()> {
+    async fn status_waiter(&self) -> BackupResult<Waiter<CheckPointStatus>> {
         match self
             .engine
             .get_checkpoint_impl(&self.task_uuid, self.version)
             .await?
         {
-            Some(cp) => cp.on_success().await,
-            None => Err(BackupError::NotFound(format!(
-                "checkpoint({}-{:?}) has been removed.",
-                self.task_uuid, self.version
-            ))),
-        }
-    }
-
-    async fn on_failed(&self, err: BackupError) -> BackupResult<()> {
-        match self
-            .engine
-            .get_checkpoint_impl(&self.task_uuid, self.version)
-            .await?
-        {
-            Some(cp) => cp.on_failed(err).await,
-            None => Err(BackupError::NotFound(format!(
-                "checkpoint({}-{:?}) has been removed.",
-                self.task_uuid, self.version
-            ))),
-        }
-    }
-
-    async fn on_prepare_transfer_chunk(
-        &self,
-        item_full_path: &Path,
-        offset: u64,
-        length: u64,
-        target_address: Option<&[u8]>, // specific target address
-        detail: Option<&[u8]>,
-    ) -> BackupResult<PrepareTransferChunkResult> {
-        match self
-            .engine
-            .get_checkpoint_impl(&self.task_uuid, self.version)
-            .await?
-        {
-            Some(cp) => {
-                cp.on_prepare_transfer_chunk(item_full_path, offset, length, target_address, detail)
-                    .await
-            }
-            None => Err(BackupError::NotFound(format!(
-                "checkpoint({}-{:?}) has been removed.",
-                self.task_uuid, self.version
-            ))),
-        }
-    }
-
-    async fn on_item_transfer_done(
-        &self,
-        prepared_chunk_id: u64,
-        target_address: Option<&[u8]>, // specific target address defined by target
-        detail: Option<&[u8]>,
-    ) -> BackupResult<()> {
-        match self
-            .engine
-            .get_checkpoint_impl(&self.task_uuid, self.version)
-            .await?
-        {
-            Some(cp) => {
-                cp.on_item_transfer_done(prepared_chunk_id, target_address, detail)
-                    .await
-            }
-            None => Err(BackupError::NotFound(format!(
-                "checkpoint({}-{:?}) has been removed.",
-                self.task_uuid, self.version
-            ))),
-        }
-    }
-
-    async fn save_key_value(&self, key: &str, value: &[u8], is_replace: bool) -> BackupResult<()> {
-        match self
-            .engine
-            .get_checkpoint_impl(&self.task_uuid, self.version)
-            .await?
-        {
-            Some(cp) => cp.save_key_value(key, value, is_replace).await,
-            None => Err(BackupError::NotFound(format!(
-                "checkpoint({}-{:?}) has been removed.",
-                self.task_uuid, self.version
-            ))),
-        }
-    }
-
-    async fn get_key_value(&self, key: &str) -> BackupResult<Option<Vec<u8>>> {
-        match self
-            .engine
-            .get_checkpoint_impl(&self.task_uuid, self.version)
-            .await?
-        {
-            Some(cp) => cp.get_key_value(key).await,
-            None => Err(BackupError::NotFound(format!(
-                "checkpoint({}-{:?}) has been removed.",
-                self.task_uuid, self.version
-            ))),
-        }
-    }
-
-    async fn delete_key_value(&self, key: &str) -> BackupResult<()> {
-        match self
-            .engine
-            .get_checkpoint_impl(&self.task_uuid, self.version)
-            .await?
-        {
-            Some(cp) => cp.delete_key_value(key).await,
+            Some(cp) => Ok(cp.status_waiter().await.clone()),
             None => Err(BackupError::NotFound(format!(
                 "checkpoint({}-{:?}) has been removed.",
                 self.task_uuid, self.version

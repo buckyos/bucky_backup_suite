@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    path::{Path, PathBuf},
+    path::{Display, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -37,6 +37,17 @@ pub struct CheckPointVersion {
     )]
     pub time: SystemTime,
     pub seq: u64,
+}
+
+impl std::fmt::Display for CheckPointVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}-{}",
+            self.seq,
+            self.time.duration_since(UNIX_EPOCH).unwrap().as_secs()
+        )
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]

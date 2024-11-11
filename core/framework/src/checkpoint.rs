@@ -12,7 +12,9 @@ use crate::{
     engine::TaskUuid,
     error::{BackupError, BackupResult},
     meta::{Attributes, CheckPointVersion, ChunkId, FileDiffHeader, LockedSourceStateId},
+    source::SourceStatus,
     status_waiter::Waiter,
+    target::TargetStatus,
 };
 
 #[derive(Clone)]
@@ -24,10 +26,16 @@ pub struct CheckPointInfo {
     pub complete_time: Option<SystemTime>,
     pub locked_source_state_id: Option<LockedSourceStateId>,
     pub status: CheckPointStatus,
+    pub source_status: SourceStatus,
+    pub target_status: TargetStatus,
     pub last_status_changed_time: SystemTime,
 }
 
+#[derive(Clone)]
 pub enum PendingStatus {
+    // the operation should been post, but it was not been post for any reason.
+    // for example: the progress restart
+    None,
     // operation has been post
     Pending,
     // A time-consuming operation has already started
@@ -38,8 +46,7 @@ pub enum PendingStatus {
     Failed(Option<BackupError>),
 }
 
-pub type SourcePendingStatus = PendingStatus;
-pub type TargetPendingStatus = PendingStatus;
+pub type IsSourcePrepareDone = bool;
 
 #[derive(Clone, Copy)]
 pub enum DeleteFromTarget {
@@ -50,13 +57,14 @@ pub enum DeleteFromTarget {
 #[derive(Clone)]
 pub enum CheckPointStatus {
     Standby,
-    Prepare(SourcePendingStatus),
-    StopPrepare(SourcePendingStatus),
-    Start(SourcePendingStatus, TargetPendingStatus),
-    Stop(SourcePendingStatus, TargetPendingStatus),
+    Prepare,
+    StopPrepare,
+    Start,
+    Stop,
     Success,
     Failed(Option<BackupError>),
-    Delete(SourcePendingStatus, TargetPendingStatus, DeleteFromTarget),
+    Delete(DeleteFromTarget),
+    DeleteAbort(DeleteFromTarget), // abort for unknown reason
 }
 
 pub enum PendingAttribute<A> {
@@ -90,6 +98,7 @@ pub struct ItemTransferProgress {
 pub trait CheckPoint: DirReader {
     fn task_uuid(&self) -> &TaskUuid;
     fn version(&self) -> CheckPointVersion;
+    async fn info(&self) -> BackupResult<CheckPointInfo>;
 
     async fn prepare(&self) -> BackupResult<()>;
     async fn prepare_progress(&self) -> BackupResult<PendingAttribute<PrepareProgress>>;
@@ -106,7 +115,7 @@ pub trait CheckPoint: DirReader {
     async fn enumerate_or_generate_chunk(
         &self,
         capacities: &[u64],
-    ) -> BackupResult<futures::stream::Iter<dyn ChunkReader>>;
+    ) -> BackupResult<futures::stream::Iter<Box<dyn ChunkReader>>>;
 
     async fn enumerate_or_generate_folder(
         &self,

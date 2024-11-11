@@ -1,17 +1,21 @@
 use crate::{
     checkpoint::ItemEnumerate,
     engine::{SourceId, SourceInfo, TaskUuid},
-    error::BackupResult,
+    error::{BackupError, BackupResult},
     meta::LockedSourceStateId,
     status_waiter::Waiter,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum SourceStatus {
     StandBy,
     Scaning,
     Finish,
-    Failed,
+    Stoping,
+    Stopped,
+    Failed(Option<BackupError>),
+    Deleting,
+    Delete,
 }
 
 #[async_trait::async_trait]
@@ -37,8 +41,8 @@ pub trait SourceTask: Send + Sync {
     fn task_uuid(&self) -> &TaskUuid;
 
     async fn original_state(&self) -> BackupResult<Option<String>>;
-    async fn lock_state(&self, original_state: &str) -> BackupResult<Option<String>>;
-    async fn unlock_state(&self, original_state: &str) -> BackupResult<()>;
+    async fn lock_state(&self, original_state: Option<&str>) -> BackupResult<Option<String>>;
+    async fn unlock_state(&self, original_state: Option<&str>) -> BackupResult<()>;
 
     async fn locked_source(
         &self,
@@ -53,5 +57,5 @@ pub trait LockedSource: Send + Sync {
     async fn prepare(&self) -> BackupResult<()>;
     async fn enumerate_item(&self) -> BackupResult<ItemEnumerate>;
     async fn status(&self) -> BackupResult<SourceStatus>;
-    async fn status_waiter(&self) -> BackupResult<Waiter<SourceStatus>>;
+    async fn status_waiter(&self) -> BackupResult<Waiter<BackupResult<SourceStatus>>>;
 }

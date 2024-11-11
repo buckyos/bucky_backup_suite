@@ -11,6 +11,8 @@ use crate::{
         CheckPointVersion, ChunkId, ChunkInfo, ChunkItem, DefaultFileDiffBlock, FolderItem,
         LockedSourceStateId,
     },
+    source::SourceStatus,
+    target::TargetStatus,
     task::{ListCheckPointFilter, SourceStateInfo, TaskInfo},
 };
 
@@ -180,19 +182,29 @@ pub trait StorageCheckPointMgr: Send + Sync {
         version: CheckPointVersion,
     ) -> BackupResult<()>;
 
-    async fn start_checkpoint_only_once_per_preserved_source(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-    ) -> BackupResult<()>;
-
     async fn update_status(
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
         status: CheckPointStatus,
-        old_status: CheckPointStatus,
+        old_status: Option<CheckPointStatus>,
     ) -> BackupResult<CheckPointStatus>;
+
+    async fn update_source_status(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        status: SourceStatus,
+        old_status: Option<SourceStatus>,
+    ) -> BackupResult<SourceStatus>;
+
+    async fn update_target_status(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        status: TargetStatus,
+        old_status: Option<TargetStatus>,
+    ) -> BackupResult<TargetStatus>;
 
     async fn list_checkpoints(
         &self,

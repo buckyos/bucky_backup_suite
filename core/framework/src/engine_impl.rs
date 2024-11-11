@@ -19,10 +19,10 @@ use crate::{
     error::{BackupError, BackupResult},
     handle_error,
     meta::{CheckPointVersion, LockedSourceStateId},
-    source::{LockedSource, Source, SourceFactory, SourceTask},
+    source::{LockedSource, Source, SourceFactory, SourceStatus, SourceTask},
     source_wrapper::{LockedSourceWrapper, SourceTaskWrapper, SourceWrapper},
     storage::{ListLockedSourceStateFilter, Storage, StorageSourceMgr, StorageTargetMgr},
-    target::{Target, TargetCheckPoint, TargetFactory, TargetTask},
+    target::{Target, TargetCheckPoint, TargetFactory, TargetStatus, TargetTask},
     target_wrapper::{TargetCheckPointWrapper, TargetTaskWrapper, TargetWrapper},
     task::{HistoryStrategy, ListCheckPointFilter, SourceState, SourceStateInfo, Task, TaskInfo},
     task_impl::{TaskImpl, TaskWrapper},
@@ -30,7 +30,7 @@ use crate::{
 
 struct SourceTaskCache {
     source_task: Arc<Box<dyn SourceTask>>,
-    source_lockeds: HashMap<LockedSourceStateId, Arc<Box<dyn LockedSource>>>,
+    locked_sources: HashMap<LockedSourceStateId, Arc<Box<dyn LockedSource>>>,
 }
 
 struct SourceCache {
@@ -245,7 +245,7 @@ impl Engine {
                         *task_uuid,
                         SourceTaskCache {
                             source_task: source_task.clone(),
-                            source_lockeds: HashMap::new(),
+                            locked_sources: HashMap::new(),
                         },
                     );
                     return Ok(source_task);
@@ -416,7 +416,7 @@ impl Engine {
             .await
     }
 
-    pub(crate) async fn save_source_locked_state(
+    pub(crate) async fn save_locked_source_state(
         &self,
         locked_state_id: LockedSourceStateId,
         locked_state: Option<&str>,
@@ -426,21 +426,21 @@ impl Engine {
             .await
     }
 
-    pub(crate) async fn delete_source_locked_state(
+    pub(crate) async fn delete_locked_source_state(
         &self,
         filter: &ListLockedSourceStateFilter,
     ) -> BackupResult<()> {
         self.meta_storage.delete_source_state(filter).await
     }
 
-    pub(crate) async fn unlock_source_locked_state(
+    pub(crate) async fn unlock_locked_source_state(
         &self,
         locked_state_id: LockedSourceStateId,
     ) -> BackupResult<()> {
         self.meta_storage.unlock_source_state(locked_state_id).await
     }
 
-    pub(crate) async fn load_source_locked_state(
+    pub(crate) async fn load_locked_source_state(
         &self,
         locked_state_id: LockedSourceStateId,
     ) -> BackupResult<SourceStateInfo> {
@@ -498,6 +498,7 @@ impl Engine {
             let mut cache = self.tasks.write().await;
             if let Some(task_cache) = cache.get_mut(task_uuid) {
                 let task_friendly_name = task_cache.task.info().friendly_name.clone();
+                let source_id = task_cache.task.info().source_id;
                 let checkpoint = task_cache
                     .checkpoints
                     .entry(version)
@@ -512,7 +513,11 @@ impl Engine {
                             status: CheckPointStatus::Standby,
                             last_status_changed_time: SystemTime::now(),
                         };
-                        Arc::new(CheckPointImpl::new(checkpoint_info, self.clone()))
+                        Arc::new(CheckPointImpl::new(
+                            checkpoint_info,
+                            source_id,
+                            self.clone(),
+                        ))
                     })
                     .clone();
                 return Ok(checkpoint);
@@ -569,12 +574,14 @@ impl Engine {
                     .into_iter()
                     .map(|info| {
                         let version = info.version;
+                        let source_id = task_cache.task.info().source_id;
                         task_cache
                             .checkpoints
                             .entry(version)
                             .or_insert_with(|| {
                                 let old_status = info.status.clone();
-                                let checkpoint = Arc::new(CheckPointImpl::new(info, self.clone()));
+                                let checkpoint =
+                                    Arc::new(CheckPointImpl::new(info, sour, self.clone()));
                                 load_new_checkpoints.push((checkpoint.clone(), old_status));
                                 checkpoint
                             })
@@ -687,13 +694,17 @@ impl Engine {
                     let mut cache = self.tasks.write().await;
                     if let Some(task_cache) = cache.get_mut(task_uuid) {
                         let version = checkpoint_info.version;
+                        let source_id = task_cache.task.info().source_id;
                         let checkpoint = task_cache
                             .checkpoints
                             .entry(version)
                             .or_insert_with(|| {
                                 let old_status: CheckPointStatus = checkpoint_info.status.clone();
-                                let checkpoint =
-                                    Arc::new(CheckPointImpl::new(checkpoint_info, self.clone()));
+                                let checkpoint = Arc::new(CheckPointImpl::new(
+                                    checkpoint_info,
+                                    source_id,
+                                    self.clone(),
+                                ));
                                 load_new_checkpoint = Some((checkpoint.clone(), old_status));
                                 checkpoint
                             })
@@ -733,7 +744,7 @@ impl Engine {
     }
 
     // load `LockedSource` from cache or `meta_storage`, is similar to `get_source_task_impl`.
-    pub(crate) async fn get_source_locked_impl(
+    pub(crate) async fn get_locked_source_impl(
         &self,
         source_id: SourceId,
         task_uuid: &TaskUuid,
@@ -745,10 +756,10 @@ impl Engine {
                 let cache = self.sources.read().await;
                 if let Some(source) = cache.get(&source_id) {
                     if let Some(source_task) = source.source_tasks.get(task_uuid) {
-                        if let Some(source_locked) =
-                            source_task.source_lockeds.get(&locked_state_id)
+                        if let Some(locked_source) =
+                            source_task.locked_sources.get(&locked_state_id)
                         {
-                            return Ok(source_locked.clone());
+                            return Ok(locked_source.clone());
                         }
                     }
                 }
@@ -770,11 +781,11 @@ impl Engine {
                 )));
             };
 
-            let locked_state = self.load_source_locked_state(locked_state_id).await?;
+            let locked_state = self.load_locked_source_state(locked_state_id).await?;
             if let SourceState::Locked(_, locked_state) = locked_state {
                 let source_task = self.get_source_task_impl(source_id, task_uuid).await?;
-                let source_locked = source_task
-                    .source_locked(locked_state_id, locked_state.as_deref())
+                let locked_source = source_task
+                    .locked_source(locked_state_id, locked_state.as_deref())
                     .await
                     .map_err(handle_error!(
                         "create source locked failed, source_id: {:?}, task_uuid: {}, state_id: {:?}",
@@ -788,12 +799,12 @@ impl Engine {
                     let mut cache = self.sources.write().await;
                     if let Some(source) = cache.get_mut(&source_id) {
                         if let Some(source_task) = source.source_tasks.get_mut(task_uuid) {
-                            let source_locked = source_task
-                                .source_lockeds
+                            let locked_source = source_task
+                                .locked_sources
                                 .entry(locked_state_id)
-                                .or_insert_with(|| Arc::new(source_locked))
+                                .or_insert_with(|| Arc::new(locked_source))
                                 .clone();
-                            return Ok(source_locked);
+                            return Ok(locked_source);
                         } else {
                             // source task maybe remove from the cache by other thread, retry it.
                         }
@@ -810,14 +821,14 @@ impl Engine {
         }
     }
 
-    // get_source_locked
-    pub(crate) async fn get_source_locked(
+    // get_locked_source
+    pub(crate) async fn get_locked_source(
         &self,
         source_id: SourceId,
         task_uuid: &TaskUuid,
         locked_state_id: LockedSourceStateId,
     ) -> BackupResult<Arc<LockedSourceWrapper>> {
-        self.get_source_locked_impl(source_id, task_uuid, locked_state_id)
+        self.get_locked_source_impl(source_id, task_uuid, locked_state_id)
             .await
             .map(|_| {
                 Arc::new(LockedSourceWrapper::new(
@@ -829,7 +840,7 @@ impl Engine {
             })
     }
 
-    // get_target_checkpoint_impl, similar to `get_source_locked_impl`.
+    // get_target_checkpoint_impl, similar to `get_locked_source_impl`.
     pub(crate) async fn get_target_checkpoint_impl(
         &self,
         target_id: TargetId,
@@ -946,35 +957,39 @@ impl Engine {
             })
     }
 
-    pub(crate) async fn save_checkpoint_target_meta(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-        target_meta: &[&str],
-    ) -> BackupResult<()> {
-        self.meta_storage
-            .save_target_meta(task_uuid, version, target_meta)
-            .await
-    }
-
-    pub(crate) async fn start_checkpoint_first(
-        &self,
-        task_uuid: &TaskUuid,
-        version: CheckPointVersion,
-    ) -> BackupResult<()> {
-        self.meta_storage
-            .start_checkpoint_only_once_per_locked_source(task_uuid, version)
-            .await
-    }
-
     pub(crate) async fn update_checkpoint_status(
         &self,
         task_uuid: &TaskUuid,
         version: CheckPointVersion,
         new_status: CheckPointStatus,
-    ) -> BackupResult<()> {
+        old_status: Option<CheckPointStatus>,
+    ) -> BackupResult<CheckPointStatus> {
         self.meta_storage
-            .update_status(task_uuid, version, new_status)
+            .update_status(task_uuid, version, new_status, old_status)
+            .await
+    }
+
+    pub(crate) async fn update_checkpoint_source_status(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        new_status: SourceStatus,
+        old_status: Option<SourceStatus>,
+    ) -> BackupResult<SourceStatus> {
+        self.meta_storage
+            .update_source_status(task_uuid, version, new_status, old_status)
+            .await
+    }
+
+    pub(crate) async fn update_checkpoint_target_status(
+        &self,
+        task_uuid: &TaskUuid,
+        version: CheckPointVersion,
+        new_status: TargetStatus,
+        old_status: Option<TargetStatus>,
+    ) -> BackupResult<TargetStatus> {
+        self.meta_storage
+            .update_target_status(task_uuid, version, new_status, old_status)
             .await
     }
 

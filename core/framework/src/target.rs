@@ -1,17 +1,21 @@
 use crate::{
     checkpoint::ItemEnumerate,
     engine::{TargetId, TargetInfo, TaskUuid},
-    error::BackupResult,
+    error::{BackupError, BackupResult},
     meta::CheckPointVersion,
     status_waiter::Waiter,
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum TargetStatus {
     StandBy,
     Transfering,
     Finish,
-    Failed,
+    Stoping,
+    Stopped,
+    Failed(Option<BackupError>),
+    Deleting,
+    Delete,
 }
 
 #[async_trait::async_trait]

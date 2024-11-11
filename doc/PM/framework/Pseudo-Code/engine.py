@@ -203,7 +203,7 @@ class Checkpoint(StorageReader):
         self.source_locked = None
         self.status = STATUS_STANDBY
 
-    def prepare_source(self):
+    def prepare(self):
         if self.status == STATUS_STANDBY or self.status == STATUS_STOPPED or self.status == STATUS_FAILED:
             self.status = STATUS_PREPARING
             self.prepare_source_without_status()

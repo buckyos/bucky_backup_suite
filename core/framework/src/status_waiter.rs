@@ -32,6 +32,10 @@ impl<S: Clone> StatusWaiter<S> {
 pub struct Status<S: Clone>(StatusWaiter<S>);
 
 impl<S: Clone> Status<S> {
+    pub fn get_status(&self) -> S {
+        self.0.status.lock().unwrap()
+    }
+
     pub fn set(&self, new_status: S) {
         *self.0.status.lock().unwrap() = new_status.clone();
         let mut waiters = self.0.waiters.lock().unwrap();
@@ -48,6 +52,35 @@ impl<S: Clone> Status<S> {
         }
 
         *waiters = retain_waiters;
+    }
+
+    pub fn set_with_checker<F>(&self, checker: F) -> Result<S, S>
+    where
+        F: Fn(&S) -> Option<S>,
+    {
+        let mut status = self.0.status.lock().unwrap();
+        let new_status = match checker(&status) {
+            Some(s) => s,
+            None => return Err(status),
+        };
+
+        *status = new_status;
+
+        let mut waiters = self.0.waiters.lock().unwrap();
+        let mut woken_waiters = Vec::new();
+        let mut retain_waiters = Vec::new();
+
+        for waiter in waiters.iter() {
+            if waiter.test(&new_status) {
+                waiter.wake();
+                woken_waiters.push(waiter.clone());
+            } else {
+                retain_waiters.push(waiter.clone());
+            }
+        }
+
+        *waiters = retain_waiters;
+        Ok(new_status)
     }
 }
 

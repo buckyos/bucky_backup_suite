@@ -41,126 +41,177 @@ impl TaskImpl {
         // atomic
         let new_locked_state_id = self.egnine.new_source_state(&self.info.uuid).await?;
 
-        let cur_magic = self.egnine.process_magic();
-        let mut running_checkpoint = None;
-        let mut invalid_states = vec![];
-        let mut concurrency_states = vec![];
+        let do_it = async move {
+            let cur_magic = self.egnine.process_magic();
+            let mut running_checkpoint = None;
+            let mut invalid_states = vec![];
+            let mut concurrency_states = vec![];
 
-        while running_checkpoint.is_none() {
-            const LIST_LIMIT: u32 = 16;
-            let locked_states = self
-                .egnine
-                .list_locked_source_states(
-                    &self.info.uuid,
-                    &ListLockedSourceStateFilter {
-                        state_id: None,
-                        time: (None, None),
-                        state: vec![
-                            storage::SourceState::None,
-                            storage::SourceState::Original,
-                            storage::SourceState::Locked,
-                            storage::SourceState::ConsumeCheckPoint,
-                        ],
-                    },
-                    ListOffset::First(0),
-                    LIST_LIMIT,
-                )
-                .await?;
+            while running_checkpoint.is_none() {
+                const LIST_LIMIT: u32 = 16;
+                let locked_states = self
+                    .egnine
+                    .list_locked_source_states(
+                        &self.info.uuid,
+                        &ListLockedSourceStateFilter {
+                            state_id: None,
+                            time: (None, None),
+                            state: vec![
+                                storage::SourceState::None,
+                                storage::SourceState::Original,
+                                storage::SourceState::Locked,
+                                storage::SourceState::ConsumeCheckPoint,
+                            ],
+                        },
+                        ListOffset::First(0),
+                        LIST_LIMIT,
+                    )
+                    .await?;
 
-            let locked_state_count = locked_states.len() as u32;
-            for state_info in locked_states {
-                if state_info.id == new_locked_state_id {
-                    continue;
-                }
+                let locked_state_count = locked_states.len() as u32;
+                for state_info in locked_states {
+                    if state_info.id == new_locked_state_id {
+                        continue;
+                    }
 
-                match state_info.state {
-                    crate::task::SourceState::None
-                    | crate::task::SourceState::Original
-                    | crate::task::SourceState::Locked => {
-                        if state_info.creator_magic == cur_magic {
-                            concurrency_states.push(state_info.id);
-                        } else {
-                            invalid_states.push(state_info.id);
+                    match state_info.state {
+                        crate::task::SourceState::None
+                        | crate::task::SourceState::Original
+                        | crate::task::SourceState::Locked => {
+                            if state_info.creator_magic == cur_magic {
+                                concurrency_states.push(state_info.id);
+                            } else {
+                                invalid_states.push(state_info.id);
+                            }
                         }
+                        crate::task::SourceState::ConsumeCheckPoint(version) => {
+                            running_checkpoint = Some(version);
+                        }
+                        crate::task::SourceState::Unlocked(_) => continue,
                     }
-                    crate::task::SourceState::ConsumeCheckPoint(version) => {
-                        running_checkpoint = Some(version);
-                    }
-                    crate::task::SourceState::Unlocked(_) => continue,
+                }
+
+                if locked_state_count < LIST_LIMIT {
+                    break;
                 }
             }
 
-            if locked_state_count < LIST_LIMIT {
-                break;
-            }
-        }
+            let mut another_lock_selected = None;
+            if running_checkpoint.is_some() {
+                invalid_states.extend(concurrency_states);
+                invalid_states.push(new_locked_state_id);
+            } else {
+                let select_state_id_pos = concurrency_states
+                    .iter()
+                    .position(|s| *s < new_locked_state_id);
+                if let Some(select_pos) = select_state_id_pos.as_ref() {
+                    another_lock_selected = concurrency_states.get(*select_pos).cloned();
+                    concurrency_states.splice(*select_pos..*select_pos + 1, [new_locked_state_id]);
+                }
 
-        let mut another_lock_selected = None;
-        if running_checkpoint.is_some() {
-            invalid_states.extend(concurrency_states);
-            invalid_states.push(new_locked_state_id);
-        } else {
-            let select_state_id_pos = concurrency_states
-                .iter()
-                .position(|s| *s < new_locked_state_id);
-            if let Some(select_pos) = select_state_id_pos.as_ref() {
-                another_lock_selected = concurrency_states.get(*select_pos).cloned();
-                concurrency_states.splice(*select_pos..*select_pos + 1, [new_locked_state_id]);
+                invalid_states.extend(concurrency_states);
             }
 
-            invalid_states.extend(concurrency_states);
-        }
-
-        if invalid_states.len() > 0 {
-            self.egnine
-                .delete_source_locked_state(&ListLockedSourceStateFilter {
-                    state_id: Some(invalid_states),
-                    time: (None, None),
-                    state: vec![],
-                })
-                .await?;
-        }
-
-        match running_checkpoint {
-            Some(version) => {
-                log::warn!("a checkpoint({:?}) is running", version);
-                Err(BackupError::ErrorState(
-                    "a checkpoint is running".to_owned(),
-                ))
+            if invalid_states.len() > 0 {
+                self.egnine
+                    .delete_locked_source_state(&ListLockedSourceStateFilter {
+                        state_id: Some(invalid_states),
+                        time: (None, None),
+                        state: vec![],
+                    })
+                    .await?;
             }
-            None => match another_lock_selected {
-                Some(state_id) => {
-                    log::warn!("another lock({:?}) is running", state_id);
+
+            match running_checkpoint {
+                Some(version) => {
+                    log::warn!("a checkpoint({:?}) is running", version);
                     Err(BackupError::ErrorState(
-                        "another lock is running".to_owned(),
+                        "a checkpoint is running".to_owned(),
                     ))
                 }
-                None => Ok(new_locked_state_id),
-            },
+                None => match another_lock_selected {
+                    Some(state_id) => {
+                        log::warn!("another lock({:?}) is running", state_id);
+                        Err(BackupError::ErrorState(
+                            "another lock is running".to_owned(),
+                        ))
+                    }
+                    None => Ok(()),
+                },
+            }
+        };
+
+        match do_it.await {
+            Ok(_) => Ok(new_locked_state_id),
+            Err(err) => {
+                // todo: how to process it when the delete is failed?
+                self.egnine
+                    .delete_locked_source_state(&ListLockedSourceStateFilter {
+                        state_id: Some(vec![new_locked_state_id]),
+                        time: (None, None),
+                        state: vec![],
+                    })
+                    .await;
+                Err(err)
+            }
         }
     }
+
     async fn lock_source(&self) -> BackupResult<SourceStateInfo> {
         let state_id = self.create_source_state_atomic().await?;
 
-        let org_state = self.source.original_state().await?;
-        self.egnine
-            .save_source_original_state(state_id, org_state.as_deref())
-            .await?;
-        let locked_state = match org_state.as_ref() {
-            Some(org_state) => self.source.lock_state(org_state.as_str()).await?,
-            None => None,
+        let lock_it = async move {
+            let org_state = self.source.original_state().await?;
+            self.egnine
+                .save_source_original_state(state_id, org_state.as_deref())
+                .await?;
+            let locked_state = self.source.lock_state(org_state.as_deref()).await?;
+            self.egnine
+                .save_locked_source_state(state_id, locked_state.as_deref())
+                .await?;
+            Ok(SourceStateInfo {
+                id: state_id,
+                state: SourceState::Locked,
+                original: org_state,
+                locked_state,
+                creator_magic: self.egnine.process_magic(),
+            })
         };
-        self.egnine
-            .save_source_locked_state(state_id, locked_state.as_deref())
-            .await?;
 
-        Ok(SourceStateInfo {
-            id: state_id,
-            state: SourceState::Locked,
-            original: org_state,
-            locked_state,
-            creator_magic: self.egnine.process_magic(),
-        })
+        match lock_it.await {
+            Ok(s) => Ok(s),
+            Err(err) => {
+                self.egnine
+                    .delete_locked_source_state(&ListLockedSourceStateFilter {
+                        state_id: Some(vec![state_id]),
+                        time: (None, None),
+                        state: vec![],
+                    })
+                    .await;
+                Err(err)
+            }
+        }
+    }
+
+    // Any preserved state for backup by source will be restored automatically when it done(success/fail/cancel).
+    // But it should be restored by the application when no transfering start, because the engine is uncertain whether the user will use it to initiate the transfer task.
+    // It will fail when a transfer task is valid, you should wait it done or cancel it.
+    pub(crate) async fn unlock_source_state(
+        &self,
+        state_id: LockedSourceStateId,
+    ) -> BackupResult<()> {
+        todo!("check it's idle");
+
+        let state = self.egnine.load_locked_source_state(state_id).await?;
+        let original_state = match state.state {
+            SourceState::None | SourceState::Unlocked(_) => return Ok(()),
+            SourceState::Original | SourceState::Locked | SourceState::ConsumeCheckPoint(_) => {
+                state.original.as_deref()
+            }
+        };
+
+        self.source.unlock_state(original_state).await?;
+        self.egnine.unlock_locked_source_state(state_id).await
     }
 }
 
@@ -185,32 +236,47 @@ impl Task for TaskImpl {
     ) -> BackupResult<Arc<dyn CheckPoint>> {
         let locked_state = self.lock_source().await?;
 
-        let prev_checkpoint_version = if is_delta {
+        let do_it = async move {
+            let prev_checkpoint_version = if is_delta {
+                self.egnine
+                    .list_checkpoints(
+                        &self.info.uuid,
+                        &ListCheckPointFilter {
+                            time: ListCheckPointFilterTime::CompleteTime(None, None),
+                            status: Some(vec![CheckPointStatus::Success]),
+                        },
+                        ListOffset::Last(0),
+                        1,
+                    )
+                    .await?
+                    .pop()
+                    .map(|prev_checkpoint| prev_checkpoint.version())
+            } else {
+                None
+            };
+
             self.egnine
-                .list_checkpoints(
+                .create_checkpoint(
                     &self.info.uuid,
-                    &ListCheckPointFilter {
-                        time: ListCheckPointFilterTime::CompleteTime(None, None),
-                        status: Some(vec![CheckPointStatus::Success]),
-                    },
-                    ListOffset::Last(0),
-                    1,
+                    Some(locked_state.id),
+                    prev_checkpoint_version,
                 )
-                .await?
-                .pop()
-                .map(|prev_checkpoint| prev_checkpoint.version())
-        } else {
-            None
+                .await
+                .map(|cp| cp as Arc<dyn CheckPoint>)
         };
 
-        self.egnine
-            .create_checkpoint(
-                &self.info.uuid,
-                Some(locked_state.id),
-                prev_checkpoint_version,
-            )
-            .await
-            .map(|cp| cp as Arc<dyn CheckPoint>)
+        match do_it.await {
+            Ok(cp) => Ok(cp),
+            Err(err) => {
+                self.egnine
+                    .delete_locked_source_state(&ListLockedSourceStateFilter {
+                        state_id: Some(vec![locked_state.id]),
+                        time: (None, None),
+                        state: vec![],
+                    })
+                    .await;
+            }
+        }
     }
 
     async fn list_checkpoints(
@@ -250,6 +316,7 @@ impl Task for TaskImpl {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct TaskWrapper {
     engine: Engine,
     uuid: FindTaskBy,
