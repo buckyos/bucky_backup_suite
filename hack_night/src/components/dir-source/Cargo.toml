@@ -1,0 +1,28 @@
+[package]
+name = "buckyos-dir-source"
+version = "0.2.0"
+edition = "2021"
+authors = ["BuckyOS DAO","@waterflier"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+thiserror = "*"
+sysinfo = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+time = { version = "*", features = ["formatting"] }
+tokio = { version = "*", features = ["full"] }
+log = "*"
+simplelog = "*"
+env_logger = "*"
+rusqlite = { version = "*", features = ["bundled"] }
+ignore = "*"
+sha2 = "*"
+memmap2 = "*"
+walkdir = "*"
+async-channel = "*"
+
+
+[dev-dependencies]
+tempfile = "*"

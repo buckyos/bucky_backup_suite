@@ -1,0 +1,42 @@
+[package]
+name = "backup_suite"
+version = "0.4.0"
+edition = "2021"
+authors = ["BuckyOS DAO","@waterflier"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# 3rd party dependencies
+toml = "*"
+clap = "*"
+chrono = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+log = "*"
+simplelog = "*"
+thiserror = "*"
+tokio = { version = "*", features = ["full"] }
+async-trait = "*"
+futures = "*"
+lazy_static = "*"
+num_cpus = "*"
+time = { version = "^0.3", features = ["formatting"] }
+sysinfo = "*"
+anyhow = "*"
+base64 = "*"
+sha2 = "*"
+
+
+buckyos-backup-lib = { path = "../components/backup-lib" }
+cyfs-warp = { git = "https://github.com/buckyos/buckyos.git" }
+
+[dependencies.uuid]
+version = "*"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]
+
+
