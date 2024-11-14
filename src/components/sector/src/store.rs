@@ -438,7 +438,7 @@ impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
         todo!()
     }
 
-    async fn delete(&mut self, chunk_id: &ChunkId) -> ChunkResult<()> {
+    async fn delete(&self, chunk_id: &ChunkId) -> ChunkResult<()> {
         Ok(())
     }
 

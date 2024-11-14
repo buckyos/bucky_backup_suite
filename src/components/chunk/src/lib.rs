@@ -9,6 +9,6 @@ pub use chunk::*;
 pub use target::*;
 pub use local_store::*;
 
-mod http;
-pub use http::*;
+// mod http;
+// pub use http::*;
 

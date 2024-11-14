@@ -18,7 +18,7 @@ impl HttpChunkServer {
     pub async fn listen<T: 'static + ChunkTarget + Clone + Send + Sync>(http_server: &mut Server<T>) -> ChunkResult<()> {
         http_server.at("/chunk/:chunk_id").post(|mut req: Request<T>| async move {
             let store = req.state().clone();
-            let chunk_id = ChunkId::from_str(req.param("chunk_id")?)?;
+            let chunk_id = CommonChunkId::from_str(req.param("chunk_id")?)?;
             if let Some(link_chunk_id) = req.header("link")
                 .and_then(|h| h.as_str().parse().ok()) {
                 store.link(&chunk_id, &link_chunk_id).await?;
@@ -38,7 +38,7 @@ impl HttpChunkServer {
 
         http_server.at("/chunk/:chunk_id").get(|req: Request<T>| async move {
             let store = req.state().clone();
-            let chunk_id = ChunkId::from_str(req.param("chunk_id")?)?;
+            let chunk_id = CommonChunkId::from_str(req.param("chunk_id")?)?;
             let offset: u64 = req.header("offset")
                 .and_then(|h| h.as_str().parse().ok())
                 .unwrap_or(0);
@@ -60,7 +60,7 @@ impl HttpChunkServer {
         http_server.at("/chunk/:chunk_id").head(|req: Request<T>| async move {
             let store = req.state().clone();
             let chunk_id = req.param("chunk_id").unwrap();
-            let chunk_id = ChunkId::from_str(chunk_id).unwrap();
+            let chunk_id = CommonChunkId::from_str(chunk_id).unwrap();
             let status = store.get(&chunk_id).await?;
             let mut res = Response::new(200);
             res.set_body(serde_json::to_string(&status)?);

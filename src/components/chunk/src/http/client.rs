@@ -25,7 +25,7 @@ impl HttpClient {
 
 #[async_trait]
 impl ChunkTarget for HttpClient {
-    async fn link(&self, chunk_id: &ChunkId, target_chunk_id: &ChunkId) -> ChunkResult<()> {
+    async fn link(&self, chunk_id: &CommonChunkId, target_chunk_id: &CommonChunkId) -> ChunkResult<()> {
         let url = format!("{}/chunk/{}", self.0.base_url, chunk_id);
         let client = surf::Client::new();
         let mut req = client.post(&url);
@@ -35,7 +35,7 @@ impl ChunkTarget for HttpClient {
         Ok(())
     }
 
-    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl Read + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
+    async fn write(&self, chunk_id: &CommonChunkId, offset: u64, reader: impl Read + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
         let url = format!("{}/chunk/{}", self.0.base_url, chunk_id);
         let client = surf::Client::new();
         let mut req = client.post(&url);
@@ -66,12 +66,12 @@ impl ChunkTarget for HttpClient {
     }
 
     type Read = HttpRead;
-    async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Option<Self::Read>> {
+    async fn read(&self, chunk_id: &CommonChunkId) -> ChunkResult<Option<Self::Read>> {
         let url = format!("{}/chunk/{}", self.0.base_url, chunk_id);
         Ok(Some(HttpRead::new(url)))
     }
 
-    async fn get(&self, chunk_id: &ChunkId) -> ChunkResult<Option<ChunkStatus>> {
+    async fn get(&self, chunk_id: &CommonChunkId) -> ChunkResult<Option<ChunkStatus>> {
         let url = format!("{}/chunk/{}", self.0.base_url, chunk_id);
         let client = surf::Client::new();
         let mut res = client.head(&url).send().await
@@ -86,7 +86,7 @@ impl ChunkTarget for HttpClient {
         }
     }
 
-    async fn delete(&mut self, chunk_id: &ChunkId) -> ChunkResult<()> {
+    async fn delete(&self, chunk_id: &CommonChunkId) -> ChunkResult<()> {
         let url = format!("{}/chunk/{}", self.0.base_url, chunk_id);
         let client = surf::Client::new();
         let res = client.delete(&url).send().await
