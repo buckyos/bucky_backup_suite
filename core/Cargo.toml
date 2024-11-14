@@ -5,6 +5,5 @@ members = [
     "./chunk",
     "./sector",
     "./framework",
-    "./dmcx",
 ]
 

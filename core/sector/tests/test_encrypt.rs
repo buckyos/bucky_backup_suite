@@ -3,7 +3,7 @@ use std::io::SeekFrom;
 use rand::RngCore;
 use sector::*;
 use chunk::*;
-use async_std::io::{prelude::*, BufReader};
+use async_std::io::{prelude::*};
 
 #[async_std::test]
 async fn test_sector_encrypt_and_decrypt() {
@@ -22,9 +22,9 @@ async fn test_sector_encrypt_and_decrypt() {
         
         // 创建加密器
         let encryptor = SectorEncryptor::new(meta.clone(), chunk_store.clone(), 0).await.unwrap();
-        sector_store.write(&meta.sector_id(), 0, BufReader::new(encryptor), Some(meta.sector_length())).await.unwrap();
+        sector_store.write(&meta.sector_id(), 0, encryptor, Some(meta.sector_length())).await.unwrap();
 
-        let mut direct_read = sector_store.read(&meta.sector_id()).await.unwrap();
+        let mut direct_read = sector_store.read(&meta.sector_id()).await.unwrap().unwrap();
         let mut buffer = vec![];
         direct_read.seek(SeekFrom::Start(meta.header_length())).await.unwrap();
         let direct_read_len = direct_read.read_to_end(&mut buffer).await.unwrap();
@@ -56,7 +56,7 @@ async fn test_sector_encrypt_and_decrypt() {
         
         // 创建加密器
         let encryptor = SectorEncryptor::new(meta.clone(), chunk_store.clone(), 0).await.unwrap();
-        sector_store.write(&meta.sector_id(), 0, BufReader::new(encryptor), Some(meta.sector_length())).await.unwrap();
+        sector_store.write(&meta.sector_id(), 0, encryptor, Some(meta.sector_length())).await.unwrap();
         
         let mut decryptor = ChunkDecryptor::new(chunk_id.clone(), vec![meta], sector_store).await.unwrap();
         let mut buffer = vec![];

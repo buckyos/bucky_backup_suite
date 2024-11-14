@@ -25,7 +25,17 @@ impl HttpClient {
 
 #[async_trait]
 impl ChunkTarget for HttpClient {
-    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl BufRead + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
+    async fn link(&self, chunk_id: &ChunkId, target_chunk_id: &ChunkId) -> ChunkResult<()> {
+        let url = format!("{}/chunk/{}", self.0.base_url, chunk_id);
+        let client = surf::Client::new();
+        let mut req = client.post(&url);
+        req = req.header("link", target_chunk_id.to_string());
+        let res = req.send().await
+            .map_err(|e| ChunkError::Http(format!("{}", e)))?;
+        Ok(())
+    }
+
+    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl Read + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
         let url = format!("{}/chunk/{}", self.0.base_url, chunk_id);
         let client = surf::Client::new();
         let mut req = client.post(&url);
@@ -38,7 +48,7 @@ impl ChunkTarget for HttpClient {
             req = req.header("Range", format!("bytes={}-", offset));
         }
         
-        let res = req.body(Body::from_reader(reader, length.map(|l| l as usize))).send().await
+        let res = req.body(Body::from_reader(async_std::io::BufReader::new(reader), length.map(|l| l as usize))).send().await
             .map_err(|e| ChunkError::Http(format!("{}", e)))?;
         
         if res.status().is_success() {
@@ -56,9 +66,9 @@ impl ChunkTarget for HttpClient {
     }
 
     type Read = HttpRead;
-    async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Self::Read> {
+    async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Option<Self::Read>> {
         let url = format!("{}/chunk/{}", self.0.base_url, chunk_id);
-        Ok(HttpRead::new(url))
+        Ok(Some(HttpRead::new(url)))
     }
 
     async fn get(&self, chunk_id: &ChunkId) -> ChunkResult<Option<ChunkStatus>> {

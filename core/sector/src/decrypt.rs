@@ -2,7 +2,7 @@ use std::{collections::LinkedList, future::Future, io::SeekFrom, ops::Range, pin
 use aes::Aes256;
 use async_std::io::prelude::*;
 use cipher::{Block, BlockDecryptMut, BlockSizeUser};
-use chunk::{ChunkId, ChunkResult, ChunkTarget};
+use chunk::*;
 use crate::SectorMeta;
 
 
@@ -135,7 +135,8 @@ impl<T: 'static + ChunkTarget> SectorDecryptor<T> {
                 read_offset_in_buffer: None,
                 write_offset_in_buffer: None,
                 decryptor: None,
-                sector_reader: remote_sectors.read(meta.sector_id()).await?, 
+                sector_reader: remote_sectors.read(meta.sector_id()).await?
+                    .ok_or(ChunkError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "sector not found")))?, 
             }),
             seek_proc: None,
         };

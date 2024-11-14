@@ -49,7 +49,17 @@ impl Display for LocalStore {
 impl ChunkTarget for LocalStore {
     type Read = File;
 
-    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl BufRead + Unpin + Send + Sync + 'static, _length: Option<u64>) -> ChunkResult<ChunkStatus> {
+    async fn write_vectored(&self, readers: Vec<(ChunkId, impl Read + Unpin + Send + Sync + 'static)>) -> ChunkResult<Vec<ChunkStatus>> {
+        let reader_futures = readers.into_iter().map(|(chunk_id, reader)| {
+            let target = self.clone();
+            async move {
+                target.write(&chunk_id, 0, reader, None).await
+            }
+        });
+        futures::future::try_join_all(reader_futures).await
+    }
+
+    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl Read + Unpin + Send + Sync + 'static, _length: Option<u64>) -> ChunkResult<ChunkStatus> {
         info!("write to local store: {}, chunk_id: {}, offset: {}, length: {}", self, chunk_id, offset, _length.unwrap_or(0));
         let path = Path::new(self.base_path()).join(chunk_id.to_string());
         let mut file = File::create(path).await
@@ -81,10 +91,36 @@ impl ChunkTarget for LocalStore {
         Ok(status)
     }
 
-    async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<File> {
+    async fn link(&self, chunk_id: &ChunkId, target_chunk_id: &NormalChunkId) -> ChunkResult<()> {
+        let source_path = Path::new(self.base_path()).join(chunk_id.to_string());
+        let target_path = Path::new(self.base_path()).join(target_chunk_id.to_string());
+        #[cfg(not(windows))]
+        {
+            async_std::os::unix::fs::symlink(source_path, target_path).await
+                .map_err(|e| {
+                    error!("create symlink error: {}", e);
+                    ChunkError::Io(e)
+                })?;
+        }
+        #[cfg(windows)] 
+        {
+            async_std::os::windows::fs::symlink_file(source_path, target_path).await
+                .map_err(|e| {
+                    error!("create symlink error: {}", e);
+                    ChunkError::Io(e)
+                })?;
+        }
+        Ok(())
+    }
+
+    async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Option<File>> {
         let path = Path::new(self.base_path()).join(chunk_id.to_string());
-        let file = File::open(path).await?;
-        Ok(file)
+        if path.exists() {
+            let file = File::open(path).await?;
+            Ok(Some(file))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn get(&self, chunk_id: &ChunkId) -> ChunkResult<Option<ChunkStatus>> {
@@ -99,6 +135,16 @@ impl ChunkTarget for LocalStore {
         } else {
             Ok(None)
         }
+    }
+
+    async fn get_vectored(&self, chunk_ids: &[ChunkId]) -> ChunkResult<Vec<Option<ChunkStatus>>> {
+        let get_futures = chunk_ids.into_iter().map(|chunk_id| {
+            let target = self.clone();
+            async move {
+                target.get(&chunk_id).await
+            }
+        });
+        futures::future::try_join_all(get_futures).await
     }
 
     async fn delete(&mut self, chunk_id: &ChunkId) -> ChunkResult<()> {

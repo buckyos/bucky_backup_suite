@@ -13,31 +13,71 @@ use crate::error::*;
 #[serde(into = "String", try_from = "String")]
 pub struct ChunkId([u8; 32]);
 
-impl ChunkId {
+pub struct TempChunkId {
+
+}
+
+impl TempChunkId {
+    pub fn with_hasher(length: i64, hasher: Sha256) -> ChunkResult<ChunkId> {
+        let hash_result = hasher.finalize();
+        let hash_array: [u8; 32] = hash_result.into();
+        Self::with_hash(length, &hash_array)
+    }
+
+    pub fn with_hash(length: i64, sha256: &[u8; 32]) -> ChunkResult<ChunkId> {
+        let mut id = ChunkId::with_hash(length, sha256)?;
+        // 将第一位设置为1
+        id.as_mut()[0] |= 0x80;
+        Ok(id)
+    }
+}
+
+pub type NormalChunkId = ChunkId;
+
+impl NormalChunkId {
     pub fn with_data(data: &[u8]) -> ChunkResult<Self> {
         let mut hasher = Sha256::new();
         hasher.update(data);
-        Self::with_hasher(data.len() as u64, hasher)
+        Self::with_hasher(data.len() as i64, hasher)
     }
     /// Creates a new ChunkId with the given length and full SHA256 hash.
     /// Only the first 24 bytes of the hash are used.
-    pub fn with_hash(length: u64, sha256: &[u8; 32]) -> ChunkResult<Self> {
+    pub fn with_hash(length: i64, sha256: &[u8; 32]) -> ChunkResult<Self> {
         let mut id = [0u8; 32];
+        let length = length.abs() as u64;
         id[..8].copy_from_slice(&length.to_be_bytes());
         id[8..].copy_from_slice(&sha256[..24]); // Only use the first 24 bytes of SHA256
         Ok(ChunkId(id))
     }
 
     /// Creates a new ChunkId with the given length and Sha256 hasher.
-    pub fn with_hasher(length: u64, hasher: Sha256) -> ChunkResult<Self> {
+    pub fn with_hasher(length: i64, hasher: Sha256) -> ChunkResult<Self> {
         let hash_result = hasher.finalize();
         let hash_array: [u8; 32] = hash_result.into();
         Self::with_hash(length, &hash_array)
     }
+}
 
-    /// Returns the length stored in the ChunkId.
-    pub fn length(&self) -> u64 {
-        u64::from_be_bytes(self.0[..8].try_into().unwrap())
+impl ChunkId {
+    pub fn is_temp(&self) -> bool {
+        self.0[0] & 0x80 != 0
+    }
+
+    pub fn is_normal(&self) -> bool {
+        self.0[0] & 0x80 == 0
+    }
+
+    pub fn as_normal(&self) -> Option<&NormalChunkId> {
+        if self.is_normal() {
+            Some(&self)
+        } else {
+            None
+        }
+    }
+
+     /// Returns the length stored in the ChunkId.
+     pub fn length(&self) -> u64 {
+        i64::from_be_bytes(self.0[..8].try_into().unwrap()).abs() as u64
     }
 
     /// Returns a new Sha256 hasher.

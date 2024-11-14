@@ -10,7 +10,6 @@ use serde::{Serialize, Deserialize};
 use sqlx::types::chrono::{self, DateTime, Utc};
 use crate::decrypt::ChunkDecryptor;
 use crate::{
-    decrypt::SectorDecryptor, 
     encrypt::SeekOnceSectorEncryptor, 
     sector::{SectorMeta, SectorBuilder},
 };
@@ -47,7 +46,8 @@ impl<T: ChunkTarget> Clone for SectorStore<T> {
 
 #[derive(sqlx::FromRow)]
 struct ChunkRow {
-    chunk_id: String, 
+    id: String, 
+    normal_id: Option<String>,
     length: i64, 
     created_at: DateTime<Utc>, 
     written_at: Option<DateTime<Utc>>, 
@@ -79,6 +79,7 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
     fn sql_create_chunks_table() -> &'static str {
         "CREATE TABLE IF NOT EXISTS chunks (
             chunk_id TEXT PRIMARY KEY, 
+            normal_chunk_id TEXT,
             length INTEGER, 
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP, 
             written_at DATETIME, 
@@ -259,14 +260,14 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
             let first_chunk = &chunks[0];
             let overtime = first_chunk.written_at.unwrap() + self.config().chunk_max_wait_time < chrono::Utc::now();
             for chunk in chunks {
-                let sectors = self.sectors_of_chunk(&chunk.chunk_id.parse()?).await?;
+                let sectors = self.sectors_of_chunk(&chunk.normal_id.as_ref().unwrap().parse()?).await?;
                 // 计算已分配到扇区的总长度
                 let allocated_length: i64 = sectors.iter()
                     .map(|s| s.length)
                     .sum();
 
                 let remain_length = chunk.length - allocated_length;
-                let added = sector_builder.add_chunk(chunk.chunk_id.parse()?, allocated_length as u64..(allocated_length + remain_length) as u64);
+                let added = sector_builder.add_chunk(chunk.normal_id.as_ref().unwrap().parse()?, allocated_length as u64..(allocated_length + remain_length) as u64);
                 if added < remain_length as u64 {
                     break;
                 }
@@ -355,14 +356,30 @@ impl<T: 'static + ChunkTarget> Seek for SectorStoreRead<T> {
 
 #[async_trait::async_trait]
 impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
+    async fn link(&self, chunk_id: &ChunkId, target_chunk_id: &NormalChunkId) -> ChunkResult<()> {
+        let _ = self.inner.local_store.link(chunk_id, target_chunk_id).await?;
+
+        let _ = sqlx::query("UPDATE chunks SET normal_id = ? WHERE id = ?")
+            .bind(target_chunk_id.to_string())
+            .bind(chunk_id.to_string())
+            .execute(self.sql_pool())
+            .await?;
+        
+        Ok(())
+    }
+
     type Read = SectorStoreRead<T>;
 
-    async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Self::Read> {
+    async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Option<Self::Read>> {
+        if chunk_id.is_temp() {
+            return Ok(None);
+        }
+
         match self.local_store().read(chunk_id).await {
-            Ok(local) => {
-                return Ok(SectorStoreRead::Local(local));
-            }
-            Err(_) => {},
+            Ok(Some(local)) => {
+                return Ok(Some(SectorStoreRead::Local(local)));
+            },
+            _ => {}
         };
 
         let sectors = self.sectors_of_chunk(chunk_id).await?;
@@ -371,10 +388,10 @@ impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
             metas.push(self.query_sector_meta(&sector).await?);
         }
 
-        Ok(SectorStoreRead::Remote(ChunkDecryptor::new(chunk_id.clone(), metas, self.remote_store()).await?))
+        Ok(Some(SectorStoreRead::Remote(ChunkDecryptor::new(chunk_id.clone(), metas, self.remote_store()).await?)))
     }
 
-    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl async_std::io::BufRead + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
+    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl async_std::io::Read + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
         // 首先检查 chunks 表中的状态
         let row = sqlx::query_as::<_, ChunkRow>("SELECT * FROM sectors WHERE id = ?")
             .bind(chunk_id.to_string()).fetch_optional(self.sql_pool()).await?;
@@ -382,8 +399,8 @@ impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
         match row {
             // 如果记录不存在,或者已被删除,需要写入 chunk store
             None => {
-                let _ = sqlx::query("INSERT OR REPLACE INTO chunks (id, length) VALUES (?, ?)")
-                    .bind(chunk_id.to_string()).bind(chunk_id.length() as i64)
+                let _ = sqlx::query("INSERT OR REPLACE INTO chunks (id, normal_id, length) VALUES (?, ?, ?)")
+                    .bind(chunk_id.to_string()).bind(chunk_id.as_normal().map(|id| id.to_string())).bind(chunk_id.length() as i64)
                     .execute(self.sql_pool()).await?;
                 let _ = self.inner.collect_chunks_waker.try_send(());
             }, 
@@ -401,13 +418,15 @@ impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
 
         // 写入成功后更新数据库
         let chunk_status = self.inner.local_store.write(chunk_id, offset, reader, length).await?;
-                
-        if chunk_status.written == chunk_id.length() {
-            // 更新写入时间为当前时间
+        
+        if chunk_id.is_normal() {
+            if chunk_status.written == chunk_id.as_normal().unwrap().length() {
+                // 更新写入时间为当前时间
             let _ = sqlx::query("UPDATE chunks SET written_at = CURRENT_TIMESTAMP WHERE id = ?")
                 .bind(chunk_id.to_string())
                 .execute(self.sql_pool())
                 .await?;
+            }
         }
 
         Ok(chunk_status)

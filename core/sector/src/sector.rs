@@ -126,7 +126,7 @@ impl SectorMeta {
             hasher.update(&range.start.to_be_bytes());
             hasher.update(&range.end.to_be_bytes());
         }
-        let id = ChunkId::with_hasher(sector_length, hasher).unwrap();
+        let id = ChunkId::with_hasher(sector_length as i64, hasher).unwrap();
 
         Self {
             header,

@@ -163,7 +163,8 @@ impl SectorEncryptor {
             .chunk_on_offset(offset).ok_or(ChunkError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset out of range")))?;
         let mut chunk_stubs = vec![];
         {
-            let mut chunk_reader = chunk_target.read(&meta.header().chunks[chunk_on_offset.chunk_index].0).await?;
+            let mut chunk_reader = chunk_target.read(&meta.header().chunks[chunk_on_offset.chunk_index].0).await?
+                .ok_or(ChunkError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "chunk not found")))?;
             if offset > chunk_on_offset.range_in_sector.start {
                 chunk_reader.seek(SeekFrom::Start(offset - chunk_on_offset.range_in_sector.start + chunk_on_offset.range_in_chunk.start)).await?;
             }
@@ -176,7 +177,8 @@ impl SectorEncryptor {
         let mut end_offset_in_sector = chunk_on_offset.range_in_sector.end;
         if chunk_on_offset.chunk_index < meta.header().chunks.len() - 1 {
             for (chunk_id, range_in_chunk) in meta.header().chunks[chunk_on_offset.chunk_index + 1..].iter() {
-                let mut chunk_reader = chunk_target.read(&chunk_id).await?;
+                let mut chunk_reader = chunk_target.read(&chunk_id).await?
+                    .ok_or(ChunkError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "chunk not found")))?;
                 if range_in_chunk.start > 0 {
                     chunk_reader.seek(SeekFrom::Start(range_in_chunk.start)).await?;
                 }
