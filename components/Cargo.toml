@@ -2,8 +2,8 @@
 resolver = "2"
 
 members = [
-    "common", 
-    "user",
+    "dmcx/common", 
+    "dmcx/user",
 ]
 
 [profile.release]
