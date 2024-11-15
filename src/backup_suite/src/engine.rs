@@ -206,7 +206,7 @@ impl BackupEngine {
                 self.task_db.update_task(&real_backup_task)?;
                 self.task_db.save_item_list_to_checkpoint(&real_backup_task.checkpoint_id.as_str(), &item_list)?;
 
-                info!("backup source prepare backup_item_list done: {}", checkpoint_id.as_str());
+                info!("backup source prepare backup_item_list done: {},item count: {}", checkpoint_id.as_str(), item_list.len());
             },
             _ => {
                 //all item confirmed and there is some backup work to do
@@ -234,8 +234,11 @@ impl BackupEngine {
             match item.state {
                 BackupItemState::New => {
                     if item.chunk_id.is_none() {
+                        info!("send new item to eval thread: {}", item.item_id);
                         tx_eval_channel.send(item).await?;
+                        
                     } else {
+                        info!("send new item to transfer thread: {}", item.item_id);
                         tx_trans_channel.send(item).await?;
                     }
                 },
@@ -244,11 +247,13 @@ impl BackupEngine {
                 },
                 _ => {
                     //ignore other state
+                    continue;
                 }
             }
         }
 
         //create engine.eval thread to cacle hash and diff
+        let checkpoint_id2 = checkpoint_id.clone();
         let checkpoint2 = checkpoint.clone();
         let local_eval_thread = tokio::spawn(async move {
             info!("start engine.eval thread,cacl hash and diff item by item");
@@ -262,6 +267,7 @@ impl BackupEngine {
                     continue;
                 }
                 let mut backup_item = backup_item.unwrap();
+                info!("eval item: {}", backup_item.item_id);
                 if backup_item.size < SMALL_CHUNK_SIZE {
                     //给出警告，太小的Chunk并不适合Chunk Target这种模式
                     warn!("chunk backup item {} is too small,some thing wrong?", backup_item.item_id);
@@ -277,7 +283,9 @@ impl BackupEngine {
                     info!("small backup item  eval{} done.", backup_item.item_id);
                 } else {
                     let mut item_reader = source.open_item(&backup_item.item_id).await?;
+                    info!("start calc quick hash for item: {}", backup_item.item_id);
                     let quick_hash = QuickHasher::default().calc(&mut item_reader, Some(backup_item.size)).await?;
+                    info!("quick hash for item: {} is {}", backup_item.item_id, quick_hash.as_str());
                     let is_exist = target.get(&quick_hash).await?.is_some();
                     if is_exist {
                         if !is_strict_mode {
@@ -287,6 +295,7 @@ impl BackupEngine {
                     }
 
                     //使用quick_hash进行put操作，在传输完成后再进行 link_chankid
+                    info!("start calc full hash for item: {}", backup_item.item_id);
                     item_reader.seek(SeekFrom::Start(0)).await?;
                     let mut offset = 0;
                     let quickhash2 = quick_hash.clone();
@@ -301,8 +310,7 @@ impl BackupEngine {
                             item_reader.read_exact(&mut content_buffer).await?;
                             (content_buffer, false)
                         };
-
-                        
+                        full_hash_context.update_from_bytes(&content);
 
                         if is_last_piece {
                             let full_id = full_hash_context.finalize();
@@ -314,7 +322,7 @@ impl BackupEngine {
                                 content,
                                 full_id: Some(full_id.clone())
                             }).await?;
-
+                            info!("full hash for item: {} is {}", backup_item.item_id, full_id.as_str());
                             break full_id;
                         } else {
                             tx_transfer_cache.send(TransferCacheNode{
@@ -326,9 +334,11 @@ impl BackupEngine {
                                 full_id: None
                             }).await?;
                         }
+                        offset += HASH_CHUNK_SIZE;
                     };
                     backup_item.state = BackupItemState::LocalDone;
                     backup_item.chunk_id = Some(full_id);
+                    engine.task_db.update_backup_item(checkpoint_id2.as_str(), &backup_item)?;
                     info!("backup item {} full hash cacl done", backup_item.item_id);
                 }
             }
@@ -367,7 +377,7 @@ impl BackupEngine {
                     }).collect()).await?;
                     //发送成功，需要将这些backup item的状设置为done
                 } else {
-                    info!("no small file cache to transfer");
+                    //info!("no small file cache to transfer");
                     drop(small_file_cache);
                 }
                 
