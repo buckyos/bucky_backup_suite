@@ -259,7 +259,7 @@ impl SourceServer {
                     source_path = &url.path()[1..];
                 } 
                 #[cfg(not(target_os = "windows"))] {
-                    source_path = source_url.path();
+                    source_path = url.path().clone();
                 }
         
                 let source_file = fs::File::open(source_path).await?;

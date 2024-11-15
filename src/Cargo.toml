@@ -6,5 +6,9 @@ members = [
     #"./components/gateway-lib",
     "./components/backup-lib",
     "./components/dir-source",
+    "./components/chunk",
+    "./components/sector",
     "./backup_suite",
+    "./plugins/dmcx/common",
+    "./plugins/dmcx/user",
 ]
