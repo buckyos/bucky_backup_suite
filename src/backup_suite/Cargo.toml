@@ -27,9 +27,9 @@ anyhow = "*"
 base64 = "*"
 sha2 = "*"
 rusqlite = { version = "*", features = ["bundled"] }
+url = "2.5.0"
 
-
-buckyos-backup-lib = { path = "../components/backup-lib" }
+chunk = { path = "../components/chunk" }
 cyfs-warp = { git = "https://github.com/buckyos/buckyos.git" }
 cyfs-gateway-lib = { git = "https://github.com/buckyos/buckyos.git" }
 buckyos-kit = { git = "https://github.com/buckyos/buckyos.git" }

@@ -1,9 +1,0 @@
-[package]
-name = "s3-chunk-target"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-async-trait = "0.1"
-async-std = { version = '1.11', features = ['attributes', 'unstable'] }
-chunk = { path = "../../core/chunk" }

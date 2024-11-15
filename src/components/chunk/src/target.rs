@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fmt, str::FromStr};
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncSeek};
 use serde::{Deserialize, Serialize};
@@ -9,53 +9,65 @@ use crate::{
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkStatus<T: ChunkId> {
-    pub chunk_id: T,
+pub struct ChunkStatus {
+    pub chunk_id: String,
     pub written: u64,
 }
 
-pub trait ChunkRead: AsyncRead + AsyncSeek + Unpin + Send + Sync {
+pub struct ChunkWrite<T: AsyncRead + Unpin + Send + Sync + 'static> {
+    pub chunk_id: String,
+    pub offset: u64,
+    pub reader: T,
+    pub length: Option<u64>,
+    pub tail: Option<u64>,
+}
 
+impl<T: AsyncRead + Unpin + Send + Sync + 'static> fmt::Display for ChunkWrite<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ChunkWrite(chunk_id: {}, offset: {}, length: {:?}, tail: {:?})", self.chunk_id, self.offset, self.length, self.tail)
+    }
 }
 
 #[async_trait]
-pub trait ChunkTarget: Send + Sync {
+pub trait ChunkTarget: Clone + Send + Sync {
     /// 将多个数据写入目标存储
-    async fn write_vectored<T: ChunkId + Send + Sync + 'static>(&self, readers: Vec<(T, impl AsyncRead + Unpin + Send + Sync + 'static)>) -> ChunkResult<Vec<ChunkStatus<T>>> {
-        let reader_futures = readers.into_iter().map(|(chunk_id, reader)| {
+    async fn write_vectored<T: AsyncRead + Unpin + Send + Sync + 'static>(&self, params: Vec<ChunkWrite<T>>) -> ChunkResult<Vec<ChunkStatus>> {
+        let reader_futures = params.into_iter().map(|param| {
             async move {
-                self.write(&chunk_id, 0, reader, None).await
+                self.write(param).await
             }
         });
         futures::future::try_join_all(reader_futures).await
     }
 
     /// 将数据写入目标存储
-    async fn write<T: ChunkId>(&self, chunk_id: &T, offset: u64, reader: impl AsyncRead + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus<T>>;
+    async fn write<T: AsyncRead + Unpin + Send + Sync + 'static>(&self, param: ChunkWrite<T>) -> ChunkResult<ChunkStatus>;
    
     /// 将一个chunk链接到另一个chunk
-    async fn link(&self, chunk_id: &impl ChunkId, target_chunk_id: &impl ChunkId) -> ChunkResult<()>;
+    async fn finish(&self, chunk_id: &str, target_chunk_id: &str) -> ChunkResult<()>;
+
+    type ChunkRead: AsyncRead + AsyncSeek + Unpin + Send + Sync;
     /// 从目标存储读取数据
-    async fn read(&self, chunk_id: &impl ChunkId) -> ChunkResult<Option<Box<dyn ChunkRead>>>;
+    async fn read(&self, chunk_id: &str) -> ChunkResult<Option<Self::ChunkRead>>;
 
     /// 获取指定chunk的状态
-    async fn get<T: ChunkId>(&self, chunk_id: &T) -> ChunkResult<Option<ChunkStatus<T>>>;
+    async fn get(&self, chunk_id: &str) -> ChunkResult<Option<ChunkStatus>>;
 
     /// 获取多个chunk的状态
-    async fn get_vectored<T: ChunkId + Send + Sync + 'static>(&self, chunk_ids: Vec<&T>) -> ChunkResult<Vec<Option<ChunkStatus<T>>>> {
+    async fn get_vectored(&self, chunk_ids: Vec<String>) -> ChunkResult<Vec<Option<ChunkStatus>>> {
         let get_futures = chunk_ids.into_iter().map(|chunk_id| {
             async move {
-                self.get(chunk_id).await
+                self.get(&chunk_id).await
             }
         });
         futures::future::try_join_all(get_futures).await
     }
 
     /// 从目标存储中删除指定的chunk
-    async fn delete(&self, chunk_id: &impl ChunkId) -> ChunkResult<()>;
+    async fn delete(&self, chunk_id: &str) -> ChunkResult<()>;
 
     /// 列出目标存储中的所有chunk
-    async fn list(&self) -> ChunkResult<Vec<ChunkStatus<String>>>;
+    async fn list(&self) -> ChunkResult<Vec<ChunkStatus>>;
 }
 
 

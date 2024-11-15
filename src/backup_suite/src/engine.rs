@@ -1,18 +1,22 @@
 // engine 是backup_suite的核心，负责统一管理配置，备份任务
 #![allow(unused)]
+use std::io::SeekFrom;
 use std::sync::Arc;
 use std::collections::HashMap;
 use futures::stream::futures_unordered::IterMut;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use std::io::Cursor;
+use tokio::io::AsyncRead;
 use anyhow::{Ok, Result};
 use base64;
 use sha2::{Sha256, Digest};
 use log::*;
 use serde::{Serialize, Deserialize};
+use url::Url;
+use chunk::*;
 
-
-use buckyos_backup_lib::*;
 use crate::task_db::*;
 
 const SMALL_CHUNK_SIZE:u64 = 1024*1024;//1MB
@@ -149,7 +153,7 @@ impl BackupEngine {
     }
 
     async fn run_chunk2chunk_backup_task(&self,backup_task:Arc<Mutex<WorkTask>>,checkpoint_id: String,
-        source:BackupChunkSourceProvider, target:BackupChunkTargetProvider) -> Result<()> {
+        source: impl ChunkSource + 'static, target: impl ChunkTarget + 'static) -> Result<()> {
         //this is source prepare thread
         let is_strict_mode = self.is_strict_mode;
         
@@ -180,7 +184,7 @@ impl BackupEngine {
                 drop(real_checkpoint);
                 //chunk source 比较简单，一次调用就可以得到所有的chunk,dir需要一直调用prepare直到返回完成。
                 //dir source的prepare_items方法需要更多的参数，方便在prepare的过程中“完成更多的工作”
-                item_list = source.prepare_items().await?;
+                item_list = source.prepare_items().await?.into_iter().map(|item| BackupItem::from(item)).collect();
                 let mut real_checkpoint = checkpoint.lock().await;
                 let total_size = item_list.iter().map(|item| item.size).sum();
                 //real_checkpoint.total_size = total_size;
@@ -206,8 +210,8 @@ impl BackupEngine {
         let engine = self.clone();
         let backup_task2 = backup_task.clone();
 
-        let source2 = self.get_chunk_source_provider(source.get_source_url().as_str())?;
-        let target2 = self.get_chunk_target_provider(target.get_target_url().as_str())?;
+        let source2 = source.clone();
+        let target2 = target.clone();
         //eval线程和transfer线程的逻辑未来可以通用化（为所有类型的task共享）
         let backup_task_eval = backup_task.clone();
         let backup_task_trans = backup_task.clone();
@@ -254,9 +258,10 @@ impl BackupEngine {
                 if backup_item.size < SMALL_CHUNK_SIZE {
                     //给出警告，太小的Chunk并不适合Chunk Target这种模式
                     warn!("chunk backup item {} is too small,some thing wrong?", backup_item.item_id);
-                    let item_reader = source.open_item(&backup_item.item_id).await?;
-                    let item_content = item_reader.read_all().await?;
-                    let chunk_id = calculate_full_hash_by_content(&item_content).await?;
+                    let mut item_reader = source.open_item(&backup_item.item_id).await?;
+                    let mut item_content = vec![];
+                    item_reader.read_to_end(&mut item_content).await?;
+                    let chunk_id = FullHasher::calc_from_bytes(&item_content);
 
                     //TODO：需要考虑缓存满了的情况。
                     let mut small_file_cache = engine.small_file_content_cache.lock().await;
@@ -264,9 +269,9 @@ impl BackupEngine {
                     backup_item.state = BackupItemState::LocalDone;
                     info!("small backup item  eval{} done.", backup_item.item_id);
                 } else {
-                    let item_reader = source.open_item(&backup_item.item_id).await?;
-                    let quick_hash = calculate_quick_hash(&item_reader).await?;
-                    let is_exist = target.is_chunk_exist(&quick_hash).await?;
+                    let mut item_reader = source.open_item(&backup_item.item_id).await?;
+                    let quick_hash = QuickHasher::default().calc(&mut item_reader, Some(backup_item.size)).await?;
+                    let is_exist = target.get(&quick_hash).await?.is_some();
                     if is_exist {
                         if !is_strict_mode {
                             backup_item.state = BackupItemState::Done;
@@ -275,42 +280,36 @@ impl BackupEngine {
                     }
 
                     //使用quick_hash进行put操作，在传输完成后再进行 link_chankid
-                    item_reader.seek(0).await?;
+                    item_reader.seek(SeekFrom::Start(0)).await?;
                     let mut offset = 0;
                     let quickhash2 = quick_hash.clone();
-                    let full_hash_context = build_full_hash_context(None);
+                    let mut full_hash_context = FullHasher::new();
                     loop {
-                        //TODO:如果是大文件则需要保存hash计算进度到本地
-                        let mut is_last:bool = false;
-                        let mut content_buffer = vec![0u8; HASH_CHUNK_SIZE as usize];
-                        let read_len = item_reader.read(&mut content_buffer).await?;
-                        if read_len > 0 {
-                            full_hash_context.update(&content_buffer[..read_len]);
-                            if read_len < HASH_CHUNK_SIZE as usize {
-                                is_last = true;
-                                let full_hash = full_hash_context.get_hash();
-                                info!("backup item {} full hash cacl done", backup_item.item_id);
-                                backup_item.state = BackupItemState::LocalDone;
-                                backup_item.chunk_id = Some(full_hash.clone());
-                                target.link_chunkid(&quickhash2, &full_hash).await?;
-                            } else {
-                                is_last = false;
-                            }
-                            //将content_buffer放入传输缓存队列,当队列满的时候会等待。这里会有丰富的优化策略
-                            tx_transfer_cache.send(TransferCacheNode{
-                                item_id: backup_item.item_id.clone(),
-                                chunk_id: quickhash2.clone(),
-                                offset: offset,
-                                is_last_piece: is_last,
-                                content: content_buffer,
-                            }).await?;
-                            offset += read_len as u64;
-                        }
+                        let (content, is_last_piece) = if offset >= backup_item.size - HASH_CHUNK_SIZE {
+                            let mut content_buffer = vec![0u8; (backup_item.size - offset) as usize];
+                            item_reader.read_exact(&mut content_buffer).await?;
+                            (content_buffer, true)
+                        } else {
+                            let mut content_buffer = vec![0u8; HASH_CHUNK_SIZE as usize];
+                            item_reader.read_exact(&mut content_buffer).await?;
+                            (content_buffer, false)
+                        };
 
-                        if is_last {
+                        tx_transfer_cache.send(TransferCacheNode{
+                            item_id: backup_item.item_id.clone(),
+                            chunk_id: quickhash2.clone(),
+                            offset,
+                            is_last_piece,
+                            content,
+                        }).await?;
+
+                        if is_last_piece {
                             break;
                         }
                     }
+                    backup_item.state = BackupItemState::LocalDone;
+                    backup_item.chunk_id = Some(full_hash_context.finalize());
+                    info!("backup item {} full hash cacl done", backup_item.item_id);
                 }
             }
             Ok(())
@@ -334,8 +333,18 @@ impl BackupEngine {
                     let current_cache = std::mem::replace(&mut *small_file_cache, HashMap::new());
                     drop(small_file_cache);
                     info!("transfer {} small file cache to target", current_cache.len());
-                    target2.put_chunklist(current_cache).await?;
-                    //发送成功，需要将这些backup item的状��设置为done
+
+                    target2.write_vectored(current_cache.into_iter().map(|(chunk_id, content)| {
+                        let content_length = content.len() as u64;
+                        ChunkWrite {
+                            chunk_id: chunk_id.clone(), 
+                            offset: 0, 
+                            reader: Cursor::new(content), 
+                            length: Some(content_length), 
+                            tail: Some(content_length)
+                        }
+                    }).collect()).await?;
+                    //发送成功，需要将这些backup item的状设置为done
                 } else {
                     info!("no small file cache to transfer");
                     drop(small_file_cache);
@@ -345,10 +354,17 @@ impl BackupEngine {
                 let cache_node = rx_transfer_cache.recv().await;
                 if cache_node.is_some() {
                     let cache_node = cache_node.unwrap();
-                    target2.put_chunk(&cache_node.chunk_id, cache_node.offset, &cache_node.content).await?;
+                    let content_length = cache_node.content.len() as u64; 
+                    target2.write(ChunkWrite {
+                        chunk_id: cache_node.chunk_id.clone(), 
+                        offset: cache_node.offset, 
+                        reader: Cursor::new(cache_node.content), 
+                        length: Some(content_length), 
+                        tail: None
+                    }).await?;
 
                     let mut real_backup_task = backup_task.lock().await;
-                    real_backup_task.completed_size += cache_node.content.len() as u64;
+                    real_backup_task.completed_size += content_length;
                     if cache_node.is_last_piece {
                         info!("item {} backup success.", cache_node.item_id);    
                         real_backup_task.completed_item_count += 1;
@@ -375,7 +391,13 @@ impl BackupEngine {
                             }
                             let chunk_id = item.chunk_id.as_ref().unwrap();
                             let item_reader = source2.open_item(&item.item_id).await?;
-                            target2.put_chunk_by_reader(&chunk_id, item_reader).await?;
+                            target2.write( ChunkWrite {
+                                chunk_id: chunk_id.clone(), 
+                                offset: 0, 
+                                reader: item_reader, 
+                                length: Some(item.size), 
+                                tail: Some(item.size)
+                            }).await?;
                             item.state = BackupItemState::Done;
                             engine.task_db.update_backup_item(checkpoint_id.as_str(), &item)?;
 
@@ -404,20 +426,20 @@ impl BackupEngine {
         Ok(())
     }
 
-    async fn run_chunk2dir_backup_task(&self,backup_task: WorkTask, 
-        source:BackupChunkSourceProvider, target:BackupDirTargetProvider) -> Result<()> {
-        unimplemented!()
-    }
+    // async fn run_chunk2dir_backup_task(&self,backup_task: WorkTask, 
+    //     source:BackupChunkSourceProvider, target:BackupDirTargetProvider) -> Result<()> {
+    //     unimplemented!()
+    // }
 
-    async fn run_dir2chunk_backup_task(&self,backup_task: WorkTask, 
-        source:BackupDirSourceProvider, target:BackupChunkTargetProvider) -> Result<()> {
-        unimplemented!()
-    }
+    // async fn run_dir2chunk_backup_task(&self,backup_task: WorkTask, 
+    //     source:BackupDirSourceProvider, target: impl ChunkTarget) -> Result<()> {
+    //     unimplemented!()
+    // }
 
-    async fn run_dir2dir_backup_task(&self,backup_task: WorkTask, 
-        source:BackupDirSourceProvider, target:BackupDirTargetProvider) -> Result<()> {
-        unimplemented!()
-    }
+    // async fn run_dir2dir_backup_task(&self,backup_task: WorkTask, 
+    //     source:BackupDirSourceProvider, target:BackupDirTargetProvider) -> Result<()> {
+    //     unimplemented!()
+    // }
 
     async fn run_chunk2chunk_restore_task(&self,backup_task: WorkTask) -> Result<()>{
         unimplemented!()
@@ -431,14 +453,18 @@ impl BackupEngine {
         unimplemented!()
     }
 
-    fn get_chunk_source_provider(&self, source_url:&str) -> Result<BackupChunkSourceProvider> {
-        //TODO
-        unimplemented!()
+    fn get_chunk_source_provider(&self, source_url:&str) -> Result<LocalStore> {
+        let url = Url::parse(source_url)?;
+        assert_eq!(url.scheme(), "file");
+        let store = LocalStore::new(url.path().to_string());
+        Ok(store)
     }
 
-    fn get_chunk_target_provider(&self, target_url:&str) -> Result<BackupChunkTargetProvider> {
-        //TODO
-        unimplemented!()
+    fn get_chunk_target_provider(&self, target_url:&str) -> Result<LocalStore> {
+        let url = Url::parse(target_url)?;
+        assert_eq!(url.scheme(), "file");
+        let store = LocalStore::new(url.path().to_string());
+        Ok(store)
     }
 
     pub async fn get_task_info(&self, taskid: &str) -> Result<WorkTask> {
