@@ -11,6 +11,7 @@ use sha2::{Sha256, Digest};
 use log::*;
 use serde::{Serialize, Deserialize};
 
+
 use buckyos_backup_lib::*;
 use crate::task_db::*;
 
@@ -37,7 +38,7 @@ pub struct TransferCacheNode {
 //理解基本术语
 //1. 相同的source url和target url只能创建一个BackupPlan (1个源可以备份到多个目的地)
 //2  同一个BackupPlan只能同时运行一个BackupTask或RestoreTask (Running Task)
-//3. BackupTask运行成功会创建CheckPoint,CheckPoint可以依赖一个之前存在的CheckPoint（支持增量备份）
+//3. BackupTask运行成功会创建CheckPoint,CheckPoint可以依赖一个之前存在��CheckPoint（支持增量备份）
 //4. RestoreTask的创建必须指定CheckPointId
 
 #[derive(Clone)]
@@ -290,6 +291,7 @@ impl BackupEngine {
                                 let full_hash = full_hash_context.get_hash();
                                 info!("backup item {} full hash cacl done", backup_item.item_id);
                                 backup_item.state = BackupItemState::LocalDone;
+                                backup_item.chunk_id = Some(full_hash.clone());
                                 target.link_chunkid(&quickhash2, &full_hash).await?;
                             } else {
                                 is_last = false;
@@ -333,7 +335,7 @@ impl BackupEngine {
                     drop(small_file_cache);
                     info!("transfer {} small file cache to target", current_cache.len());
                     target2.put_chunklist(current_cache).await?;
-                    //发送成功，需要将这些backup item的状态设置为done
+                    //发送成功，需要将这些backup item的状��设置为done
                 } else {
                     info!("no small file cache to transfer");
                     drop(small_file_cache);
@@ -436,6 +438,10 @@ impl BackupEngine {
 
     fn get_chunk_target_provider(&self, target_url:&str) -> Result<BackupChunkTargetProvider> {
         //TODO
+        unimplemented!()
+    }
+
+    pub async fn get_task_info(&self, taskid: &str) -> Result<WorkTask> {
         unimplemented!()
     }
 
@@ -546,15 +552,15 @@ mod tests {
         let new_plan = BackupPlanConfig::chunk2chunk("file:///d/temp/test", "file:///d/temp/bucky_backup_result", "testc2c", "testc2c desc");
         let plan_id = engine.create_backup_plan(new_plan).await.unwrap();
         let task_id = engine.create_backup_task(&plan_id, None).await.unwrap();
-        engine.resume_task(&task_id).await.unwrap();
-        let task_info = engine.get_task_status(&task_id).await.unwrap();
-        let check_point_id = task_info.check_point_id.clone();
+        engine.resume_backup_task(&task_id).await.unwrap();
+        let task_info = engine.get_task_info(&task_id).await.unwrap();
+        let check_point_id = task_info.checkpoint_id.clone();
         let mut step = 0;
         loop {
             step += 1;
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            let task_info = engine.get_task_status(&task_id).await.unwrap();
-            if !task_info.is_running() {
+            let task_info = engine.get_task_info(&task_id).await.unwrap();
+            if task_info.state == TaskState::Done {
                 println!("backup task done");
                 break;
             }

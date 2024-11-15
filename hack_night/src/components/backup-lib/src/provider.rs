@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-
+use rusqlite::types::{ToSql, FromSql, ValueRef};
 use async_trait::async_trait;
 use serde_json::Value;
 use anyhow::Result;
@@ -14,11 +14,67 @@ pub enum BackupItemState {
     Failed(String),
 }
 
+impl ToSql for BackupItemState {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        let s = match self {
+            BackupItemState::New => "NEW".to_string(),
+            BackupItemState::LocalProcessing => "LOCAL_PROCESSING".to_string(),
+            BackupItemState::LocalDone => "LOCAL_DONE".to_string(),
+            BackupItemState::Transmitting => "TRANSMITTING".to_string(),
+            BackupItemState::Done => "DONE".to_string(),
+            BackupItemState::Failed(msg) => format!("FAILED:{}", msg),
+        };
+
+        Ok(s.into())
+    }
+}
+
+impl FromSql for BackupItemState {
+    fn column_result(value: ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        value.as_str().map(|s| match s {
+            "NEW" => BackupItemState::New,
+            "LOCAL_PROCESSING" => BackupItemState::LocalProcessing,
+            "LOCAL_DONE" => BackupItemState::LocalDone,
+            "TRANSMITTING" => BackupItemState::Transmitting,
+            "DONE" => BackupItemState::Done,
+            _ => {
+                if s.starts_with("FAILED:") {
+                    BackupItemState::Failed(s.to_string())
+                } else {
+                    BackupItemState::New
+                }
+            }
+        })
+    }
+}
+
 #[derive(Debug,Clone)]
 pub enum BackupItemType {
     Chunk,
     File,
     Directory,
+}
+
+impl ToSql for BackupItemType {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        let s = match self {
+            BackupItemType::Chunk => "CHUNK".to_string(),
+            BackupItemType::File => "FILE".to_string(),
+            BackupItemType::Directory => "DIRECTORY".to_string(),
+        };
+        Ok(s.into())
+    }
+}
+
+impl FromSql for BackupItemType {
+    fn column_result(value: ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        value.as_str().map(|s| match s {
+            "CHUNK" => BackupItemType::Chunk,
+            "FILE" => BackupItemType::File,
+            "DIRECTORY" => BackupItemType::Directory,
+            _ => BackupItemType::File, // 默认文件类型
+        })
+    }
 }
 
 #[derive(Debug,Clone)]
