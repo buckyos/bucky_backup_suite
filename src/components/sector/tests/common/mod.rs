@@ -1,8 +1,9 @@
+use std::io::Cursor;
 use std::path::PathBuf;
-use async_std::{fs, io::Cursor};
-use chunk::{ChunkId, LocalStore, ChunkTarget};
+use chunk::{*};
+use tokio::fs;
+use tokio::io::{AsyncRead};
 use rand::RngCore;
-use sha2::{Sha256, Digest};
 
 pub async fn setup_test_env() -> PathBuf {
     use std::io::Write;
@@ -45,11 +46,18 @@ pub fn create_test_remote_store(test_dir: &PathBuf) -> LocalStore {
     LocalStore::new(test_dir.to_str().unwrap().to_string())
 }
 
-pub async fn create_random_chunk(store: &LocalStore, length: u64) -> ChunkId {
+pub async fn create_random_chunk(store: &LocalStore, length: u64) -> String {
     let mut rng = rand::thread_rng();
     let mut data = vec![0u8; length as usize];
     rng.fill_bytes(&mut data);
-    let chunk_id = ChunkId::with_data(&data[..]).unwrap();
-    store.write(&chunk_id, 0, Cursor::new(data), Some(length)).await.unwrap();
+    let chunk_id = FullHasher::calc_from_bytes(&data);
+    store.write(ChunkWrite {
+        chunk_id: chunk_id.to_owned(), 
+        offset: 0, 
+        reader: Cursor::new(data), 
+        tail: Some(length), 
+        length: Some(length), 
+        full_id: None
+    }).await.unwrap();
     chunk_id
 }

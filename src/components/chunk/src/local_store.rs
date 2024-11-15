@@ -38,6 +38,30 @@ impl LocalStore {
     fn base_path(&self) -> &str {
         &self.0.base_path
     }
+
+    async fn link(&self, quick_id: &str, full_id: &str) -> ChunkResult<()> {
+        let source_path = Path::new(self.base_path()).join(quick_id);
+        let target_path = Path::new(self.base_path()).join(full_id);
+        info!("link chunk {} to {}", quick_id, full_id);
+
+        #[cfg(unix)] 
+        {
+            fs::symlink(full_id, quick_id).await
+            .map_err(|e| {
+                error!("create symlink error: {}", e);
+                ChunkError::Io(e)
+            })?;
+        } 
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_file(quick_id, full_id)
+                .map_err(|e| {
+                    error!("create symlink error: {}", e);
+                    ChunkError::Io(e)
+                })?;
+        }
+        Ok(())
+    }
 }
 
 impl Display for LocalStore {
@@ -75,37 +99,20 @@ impl ChunkTarget for LocalStore {
                 ChunkError::Io(e)
             })?;
         info!("write to local store: {}, param: {}, written: {}", self, param, metadata.len());
+        if let Some(full_id) = param.full_id {
+            self.link(&param.chunk_id, &full_id).await?;
+        }
         let status = ChunkStatus {
             chunk_id: param.chunk_id,
             written: metadata.len(),
         };
+
+
        
         Ok(status)
     }
 
-    async fn finish(&self, chunk_id: &str, target_chunk_id: &str) -> ChunkResult<()> {
-        let source_path = Path::new(self.base_path()).join(chunk_id);
-        let target_path = Path::new(self.base_path()).join(target_chunk_id);
-        info!("link chunk {} to {}", chunk_id, target_chunk_id);
-
-        #[cfg(unix)] 
-        {
-            fs::symlink(target_path, source_path).await
-            .map_err(|e| {
-                error!("create symlink error: {}", e);
-                ChunkError::Io(e)
-            })?;
-        } 
-        #[cfg(windows)]
-        {
-            std::os::windows::fs::symlink_file(target_path, source_path)
-                .map_err(|e| {
-                    error!("create symlink error: {}", e);
-                    ChunkError::Io(e)
-                })?;
-        }
-        Ok(())
-    }
+   
 
     type ChunkRead = File;
     async fn read(&self, chunk_id: &str) -> ChunkResult<Option<File>> {

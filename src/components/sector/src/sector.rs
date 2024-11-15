@@ -19,8 +19,8 @@ pub struct SectorHeader {
     pub flags: u32, 
     pub block_size: u16,
     pub key: Option<SectorKey>,
-    pub chunks: Vec<(ChunkId, Range<u64>)>,
-    pub reserved: [u8; 12],
+    pub chunks: Vec<(String, Range<u64>)>,
+    pub reserved: Vec<u8>,
 }
 
 impl Default for SectorHeader {
@@ -31,34 +31,40 @@ impl Default for SectorHeader {
             block_size: 16 * 1024,
             key: None,
             chunks: Vec::new(),
-            reserved: [0u8; 12],
+            reserved: vec![0u8; 12],
         }
     }
 }
 
 impl SectorHeader {
-    fn calc_length(&self) -> usize {
-        let length = size_of::<u64>()    // SECTOR_MAGIC
-        + size_of::<u32>()  // version
-        + size_of::<u32>()  // flags
-        + size_of::<u16>() // block_size
-        + if self.key.is_some() {
-            SECTOR_KEY_SIZE // key length
+    fn calc_length(&mut self) -> usize {
+        let mut length = size_of::<u64>()    // SECTOR_MAGIC
+            + size_of::<u32>()  // version
+            + size_of::<u32>()  // flags
+            + size_of::<u16>() // block_size
+            + if self.key.is_some() {
+                SECTOR_KEY_SIZE // key length
+            } else {
+                0
+            }
+            + size_of::<u16>() // length of chunks
+            + self.chunks.iter().map(|(id, ..)| {
+                size_of::<u16>() + id.len() + size_of::<u64>() + size_of::<u64>()
+            }).sum::<usize>();
+        let tail_len = length % Aes256::block_size();
+        let reserved = if tail_len > 0 {
+            Aes256::block_size() - tail_len
         } else {
             0
-        }
-        + size_of::<u16>() // length of chunks
-        + self.chunks.iter().map(|(..)| {
-            size_of::<ChunkId>() + size_of::<u64>() + size_of::<u64>()
-        }).sum::<usize>()
-        + self.reserved.len(); // reserved
+        }; 
+        length += reserved;
+        self.reserved = vec![0u8; reserved];
         assert_eq!(length % Aes256::block_size() as usize, 0);
-        length as usize
+        length
     }
 
-    pub fn encrypt_to_vec(&self) -> Vec<u8> {
+    pub fn encrypt_to_vec(&mut self) -> Vec<u8> {
         let mut result = Vec::new();
-        
         // 写入魔数
         result.extend_from_slice(&SECTOR_MAGIC.to_be_bytes());
         
@@ -83,6 +89,14 @@ impl SectorHeader {
             result.extend_from_slice(&range.end.to_be_bytes());
         }
 
+        let tail_len = result.len() % Aes256::block_size();
+        let reserved = if tail_len > 0 {
+            Aes256::block_size() - tail_len
+        } else {
+            0
+        }; 
+        self.reserved = vec![0u8; reserved];
+
         result.extend_from_slice(&self.reserved);
         
         result
@@ -98,42 +112,31 @@ pub struct ChunkOnOffset {
 #[derive(Clone)]
 pub struct SectorMeta {
     header: SectorHeader,
-    id: ChunkId,
-    header_length: u64,
+    id: String,
     body_length: u64,
     sector_length: u64,
+    header_bytes: Vec<u8>,
 }
 
 impl SectorMeta {
-    pub fn new(header: SectorHeader) -> Self {
-        let header_length = header.calc_length() as u64;
+    pub fn new(mut header: SectorHeader) -> Self {
+        let header_bytes = header.encrypt_to_vec();
         let body_length = header.chunks.iter().map(|(_, range)| range.end - range.start).sum();
-        let sector_length = header_length + body_length;
+        let sector_length = header_bytes.len() as u64 + body_length;
         let sector_length = if sector_length % Aes256::block_size() as u64 != 0 {
             sector_length / Aes256::block_size() as u64 * Aes256::block_size() as u64 + Aes256::block_size() as u64
         } else {
             sector_length
         };
-        let mut hasher = Sha256::new();
+       
+        let id = FullHasher::calc_from_bytes(&header_bytes);
         
-        if let Some(key) = &header.key {
-            hasher.update(key);
-        }
-        
-        // 添加所有chunk的信息到哈希计算中
-        for (chunk_id, range) in &header.chunks {
-            hasher.update(chunk_id.as_ref());
-            hasher.update(&range.start.to_be_bytes());
-            hasher.update(&range.end.to_be_bytes());
-        }
-        let id = ChunkId::with_hasher(sector_length as i64, hasher).unwrap();
-
         Self {
             header,
-            header_length,
             body_length,
             sector_length,
             id,
+            header_bytes,
         }
     }
 
@@ -141,7 +144,7 @@ impl SectorMeta {
         &self.header
     }
 
-    pub fn sector_id(&self) -> &ChunkId {
+    pub fn sector_id(&self) -> &str {
         &self.id
     }
 
@@ -174,28 +177,32 @@ impl SectorMeta {
     }
 
     pub fn header_length(&self) -> u64 {
-        self.header_length
+        self.header_bytes.len() as u64
     }
 
     pub fn body_length(&self) -> u64 {
         self.body_length
     }
 
+    pub fn header_bytes(&self) -> &[u8] {
+        &self.header_bytes
+    }
+
     pub fn chunk_on_offset(&self, offset: u64) -> Option<ChunkOnOffset> {
-        let offset_in_chunks = offset - self.header_length;
+        let offset_in_chunks = offset - self.header_length();
         let mut start_offset_in_chunks = 0;
         for (i, (_, range)) in self.header.chunks.iter().enumerate() {
             if offset_in_chunks >= start_offset_in_chunks && offset < start_offset_in_chunks + range.end - range.start  {
                 if i == self.header.chunks.len() - 1 {
                     return Some(ChunkOnOffset {
                         chunk_index: i,
-                        range_in_sector: self.header_length + start_offset_in_chunks..self.sector_length,
+                        range_in_sector: self.header_length() + start_offset_in_chunks..self.sector_length(),
                         range_in_chunk: range.clone(),
                     });
                 } else {
                     return Some(ChunkOnOffset {
                         chunk_index: i,
-                        range_in_sector: self.header_length + start_offset_in_chunks..self.header_length + start_offset_in_chunks + range.end - range.start,
+                        range_in_sector: self.header_length() + start_offset_in_chunks..self.sector_length(),
                         range_in_chunk: range.clone(),
                     });
                 }
@@ -205,10 +212,10 @@ impl SectorMeta {
         None
     }
 
-    pub fn offset_of_chunk(&self, chunk_id: &ChunkId) -> Option<(u64, Range<u64>)> {
+    pub fn offset_of_chunk(&self, chunk_id: &str) -> Option<(u64, Range<u64>)> {
         if let Some((index, _)) = self.header.chunks.iter().enumerate().find(|(_, (id, _))| id == chunk_id) {
             let offset: u64 = self.header.chunks[..index].iter().map(|(_, range)| range.end - range.start).sum();
-            Some((self.header_length + offset, self.header.chunks[index].1.clone()))
+            Some((self.header_length() + offset, self.header.chunks[index].1.clone()))
         } else {
             None
         }
@@ -260,7 +267,7 @@ impl SectorBuilder {
         self
     }
 
-    pub fn add_chunk(&mut self, chunk_id: ChunkId, range: Range<u64>) -> u64 {
+    pub fn add_chunk(&mut self, chunk_id: String, range: Range<u64>) -> u64 {
         if self.length >= self.length_limit {
             return 0;
         }

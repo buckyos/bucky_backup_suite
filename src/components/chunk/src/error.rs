@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ChunkError {
+    #[error("internal error: {0}")]
+    Internal(String),
     #[error("invalid chunk id format: {0}")]
     InvalidId(String), 
     #[error("I/O error occurred: {0}")]

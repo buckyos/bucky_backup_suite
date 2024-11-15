@@ -1,10 +1,13 @@
 use std::io::SeekFrom;
 use std::pin::Pin;
+use std::sync::Mutex;
+use std::cell::OnceCell;
 use std::task::{Context, Poll};
 use std::{sync::Arc, time::Duration};
-use async_std::fs::File;
-use async_std::{io::BufReader, task};
-use async_std::io::prelude::*;
+use tokio::fs::File;
+use tokio::io::{AsyncRead, AsyncSeekExt, AsyncSeek, ReadBuf};
+use tokio::sync::mpsc;
+use tokio::task;
 use chunk::*;
 use serde::{Serialize, Deserialize};
 use sqlx::types::chrono::{self, DateTime, Utc};
@@ -19,8 +22,8 @@ struct StoreImpl<T: ChunkTarget> {
     remote_store: T, 
     sql_pool: sqlx::Pool<sqlx::Sqlite>, 
     config: SectorStoreConfig,
-    collect_chunks_waker: async_std::channel::Sender<()>,
-    collect_chunks_waiter: async_std::channel::Receiver<()>,
+    collect_chunks_waker: mpsc::Sender<()>, 
+    collect_chunks_waiter: Mutex<OnceCell<mpsc::Receiver<()>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,8 +50,8 @@ impl<T: ChunkTarget> Clone for SectorStore<T> {
 #[derive(sqlx::FromRow)]
 struct ChunkRow {
     id: String, 
-    normal_id: Option<String>,
-    length: i64, 
+    full_id: Option<String>,
+    length: Option<i64>, 
     created_at: DateTime<Utc>, 
     written_at: Option<DateTime<Utc>>, 
     deleted_at: Option<DateTime<Utc>>, 
@@ -79,7 +82,7 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
     fn sql_create_chunks_table() -> &'static str {
         "CREATE TABLE IF NOT EXISTS chunks (
             chunk_id TEXT PRIMARY KEY, 
-            normal_chunk_id TEXT,
+            full_id TEXT,
             length INTEGER, 
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP, 
             written_at DATETIME, 
@@ -115,7 +118,7 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
     }
 
     pub fn with_sql_pool(sql_pool: sqlx::Pool<sqlx::Sqlite>, sector_store: T, config: SectorStoreConfig) -> Self {
-        let (collect_chunks_waker, collect_chunks_waiter) = async_std::channel::bounded(1);
+        let (collect_chunks_waker, collect_chunks_waiter) = mpsc::channel(1);
         Self {
             inner: Arc::new(StoreImpl {
                 local_store: LocalStore::new(config.base_path.clone()), 
@@ -123,7 +126,7 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
                 remote_store: sector_store,
                 config,
                 collect_chunks_waker,
-                collect_chunks_waiter,
+                collect_chunks_waiter: Mutex::new(OnceCell::from(collect_chunks_waiter)),
             })
         }
     }
@@ -170,7 +173,7 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
         let mut sector_builder = SectorBuilder::new();
         for chunk in chunks {
             sector_builder.add_chunk(
-                chunk.chunk_id.parse()?,
+                chunk.chunk_id,
                 chunk.offset_in_chunk as u64..(chunk.offset_in_chunk + chunk.length) as u64,
             );
         }
@@ -183,24 +186,31 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
         // 从数据库中获取该扇区包含的所有数据块信息
         let sector_meta = self.query_sector_meta(&sector).await?;
 
-        let sector_encryptor = SeekOnceSectorEncryptor::new(
+        let mut sector_encryptor = SeekOnceSectorEncryptor::new(
             sector_meta, 
             self.local_store().clone()
         );
+
+        let status = self.inner.remote_store.get(&sector.id).await?;
+        let offset = status.map_or(0, |s| s.written);
         
-        let status = self.inner.remote_store.write(
-            &sector.id.parse()?,  // 将sector id字符串解析为ChunkId
-            0,  // 从头开始写入
-            BufReader::new(sector_encryptor),
-            Some(sector.length as u64)
-        ).await?;
+        sector_encryptor.seek(SeekFrom::Start(offset)).await?;
+
+        let status = self.inner.remote_store.write(ChunkWrite {
+            chunk_id: sector.id.clone(),  // 将sector id字符串解析为ChunkId
+            offset,  // 从头开始写入
+            reader: sector_encryptor,
+            length: Some(sector.length as u64 - offset),
+            tail: Some(sector.length as u64), 
+            full_id: None,
+        }).await?;
 
         if status.written == sector.length as u64 {
             // 更新sectors表中的写入时间
             sqlx::query(
-                "UPDATE sectors SET written_at = CURRENT_TIMESTAMP WHERE id = ?"
+                "UPDATE sectors SET written_at=CURRENT_TIMESTAMP WHERE id = ?"
             )
-            .bind(sector.id)
+            .bind(&sector.id)
             .execute(self.sql_pool())
             .await?;
         }
@@ -208,11 +218,11 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
         Ok(())
     }
 
-    async fn sectors_of_chunk(&self, chunk_id: &ChunkId) -> ChunkResult<Vec<SectorRow>> {
+    async fn sectors_of_chunk(&self, chunk_id: &str) -> ChunkResult<Vec<SectorRow>> {
         let sectors = sqlx::query_as::<_, SectorRow>(
             "SELECT * FROM sectors WHERE chunk_id = ? ORDER BY offset_in_chunk ASC"
         )
-        .bind(chunk_id.to_string())
+        .bind(chunk_id)
         .fetch_all(self.sql_pool())
         .await?;
 
@@ -231,7 +241,7 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
             if let Some(sector) = row {
                 return self.post_sector_inner(sector).await;
             } else {
-                task::sleep(self.config().post_sector_interval).await;
+                tokio::time::sleep(self.config().post_sector_interval).await;
             }
         }
        
@@ -260,14 +270,14 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
             let first_chunk = &chunks[0];
             let overtime = first_chunk.written_at.unwrap() + self.config().chunk_max_wait_time < chrono::Utc::now();
             for chunk in chunks {
-                let sectors = self.sectors_of_chunk(&chunk.normal_id.as_ref().unwrap().parse()?).await?;
+                let sectors = self.sectors_of_chunk(&chunk.id).await?;
                 // 计算已分配到扇区的总长度
                 let allocated_length: i64 = sectors.iter()
                     .map(|s| s.length)
                     .sum();
 
-                let remain_length = chunk.length - allocated_length;
-                let added = sector_builder.add_chunk(chunk.normal_id.as_ref().unwrap().parse()?, allocated_length as u64..(allocated_length + remain_length) as u64);
+                let remain_length = chunk.length.unwrap() - allocated_length;
+                let added = sector_builder.add_chunk(chunk.id, allocated_length as u64..(allocated_length + remain_length) as u64);
                 if added < remain_length as u64 {
                     break;
                 }
@@ -313,19 +323,26 @@ impl<T: 'static + ChunkTarget + Clone> SectorStore<T> {
     }
 
     async fn collect_sector_loop(&self) -> ChunkResult<()> {
+        let mut waiter = self.inner.collect_chunks_waiter.lock().unwrap().take()
+            .ok_or(ChunkError::Internal("collect_chunks_waiter is not initialized".to_string()))?;
         loop {
             match self.collect_sector_inner().await {
                 Err(_) | Ok(false) => {
-                    let _ = async_std::future::timeout(
+                    let _ = tokio::time::timeout(
                         self.config().collect_sector_interval, 
-                        self.inner.collect_chunks_waiter.recv()
+                        waiter.recv()
                     ).await;
-                    task::sleep(self.config().collect_sector_interval).await;
                 },
                 _ => {}
             }
             
         }
+    }
+
+    async fn get_chunk(&self, chunk_id: &str) -> ChunkResult<Option<ChunkRow>> {
+        let row = sqlx::query_as::<_, ChunkRow>("SELECT * FROM chunks WHERE id = ?")
+            .bind(chunk_id).fetch_optional(self.sql_pool()).await?;
+        Ok(row)
     }
 }
 
@@ -334,8 +351,8 @@ pub enum SectorStoreRead<T: ChunkTarget> {
     Local(File),
 }
 
-impl<T: 'static + ChunkTarget> Read for SectorStoreRead<T> {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<std::io::Result<usize>> {
+impl<T: 'static + ChunkTarget> AsyncRead for SectorStoreRead<T> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         let mut_self = self.get_mut();
         match mut_self {
             Self::Remote(sector_decryptor) => Pin::new(sector_decryptor).poll_read(cx, buf),
@@ -344,37 +361,29 @@ impl<T: 'static + ChunkTarget> Read for SectorStoreRead<T> {
     }
 }
 
-impl<T: 'static + ChunkTarget> Seek for SectorStoreRead<T> {
-    fn poll_seek(self: Pin<&mut Self>, cx: &mut Context<'_>, pos: SeekFrom) -> Poll<std::io::Result<u64>> {
+impl<T: 'static + ChunkTarget> AsyncSeek for SectorStoreRead<T> {
+    fn start_seek(self: Pin<&mut Self>, pos: SeekFrom) -> std::io::Result<()> {
         let mut_self = self.get_mut();
         match mut_self {
-            Self::Remote(sector_decryptor) => Pin::new(sector_decryptor).poll_seek(cx, pos),
-            Self::Local(file) => Pin::new(file).poll_seek(cx, pos),
+            Self::Remote(sector_decryptor) => Pin::new(sector_decryptor).start_seek(pos),
+            Self::Local(file) => Pin::new(file).start_seek(pos),
+        }
+    }
+
+    fn poll_complete(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
+        let mut_self = self.get_mut();
+        match mut_self {
+            Self::Remote(sector_decryptor) => Pin::new(sector_decryptor).poll_complete(cx),
+            Self::Local(file) => Pin::new(file).poll_complete(cx),
         }
     }
 }
 
 #[async_trait::async_trait]
 impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
-    async fn link(&self, chunk_id: &ChunkId, target_chunk_id: &NormalChunkId) -> ChunkResult<()> {
-        let _ = self.inner.local_store.link(chunk_id, target_chunk_id).await?;
+    type ChunkRead = SectorStoreRead<T>;
 
-        let _ = sqlx::query("UPDATE chunks SET normal_id = ? WHERE id = ?")
-            .bind(target_chunk_id.to_string())
-            .bind(chunk_id.to_string())
-            .execute(self.sql_pool())
-            .await?;
-        
-        Ok(())
-    }
-
-    type Read = SectorStoreRead<T>;
-
-    async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Option<Self::Read>> {
-        if chunk_id.is_temp() {
-            return Ok(None);
-        }
-
+    async fn read(&self, chunk_id: &str) -> ChunkResult<Option<Self::ChunkRead>> {
         match self.local_store().read(chunk_id).await {
             Ok(Some(local)) => {
                 return Ok(Some(SectorStoreRead::Local(local)));
@@ -382,63 +391,73 @@ impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
             _ => {}
         };
 
+        let chunk = self.get_chunk(chunk_id).await?;
+        if chunk.is_none() {
+            return Ok(None);
+        }
+        let chunk = chunk.unwrap();
+
         let sectors = self.sectors_of_chunk(chunk_id).await?;
         let mut metas = vec![];
         for sector in sectors {
             metas.push(self.query_sector_meta(&sector).await?);
         }
 
-        Ok(Some(SectorStoreRead::Remote(ChunkDecryptor::new(chunk_id.clone(), metas, self.remote_store()).await?)))
+        Ok(Some(SectorStoreRead::Remote(ChunkDecryptor::new(chunk_id.to_owned(), chunk.length.unwrap() as u64, metas, self.remote_store()).await?)))
     }
 
-    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl async_std::io::Read + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
+    async fn write<R: AsyncRead + Unpin + Send + Sync + 'static>(&self, param: ChunkWrite<R>) -> ChunkResult<ChunkStatus> {
         // 首先检查 chunks 表中的状态
         let row = sqlx::query_as::<_, ChunkRow>("SELECT * FROM sectors WHERE id = ?")
-            .bind(chunk_id.to_string()).fetch_optional(self.sql_pool()).await?;
+            .bind(&param.chunk_id).fetch_optional(self.sql_pool()).await?;
 
         match row {
             // 如果记录不存在,或者已被删除,需要写入 chunk store
             None => {
-                let _ = sqlx::query("INSERT OR REPLACE INTO chunks (id, normal_id, length) VALUES (?, ?, ?)")
-                    .bind(chunk_id.to_string()).bind(chunk_id.as_normal().map(|id| id.to_string())).bind(chunk_id.length() as i64)
+                let _ = sqlx::query("INSERT OR REPLACE INTO chunks (id, length) VALUES (?, ?)")
+                    .bind(&param.chunk_id).bind(param.tail.map(|l| l as i64))
                     .execute(self.sql_pool()).await?;
                 let _ = self.inner.collect_chunks_waker.try_send(());
             }, 
-            Some(row) if row.written_at.is_none() => {
-               
-            },
-            // 如果已经写入,直接返回状态
-            _ => {
+            Some(row) if row.written_at.is_some() => {
+                 // 如果已经写入,直接返回状态
                 return Ok(ChunkStatus {
-                    chunk_id: chunk_id.clone(),
-                    written: chunk_id.length(),
+                    chunk_id: param.chunk_id.clone(),
+                    written: row.length.unwrap() as u64,
                 });
+            },
+            _ => {
+                
             }
         };
 
         // 写入成功后更新数据库
-        let chunk_status = self.inner.local_store.write(chunk_id, offset, reader, length).await?;
+        let chunk_status = self.inner.local_store.write(ChunkWrite {
+            chunk_id: param.chunk_id.clone(),
+            offset: param.offset,
+            reader: param.reader,
+            length: param.length,
+            tail: param.tail,
+            full_id: param.full_id.clone(),
+        }).await?;
         
-        if chunk_id.is_normal() {
-            if chunk_status.written == chunk_id.as_normal().unwrap().length() {
-                // 更新写入时间为当前时间
-            let _ = sqlx::query("UPDATE chunks SET written_at = CURRENT_TIMESTAMP WHERE id = ?")
-                .bind(chunk_id.to_string())
+        if let Some(chunk_length) = param.tail {
+            let _ = sqlx::query("UPDATE chunks SET length=?, full_id=?, written_at=CURRENT_TIMESTAMP WHERE id = ?")
+                .bind(chunk_length as i64).bind(param.full_id.as_ref()).bind(&param.chunk_id)
                 .execute(self.sql_pool())
                 .await?;
-            }
         }
 
         Ok(chunk_status)
     }
 
-    async fn get(&self, chunk_id: &ChunkId) -> ChunkResult<Option<ChunkStatus>> {
+    async fn get(&self, chunk_id: &str) -> ChunkResult<Option<ChunkStatus>> {
         let row = sqlx::query_as::<_, ChunkRow>("SELECT * FROM chunks WHERE id = ?")
-            .bind(chunk_id.to_string()).fetch_optional(self.sql_pool()).await?;
+            .bind(chunk_id).fetch_optional(self.sql_pool()).await?;
         todo!()
     }
 
-    async fn delete(&self, chunk_id: &ChunkId) -> ChunkResult<()> {
+    async fn delete(&self, chunk_id: &str) -> ChunkResult<()> {
         Ok(())
     }
 

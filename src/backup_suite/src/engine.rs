@@ -34,7 +34,8 @@ pub struct TransferCacheNode {
     pub chunk_id: String,
     pub offset: u64,
     pub is_last_piece: bool,
-    pub content: Vec<u8>,
+    pub content: Vec<u8>, 
+    pub full_id: Option<String>,
 }
 
 
@@ -284,7 +285,7 @@ impl BackupEngine {
                     let mut offset = 0;
                     let quickhash2 = quick_hash.clone();
                     let mut full_hash_context = FullHasher::new();
-                    loop {
+                    let full_id = loop {
                         let (content, is_last_piece) = if offset >= backup_item.size - HASH_CHUNK_SIZE {
                             let mut content_buffer = vec![0u8; (backup_item.size - offset) as usize];
                             item_reader.read_exact(&mut content_buffer).await?;
@@ -295,20 +296,33 @@ impl BackupEngine {
                             (content_buffer, false)
                         };
 
-                        tx_transfer_cache.send(TransferCacheNode{
-                            item_id: backup_item.item_id.clone(),
-                            chunk_id: quickhash2.clone(),
-                            offset,
-                            is_last_piece,
-                            content,
-                        }).await?;
+                        
 
                         if is_last_piece {
-                            break;
+                            let full_id = full_hash_context.finalize();
+                            tx_transfer_cache.send(TransferCacheNode{
+                                item_id: backup_item.item_id.clone(),
+                                chunk_id: quickhash2.clone(),
+                                offset,
+                                is_last_piece,
+                                content,
+                                full_id: Some(full_id.clone())
+                            }).await?;
+
+                            break full_id;
+                        } else {
+                            tx_transfer_cache.send(TransferCacheNode{
+                                item_id: backup_item.item_id.clone(),
+                                chunk_id: quickhash2.clone(),
+                                offset,
+                                is_last_piece,
+                                content,
+                                full_id: None
+                            }).await?;
                         }
-                    }
+                    };
                     backup_item.state = BackupItemState::LocalDone;
-                    backup_item.chunk_id = Some(full_hash_context.finalize());
+                    backup_item.chunk_id = Some(full_id);
                     info!("backup item {} full hash cacl done", backup_item.item_id);
                 }
             }
@@ -341,7 +355,8 @@ impl BackupEngine {
                             offset: 0, 
                             reader: Cursor::new(content), 
                             length: Some(content_length), 
-                            tail: Some(content_length)
+                            tail: Some(content_length), 
+                            full_id: None
                         }
                     }).collect()).await?;
                     //发送成功，需要将这些backup item的状设置为done
@@ -360,7 +375,8 @@ impl BackupEngine {
                         offset: cache_node.offset, 
                         reader: Cursor::new(cache_node.content), 
                         length: Some(content_length), 
-                        tail: None
+                        tail: None,
+                        full_id: cache_node.full_id
                     }).await?;
 
                     let mut real_backup_task = backup_task.lock().await;
@@ -396,7 +412,8 @@ impl BackupEngine {
                                 offset: 0, 
                                 reader: item_reader, 
                                 length: Some(item.size), 
-                                tail: Some(item.size)
+                                tail: Some(item.size), 
+                                full_id: None
                             }).await?;
                             item.state = BackupItemState::Done;
                             engine.task_db.update_backup_item(checkpoint_id.as_str(), &item)?;

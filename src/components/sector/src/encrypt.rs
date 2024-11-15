@@ -1,8 +1,9 @@
 use std::future::Future;
 use std::io::SeekFrom;
 use std::pin::Pin;
-use std::sync::{OnceLock, Mutex};
-use async_std::io::prelude::*;
+use std::cell::OnceCell;
+use std::sync::{Mutex};
+use tokio::io::{AsyncRead, AsyncSeek, ReadBuf, AsyncSeekExt};
 use std::task::{Context, Poll};
 use aes::Aes256;
 use cipher::{Block, BlockEncryptMut, BlockSizeUser};
@@ -16,7 +17,7 @@ struct EncMutPart {
     read_offset_in_buffer: Option<usize>, 
     write_offset_in_buffer: Option<usize>,
     encryptor: Option<cbc::Encryptor<Aes256>>, 
-    chunk_reader: Box<dyn Read + Send + Unpin>,
+    chunk_reader: Box<dyn AsyncRead + Send + Unpin>,
 }
 
 impl EncMutPart {
@@ -30,15 +31,15 @@ impl EncMutPart {
         self.encryptor = meta.encryptor_on_offset(self.offset).unwrap();
     }
 
-    fn check_read_buffer(&mut self, buf: &mut [u8]) -> usize {
+    fn check_read_buffer(&mut self, buf: &mut ReadBuf<'_>) -> usize {
         if let Some(offset_in_buffer) = self.read_offset_in_buffer.take() {
             let remain_len = self.buffer.len() - offset_in_buffer;
-            let read = if buf.len() < remain_len {
-                buf.len()
+            let read = if buf.remaining() < remain_len {
+                buf.remaining()
             } else {
                 remain_len
             };
-            buf[..read].copy_from_slice(&self.buffer[offset_in_buffer..offset_in_buffer + read]);
+            buf.put_slice(&self.buffer[offset_in_buffer..offset_in_buffer + read]);
             self.offset += read as u64;
             if read < remain_len {
                 self.read_offset_in_buffer = Some(offset_in_buffer + read);
@@ -51,8 +52,11 @@ impl EncMutPart {
 
     fn fill_buffer(&mut self, cx: &mut Context<'_>, mut offset_in_buffer: usize) -> Poll<std::io::Result<()>> {
         loop {
-            match Pin::new(&mut self.chunk_reader).poll_read(cx, &mut self.buffer[offset_in_buffer..]) {
-                Poll::Ready(Ok(n)) => {
+            let mut buf = ReadBuf::new(&mut self.buffer[offset_in_buffer..]);
+            let before = buf.filled().len();
+            match Pin::new(&mut self.chunk_reader).poll_read(cx, &mut buf) {
+                Poll::Ready(Ok(_)) => {
+                    let n = buf.filled().len() - before;
                     if offset_in_buffer + n == Aes256::block_size() {
                         self.write_offset_in_buffer = None;
                         if let Some(encryptor) = &mut self.encryptor {
@@ -79,7 +83,6 @@ impl EncMutPart {
 
 pub struct SectorEncryptor {
     meta: SectorMeta,
-    header_part: Vec<u8>,
     mut_part: Mutex<EncMutPart>,
 }
 
@@ -104,16 +107,15 @@ impl SectorEncryptor {
         };
 
         Ok(Self {
-            header_part: meta.header().encrypt_to_vec(),
             mut_part: Mutex::new(mut_part),
             meta,
         })
     }
 
-    async fn reader_of_chunks<T: ChunkTarget>(meta: &SectorMeta, chunk_target: &T, offset: u64) -> ChunkResult<Box<dyn Read + Unpin + Send>> {
+    async fn reader_of_chunks<T: ChunkTarget>(meta: &SectorMeta, chunk_target: &T, offset: u64) -> ChunkResult<Box<dyn AsyncRead + Unpin + Send>> {
         struct ChunkStub {
             end_offset_in_sector: u64,
-            chunk_reader: Box<dyn Read + Unpin + Send>
+            chunk_reader: Box<dyn AsyncRead + Unpin + Send>
         }
         
         struct ChunksReader {
@@ -124,33 +126,36 @@ impl SectorEncryptor {
             chunk_stubs: Vec<ChunkStub>,
         }
 
-        impl Read for ChunksReader {
+        impl AsyncRead for ChunksReader {
             fn poll_read(
                 self: Pin<&mut Self>,
                 cx: &mut Context<'_>,
-                buf: &mut [u8],
-            ) -> Poll<std::io::Result<usize>> {
+                buf: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
                 let reader = self.get_mut();
                 if reader.offset >= reader.pedding_length {
-                    return Poll::Ready(Ok(0));
+                    return Poll::Ready(Ok(()));
                 }
 
                 if reader.offset >= reader.source_length {
-                    let read = u64::min(reader.pedding_length - reader.offset, buf.len() as u64) as usize;
-                    buf[0..read].fill(0u8);
+                    let read = u64::min(reader.pedding_length - reader.offset, buf.remaining() as u64) as usize;
+                    let zero = vec![0u8; read];
+                    buf.put_slice(&zero);
                     reader.offset += read as u64;
-                    return Poll::Ready(Ok(read));
+                    return Poll::Ready(Ok(()));
                 }
 
                 let chunk_stub = &mut reader.chunk_stubs[reader.chunk_stub_index];
 
-                match Pin::new(chunk_stub.chunk_reader.as_mut()).poll_read(cx, &mut buf[..]) {
-                    Poll::Ready(Ok(n)) => {
+                let before = buf.filled().len() ;
+                match Pin::new(chunk_stub.chunk_reader.as_mut()).poll_read(cx, buf) {
+                    Poll::Ready(Ok(_)) => {
+                        let n = buf.filled().len() - before;
                         reader.offset += n as u64;
                         if reader.offset >= chunk_stub.end_offset_in_sector {
                             reader.chunk_stub_index += 1;
                         }
-                        return Poll::Ready(Ok(n));
+                        return Poll::Ready(Ok(()));
                     }
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
@@ -170,7 +175,7 @@ impl SectorEncryptor {
             }
             chunk_stubs.push(ChunkStub {
                 end_offset_in_sector: chunk_on_offset.range_in_sector.end,
-                chunk_reader: Box::new(chunk_reader) as Box<dyn Read + Unpin + Send>,
+                chunk_reader: Box::new(chunk_reader) as Box<dyn AsyncRead + Unpin + Send>,
             });
         }
         
@@ -185,7 +190,7 @@ impl SectorEncryptor {
                 end_offset_in_sector += range_in_chunk.end - range_in_chunk.start;
                 chunk_stubs.push(ChunkStub {
                     end_offset_in_sector,
-                    chunk_reader: Box::new(chunk_reader) as Box<dyn Read + Unpin + Send>,
+                    chunk_reader: Box::new(chunk_reader) as Box<dyn AsyncRead + Unpin + Send>,
                 });
             }
         }
@@ -198,72 +203,73 @@ impl SectorEncryptor {
         }))
     }
 
-    fn read(&mut self, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<std::io::Result<usize>> {
+    fn read(&mut self, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         let mut mut_part = self.mut_part.lock().unwrap();
         if let Some(result) = &mut_part.cached_result {
             match result {
-                Ok(n) => {
-                    return Poll::Ready(Ok(*n));
+                Ok(_) => {
+                    return Poll::Ready(Ok(()));
                 },
                 Err(e) => return Poll::Ready(Err(std::io::Error::new(e.kind(), e.to_string()))),
             }
         } else if mut_part.offset < self.meta.header_length() {
-            let read = if buf.len() < self.header_part.len() {
-                buf.len()
+            let read = if buf.remaining() < self.meta.header_length() as usize {
+                buf.remaining()
             } else {
-                self.header_part.len()
+                self.meta.header_length() as usize
             };
             let offset = mut_part.offset as usize + read;
-            buf[..read].copy_from_slice(&self.header_part[mut_part.offset as usize..offset]);
+            buf.put_slice(&self.meta.header_bytes()[mut_part.offset as usize..offset]);
             mut_part.offset = offset as u64;
-            return Poll::Ready(Ok(read));
+            return Poll::Ready(Ok(()));
         } else {
             let read = mut_part.check_read_buffer(buf);
             if read > 0 {
                 mut_part.check_block_offset(&self.meta);
-                return Poll::Ready(Ok(read));
+                return Poll::Ready(Ok(()));
             }
             if let Some(offset_in_buffer) = mut_part.write_offset_in_buffer.take() {
                 if mut_part.fill_buffer(cx, offset_in_buffer).is_ready() {
-                    let read = mut_part.check_read_buffer(buf);
+                    mut_part.check_read_buffer(buf);
                     mut_part.check_block_offset(&self.meta);
-                    return Poll::Ready(Ok(read));
+                    return Poll::Ready(Ok(()));
                 } else {
                     return Poll::Pending;
                 }
             }
             
-            let read = if buf.len() % Aes256::block_size() == 0 {
-                buf.len()
+            let read = if buf.remaining() % Aes256::block_size() == 0 {
+                buf.remaining()
             } else {
-                buf.len() / Aes256::block_size() * Aes256::block_size()
+                buf.remaining() / Aes256::block_size() * Aes256::block_size()
             };
             if read < Aes256::block_size() {
                 if mut_part.fill_buffer(cx, 0).is_ready() {
-                    let read = mut_part.check_read_buffer(buf);
+                    mut_part.check_read_buffer(buf);
                     mut_part.check_block_offset(&self.meta);
-                    return Poll::Ready(Ok(read));
+                    return Poll::Ready(Ok(()));
                 } else {
                     return Poll::Pending;
                 }      
             } else {
-                match Pin::new(&mut mut_part.chunk_reader).poll_read(cx, &mut buf[..read]) {
-                    Poll::Ready(Ok(n)) => {
+                let before = buf.filled().len();
+                match Pin::new(&mut mut_part.chunk_reader).poll_read(cx, buf) {
+                    Poll::Ready(Ok(_)) => {
+                        let n = buf.filled().len() - before;
                         for i in 0..n/Aes256::block_size() {
                             if let Some(encryptor) = &mut mut_part.encryptor {
-                                encryptor.encrypt_block_mut(Block::<Aes256>::from_mut_slice(&mut buf[i * Aes256::block_size()..(i + 1) * Aes256::block_size()]));
+                                encryptor.encrypt_block_mut(Block::<Aes256>::from_mut_slice(&mut buf.filled_mut()[before + i * Aes256::block_size()..before + (i + 1) * Aes256::block_size()]));
                             }
                             mut_part.offset += Aes256::block_size() as u64;
                             mut_part.check_block_offset(&self.meta);
                         }
 
-                        let read = n / Aes256::block_size() * Aes256::block_size();
                         let remain_length = n % Aes256::block_size();
                         if remain_length != 0 {
-                            mut_part.buffer.copy_from_slice(&buf[n - remain_length..n]);
+                            mut_part.buffer.copy_from_slice(&buf.filled()[before + n - remain_length..before + n]);
                             mut_part.write_offset_in_buffer = Some(remain_length);
                         } 
-                        return Poll::Ready(Ok(read));
+                        return Poll::Ready(Ok(()));
                     }
                     Poll::Ready(Err(e)) => {
                         mut_part.cached_result = Some(Err(std::io::Error::new(e.kind(), e.to_string())));
@@ -276,50 +282,56 @@ impl SectorEncryptor {
     }   
 }
 
-impl Read for SectorEncryptor {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<std::io::Result<usize>> {
+impl AsyncRead for SectorEncryptor {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
         let this = self.get_mut();
         this.read(cx, buf)
     }
 }
 
 
-
+struct SeekEncMutPart<T: 'static + Unpin + ChunkTarget> {
+    offset: OnceCell<u64>,
+    reader_params: OnceCell<(SectorMeta, T)>, 
+    cached_result: OnceCell<std::io::Result<usize>>,
+    create_future: Option<Pin<Box<dyn Future<Output = ChunkResult<SectorEncryptor>> + Send>>>,
+    reader: OnceCell<SectorEncryptor>,
+}
 
 pub struct SeekOnceSectorEncryptor<T: 'static + Unpin + ChunkTarget> {
-    offset: OnceLock<u64>,
-    reader_params: OnceLock<(SectorMeta, T)>, 
-    cached_result: OnceLock<std::io::Result<usize>>,
-    create_future: Mutex<Option<Pin<Box<dyn Future<Output = ChunkResult<SectorEncryptor>> + Send>>>>,
-    reader: OnceLock<SectorEncryptor>,
+    mut_part: Mutex<SeekEncMutPart<T>>,
 }
 
 impl<T: 'static + Unpin + ChunkTarget> SeekOnceSectorEncryptor<T> {
     pub fn new(meta: SectorMeta, chunk_target: T) -> Self {
-        SeekOnceSectorEncryptor {
-            offset: OnceLock::new(),
-            reader_params: OnceLock::from((meta, chunk_target)),
-            cached_result: OnceLock::new(),
-            create_future: Mutex::new(None),
-            reader: OnceLock::new(),
+        Self {
+            mut_part: Mutex::new(SeekEncMutPart {
+                offset: OnceCell::new(),
+                reader_params: OnceCell::from((meta, chunk_target)),
+                cached_result: OnceCell::new(),
+                create_future: None,
+                reader: OnceCell::new(),
+            }),
         }
     }
 }
 
-impl<T: 'static + Unpin + ChunkTarget> Read for SeekOnceSectorEncryptor<T> {
-    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut [u8]) -> Poll<std::io::Result<usize>> {
-        let mut_self = self.get_mut();
+impl<T: 'static + Unpin + ChunkTarget> AsyncRead for SeekOnceSectorEncryptor<T> {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        let mut mut_self = self.mut_part.lock().unwrap();
         if let Some(result) = mut_self.cached_result.get() {
             match result {
-                Ok(n) => return Poll::Ready(Ok(*n)),
+                Ok(_) => return Poll::Ready(Ok(())),
                 Err(e) => return Poll::Ready(Err(std::io::Error::new(e.kind(), e.to_string()))),
             }
         }
         if let Some(reader) = mut_self.reader.get_mut() {
+            let before = buf.filled().len();
             match Pin::new(reader).poll_read(cx, buf) {
-                Poll::Ready(Ok(n)) => {
+                Poll::Ready(Ok(_)) => {
+                    let n = buf.filled().len() - before;
                     *mut_self.offset.get_mut().unwrap() += n as u64;  
-                    return Poll::Ready(Ok(n));
+                    return Poll::Ready(Ok(()));
                 }
                 Poll::Ready(Err(e)) => {
                     return Poll::Ready(Err(e));
@@ -335,7 +347,7 @@ impl<T: 'static + Unpin + ChunkTarget> Read for SeekOnceSectorEncryptor<T> {
         };
         
         let (meta, chunk_target) = mut_self.reader_params.take().unwrap();
-        let mut future = if let Some(future) = mut_self.create_future.lock().unwrap().take() {
+        let mut future = if let Some(future) = mut_self.create_future.take() {
             future
         } else {
             Box::pin(SectorEncryptor::new(meta, chunk_target, offset))
@@ -343,10 +355,12 @@ impl<T: 'static + Unpin + ChunkTarget> Read for SeekOnceSectorEncryptor<T> {
         match future.as_mut().poll(cx) {
             Poll::Ready(Ok(reader)) => {
                 let _ = mut_self.reader.set(reader);
+                let before = buf.filled().len();
                 match Pin::new(mut_self.reader.get_mut().unwrap()).poll_read(cx, buf) {
-                    Poll::Ready(Ok(n)) => {
+                    Poll::Ready(Ok(_)) => {
+                        let n = buf.filled().len() - before;
                         *mut_self.offset.get_mut().unwrap() += n as u64;  
-                        return Poll::Ready(Ok(n));
+                        return Poll::Ready(Ok(()));
                     }
                     Poll::Ready(Err(e)) => {
                         return Poll::Ready(Err(e));
@@ -355,7 +369,7 @@ impl<T: 'static + Unpin + ChunkTarget> Read for SeekOnceSectorEncryptor<T> {
                 }
             }
             Poll::Pending => {
-                *mut_self.create_future.lock().unwrap() = Some(future);
+                mut_self.create_future = Some(future);
                 return Poll::Pending;
             }
             Poll::Ready(Err(e)) => {
@@ -367,15 +381,16 @@ impl<T: 'static + Unpin + ChunkTarget> Read for SeekOnceSectorEncryptor<T> {
     }
 }
 
-impl<T: 'static + Unpin + ChunkTarget> Seek for SeekOnceSectorEncryptor<T> {
-    fn poll_seek(self: Pin<&mut Self>, _: &mut Context<'_>, pos: SeekFrom) -> Poll<std::io::Result<u64>> {
+impl<T: 'static + Unpin + ChunkTarget> AsyncSeek for SeekOnceSectorEncryptor<T> {
+    fn start_seek(self: Pin<&mut Self>, pos: SeekFrom) -> std::io::Result<()> {
+        let mut_part = self.mut_part.lock().unwrap();
         let new_offset = match pos {
             SeekFrom::Start(offset) => offset,
             SeekFrom::End(_) => {
-                return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Seeking from end is not supported")));
+                return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Seeking from end is not supported"));
             }
             SeekFrom::Current(offset) => {
-                let pre = self.offset.get().map_or(0, |v| *v);
+                let pre = mut_part.offset.get().map_or(0, |v| *v);
                 if offset > 0 {
                     pre + offset as u64
                 } else {
@@ -383,17 +398,27 @@ impl<T: 'static + Unpin + ChunkTarget> Seek for SeekOnceSectorEncryptor<T> {
                 }
             }
         };
-        if let Some(offset) = self.offset.get() {
+        if let Some(offset) = mut_part.offset.get() {
             if *offset == new_offset {
-                return Poll::Ready(Ok(*offset));
+                return Ok(());
             } else {
-                return Poll::Ready(Err(std::io::Error::new(
+                return Err(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "Seeking more than once is not supported"
-                )));
+                ));
             }
         }
-        self.offset.set(new_offset).unwrap();
-        return Poll::Ready(Ok(new_offset));
+        mut_part.offset.set(new_offset);
+        return Ok(());
+    }
+
+    fn poll_complete(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
+        let mut_part = self.mut_part.lock().unwrap();
+        if let Some(offset) = mut_part.offset.get() {
+            Poll::Ready(Ok(*offset))
+        } else {
+            Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, "offset not set")))
+        }
+        
     }
 }

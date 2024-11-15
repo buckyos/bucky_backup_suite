@@ -18,8 +18,9 @@ pub struct ChunkWrite<T: AsyncRead + Unpin + Send + Sync + 'static> {
     pub chunk_id: String,
     pub offset: u64,
     pub reader: T,
-    pub length: Option<u64>,
-    pub tail: Option<u64>,
+    pub length: Option<u64>, /* length of the reader*/ 
+    pub tail: Option<u64>, /* length of the chunk */
+    pub full_id: Option<String> /* full id of the chunk */
 }
 
 impl<T: AsyncRead + Unpin + Send + Sync + 'static> fmt::Display for ChunkWrite<T> {
@@ -42,11 +43,8 @@ pub trait ChunkTarget: Clone + Send + Sync {
 
     /// 将数据写入目标存储
     async fn write<T: AsyncRead + Unpin + Send + Sync + 'static>(&self, param: ChunkWrite<T>) -> ChunkResult<ChunkStatus>;
-   
-    /// 将一个chunk链接到另一个chunk
-    async fn finish(&self, chunk_id: &str, target_chunk_id: &str) -> ChunkResult<()>;
 
-    type ChunkRead: AsyncRead + AsyncSeek + Unpin + Send + Sync;
+    type ChunkRead: AsyncRead + AsyncSeek + Unpin + Send + Sync + 'static;
     /// 从目标存储读取数据
     async fn read(&self, chunk_id: &str) -> ChunkResult<Option<Self::ChunkRead>>;
 
