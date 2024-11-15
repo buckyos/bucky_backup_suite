@@ -70,8 +70,7 @@ impl BackupEngine {
 
     pub async fn start(&self) -> Result<()> {
         //start self http server for control panel
-        
-        unimplemented!()
+        Ok(())
     }
 
     pub async fn stop(&self) {
@@ -80,8 +79,15 @@ impl BackupEngine {
         unimplemented!()
     }
     
-    fn is_plan_have_running_backup_task(&self, plan_id: &str) -> bool {
-        unimplemented!()
+    async fn is_plan_have_running_backup_task(&self, plan_id: &str) -> bool {
+        let all_tasks = self.all_tasks.lock().await;
+        for (task_id, task) in all_tasks.iter() {
+            let real_task = task.lock().await;
+            if real_task.owner_plan_id == plan_id && real_task.state == TaskState::Running {
+                return true;
+            }
+        }
+        false
     }
 
     //return planid
@@ -108,7 +114,7 @@ impl BackupEngine {
 
     //create a backup task will create a new checkpoint
     pub async fn create_backup_task(&self, plan_id: &str,parent_checkpoint_id: Option<&str>) -> Result<String> {
-        if self.is_plan_have_running_backup_task(plan_id) {
+        if self.is_plan_have_running_backup_task(plan_id).await {
             return Err(anyhow::anyhow!("plan {} already has a running backup task", plan_id));
         }
 
@@ -485,7 +491,13 @@ impl BackupEngine {
     }
 
     pub async fn get_task_info(&self, taskid: &str) -> Result<WorkTask> {
-        unimplemented!()
+        let all_tasks = self.all_tasks.lock().await;
+        let backup_task = all_tasks.get(taskid);
+        if backup_task.is_none() {
+            return Err(anyhow::anyhow!("task not found"));
+        }
+        let backup_task = backup_task.unwrap().lock().await.clone();
+        Ok(backup_task)
     }
 
     pub async fn resume_backup_task(&self, taskid: &str) -> Result<()> {
@@ -590,9 +602,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_c2c_backup_task() {
+        buckyos_kit::init_logging("bucky_backup_test");
+        let tempdb = "bucky_backup.db";
+        //delete db file if exists
+        if std::path::Path::new(tempdb).exists() {
+            std::fs::remove_file(tempdb).unwrap();
+        }
+
         let engine = BackupEngine::new();
         engine.start().await.unwrap();
-        let new_plan = BackupPlanConfig::chunk2chunk("file:///d/temp/test", "file:///d/temp/bucky_backup_result", "testc2c", "testc2c desc");
+        let new_plan = BackupPlanConfig::chunk2chunk("file:///mnt/d/temp/test", "file:///mnt/d/temp/bucky_backup_result", "testc2c", "testc2c desc");
         let plan_id = engine.create_backup_plan(new_plan).await.unwrap();
         let task_id = engine.create_backup_task(&plan_id, None).await.unwrap();
         engine.resume_backup_task(&task_id).await.unwrap();
