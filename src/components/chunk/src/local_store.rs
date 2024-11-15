@@ -3,11 +3,11 @@ use std::{
     fmt::{self, Display}, path::Path, sync::Arc 
 };
 use async_trait::async_trait;
-use async_std::{
-    fs::File, 
-    io::prelude::*, 
-    stream::StreamExt
+use tokio::{
+    fs::{self, File}, 
+    io::{self, AsyncRead, AsyncSeek, AsyncSeekExt}, 
 };
+use futures::Stream;
 use crate::{
     error::*, 
     chunk::*,
@@ -29,7 +29,7 @@ impl LocalStore {
     pub async fn init(&self) -> ChunkResult<()> {
         let path = Path::new(self.base_path());
         if !path.exists() {
-            async_std::fs::create_dir_all(path).await?;
+            fs::create_dir_all(path).await?;
         }
         Ok(())
     }
@@ -45,12 +45,13 @@ impl Display for LocalStore {
     }
 }
 
+impl ChunkRead for File {}
+
 #[async_trait]
 impl ChunkTarget for LocalStore {
-    type Read = File;
-
-    async fn write<T: ChunkId>(&self, chunk_id: &T, offset: u64, reader: impl Read + Unpin + Send + Sync + 'static, _length: Option<u64>) -> ChunkResult<ChunkStatus<T>> {
+    async fn write<T: ChunkId>(&self, chunk_id: &T, offset: u64, reader: impl AsyncRead + Unpin + Send + Sync + 'static, _length: Option<u64>) -> ChunkResult<ChunkStatus<T>> {
         info!("write to local store: {}, chunk_id: {}, offset: {}, length: {}", self, chunk_id, offset, _length.unwrap_or(0));
+        let mut reader = reader;
         let path = Path::new(self.base_path()).join(chunk_id.to_string());
         let mut file = File::create(path).await
             .map_err(|e| {
@@ -62,7 +63,7 @@ impl ChunkTarget for LocalStore {
                 error!("seek file error: {}", e);
                 ChunkError::Io(e)
             })?;
-        let written = async_std::io::copy(reader, &mut file).await
+        let written = io::copy(&mut reader, &mut file).await
             .map_err(|e| {
                 error!("copy file error: {}", e);
                 ChunkError::Io(e)
@@ -84,17 +85,19 @@ impl ChunkTarget for LocalStore {
     async fn link(&self, chunk_id: &impl ChunkId, target_chunk_id: &impl ChunkId) -> ChunkResult<()> {
         let source_path = Path::new(self.base_path()).join(chunk_id.to_string());
         let target_path = Path::new(self.base_path()).join(target_chunk_id.to_string());
-        #[cfg(not(windows))]
+        info!("link chunk {} to {}", chunk_id, target_chunk_id);
+
+        #[cfg(unix)] 
         {
-            async_std::os::unix::fs::symlink(source_path, target_path).await
-                .map_err(|e| {
-                    error!("create symlink error: {}", e);
-                    ChunkError::Io(e)
-                })?;
-        }
-        #[cfg(windows)] 
+            fs::symlink(target_path, source_path).await
+            .map_err(|e| {
+                error!("create symlink error: {}", e);
+                ChunkError::Io(e)
+            })?;
+        } 
+        #[cfg(windows)]
         {
-            async_std::os::windows::fs::symlink_file(source_path, target_path).await
+            std::os::windows::fs::symlink_file(target_path, source_path)
                 .map_err(|e| {
                     error!("create symlink error: {}", e);
                     ChunkError::Io(e)
@@ -103,11 +106,11 @@ impl ChunkTarget for LocalStore {
         Ok(())
     }
 
-    async fn read(&self, chunk_id: &impl ChunkId) -> ChunkResult<Option<Self::Read>> {
+    async fn read(&self, chunk_id: &impl ChunkId) -> ChunkResult<Option<Box<dyn ChunkRead>>> {
         let path = Path::new(self.base_path()).join(chunk_id.to_string());
         if path.exists() {
             let file = File::open(path).await?;
-            Ok(Some(file))
+            Ok(Some(Box::new(file)))
         } else {
             Ok(None)
         }
@@ -129,15 +132,14 @@ impl ChunkTarget for LocalStore {
 
     async fn delete(&self, chunk_id: &impl ChunkId) -> ChunkResult<()> {
         let path = Path::new(self.base_path()).join(chunk_id.to_string());
-        async_std::fs::remove_file(path).await?;
+        fs::remove_file(path).await?;
         Ok(())
     }
 
     async fn list(&self) -> ChunkResult<Vec<ChunkStatus<String>>> {
         let mut chunks = Vec::new();
-        let mut entries = async_std::fs::read_dir(self.base_path()).await?;
-        while let Some(entry) = entries.next().await {
-            let entry = entry?;
+        let mut entries = fs::read_dir(self.base_path()).await?;
+        while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if let Some(file_name) = path.file_name() {
                 let chunk_id = file_name.to_str().unwrap().to_owned();

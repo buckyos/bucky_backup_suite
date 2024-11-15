@@ -17,26 +17,26 @@ pub struct S3Target(Arc<TargetImpl>);
 
 #[async_trait]
 impl ChunkTarget for S3Target {
-    async fn write(&self, chunk_id: &CommonChunkId, offset: u64, reader: impl Read + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
+    async fn write(&self, chunk_id: &ChunkId, offset: u64, reader: impl Read + Unpin + Send + Sync + 'static, length: Option<u64>) -> ChunkResult<ChunkStatus> {
         todo!()
     }
 
 
     type Read = async_std::io::BufReader<async_std::io::Cursor<Vec<u8>>>;
-    async fn read(&self, chunk_id: &CommonChunkId) -> ChunkResult<Option<Self::Read>> {
+    async fn read(&self, chunk_id: &ChunkId) -> ChunkResult<Option<Self::Read>> {
         todo!()
     }
 
     
-    async fn link(&self, chunk_id: &CommonChunkId, target_chunk_id: &NormalChunkId) -> ChunkResult<()> {
+    async fn link(&self, chunk_id: &ChunkId, target_chunk_id: &NormalChunkId) -> ChunkResult<()> {
         todo!()
     }
 
-    async fn get(&self, chunk_id: &CommonChunkId) -> ChunkResult<Option<ChunkStatus>> {
+    async fn get(&self, chunk_id: &ChunkId) -> ChunkResult<Option<ChunkStatus>> {
         todo!()
     }
 
-    async fn delete(&self, chunk_id: &CommonChunkId) -> ChunkResult<()> {
+    async fn delete(&self, chunk_id: &ChunkId) -> ChunkResult<()> {
         todo!()
     }
 

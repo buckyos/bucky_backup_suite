@@ -12,7 +12,7 @@ mysql = ["sqlx/mysql"]
 
 [dependencies]
 log = "*"
-sqlx = { version = "0.6", features = ["runtime-async-std-rustls", "macros", "chrono" ] }
+sqlx = { version = "0.6", features = ["runtime-tokio-rustls", "macros", "chrono" ] }
 async-trait = "0.1.53"
 async-std = "*"
 futures = { version = '0.3', features = ['default', 'thread-pool'] }

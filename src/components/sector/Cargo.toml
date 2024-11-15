@@ -14,7 +14,7 @@ aes = "0.8.4"
 generic-array = "0.14" 
 cbc = "0.1"
 cipher = "0.4"
-sqlx = { version = '0.6', features = ["runtime-async-std-rustls", "chrono", "sqlite"] }
+sqlx = { version = '0.6', features = ["runtime-tokio-rustls", "chrono", "sqlite"] }
 chunk = { path = "../chunk" }
 
 [dev-dependencies]

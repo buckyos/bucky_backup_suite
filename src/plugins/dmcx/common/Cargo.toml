@@ -32,6 +32,6 @@ futures = "0.3.21"
 chrono = "0.4.19"
 async-trait = "0.1.53"
 async-recursion = "1.0.0"
-sqlx = { version = '0.6', features = ["runtime-async-std-rustls", "mysql", "sqlite"] }
+sqlx = { version = '0.6', features = ["runtime-tokio-rustls", "mysql", "sqlite"] }
 rs_merkle = "1.3"
 flexi_logger = "*"
