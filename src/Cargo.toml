@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     #"./components/gateway-lib",
     "./components/dir-source",
+    "./components/backup-lib",
     "./components/chunk",
     "./components/sector",
     "./backup_suite",
