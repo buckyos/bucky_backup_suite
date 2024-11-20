@@ -82,7 +82,7 @@ impl FromSql for BackupItemType {
 #[derive(Debug,Clone)]
 pub struct BackupItem {
     pub item_id: String,//对source来说，可以用item_id来唯一的标示一个待备份的item,一般是文件的相对路径
-    pub item_type:BackupItemType,//文件，目录
+    pub item_type:BackupItemType,//文件，目录, Piece?
     pub chunk_id:Option<String>,
     pub quick_hash:Option<String>,
     pub state:BackupItemState,
@@ -102,11 +102,13 @@ pub trait IBackupChunkSourceProvider {
     async fn lock_for_backup(&self,source_url: &str)->Result<()>;
     async fn unlock_for_backup(&self,source_url: &str)->Result<()>;
     async fn open_item(&self, item_id: &str)->Result<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>>;
+    async fn get_item_data(&self, item_id: &str)->Result<Vec<u8>>;
     //async fn close_item(&self, item_id: &str)->Result<()>;
     async fn on_item_backuped(&self, item_id: &str)->Result<()>;
 
     fn is_local(&self)->bool;
-    async fn prepare_items(&self)->Result<Vec<BackupItem>>;
+    //返回值的bool表示是否完成
+    async fn prepare_items(&self)->Result<(Vec<BackupItem>,bool)>;
 
     //async fn prepare_chunk(&self)->Result<String>;
     //async fn get_support_chunkid_types(&self)->Result<Vec<String>>;
@@ -135,7 +137,7 @@ pub trait IBackupChunkTargetProvider {
     async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>)->Result<()>;
     //上传一个完整的chunk,允许target自己决定怎么使用reader
     async fn put_chunk(&self, chunk_id: &ChunkId, chunk_data: &[u8])->Result<()>;
-    async fn append_chunk_data(&self, chunk_id: &ChunkId, chunk_data: &[u8], is_completed: bool)->Result<()>;
+    async fn append_chunk_data(&self, chunk_id: &ChunkId, offset_from_begin:u64,chunk_data: &[u8], is_completed: bool,chunk_size:Option<u64>)->Result<()>;
     //使用reader上传，允许target自己决定怎么使用reader
     async fn put_by_reader(&self, chunk_id: &ChunkId, chunk_reader: Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>)->Result<()>;
     //通过上传chunk diff文件来创建新chunk

@@ -29,6 +29,7 @@ pub struct LocalDirChunkProvider {
 
 impl LocalDirChunkProvider {
     pub async fn new(dir_path: String)->Result<Self>{
+        info!("new local dir chunk provider, dir_path: {}", dir_path);
         Ok(LocalDirChunkProvider {
             dir_path
         })
@@ -67,6 +68,14 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         })?;      
         Ok(Box::pin(file))
     }
+
+    async fn get_item_data(&self, item_id: &str)->Result<Vec<u8>> {
+        let file_path = Path::new(&self.dir_path).join(item_id);
+        let mut file = File::open(&file_path).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        Ok(buffer)
+    }
     //async fn close_item(&self, item_id: &str)->Result<()>;
     async fn on_item_backuped(&self, item_id: &str)->Result<()> {
         Ok(())
@@ -76,21 +85,26 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         true
     }
 
-    async fn prepare_items(&self)->Result<Vec<BackupItem>> {
+    async fn prepare_items(&self)->Result<(Vec<BackupItem>,bool)> {
         //遍历dir_path目录下的所有文件，生成BackupItem列表
 
         let mut backup_items = Vec::new();
 
         // Read the directory
         let mut entries = fs::read_dir(&self.dir_path).await?;
-
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        //info!("prepare items, dir_path: {}", self.dir_path);
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
-
+            //info!("prepare item: {:?}", path);
             // Check if the entry is a file
             if path.is_file() {
                 // Create a BackupItem for each file
                 let metadata = fs::metadata(&path).await?;
+                info!("prepare item: {:?}, size: {}", path, metadata.len());
                 let backup_item = BackupItem {
                     item_id: path.file_name().unwrap().to_string_lossy().to_string(),
                     item_type:BackupItemType::Chunk,
@@ -99,13 +113,14 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
                     state: BackupItemState::New,
                     size: metadata.len(),
                     last_modify_time: metadata.modified()?.elapsed()?.as_secs(),
-                    create_time: metadata.created()?.elapsed()?.as_secs(),
+                    create_time: now,
                 };
                 backup_items.push(backup_item);
             }
+           
         }
 
-        Ok(backup_items)
+        Ok((backup_items,true))
     }
 }
 
@@ -117,7 +132,7 @@ pub struct LocalChunkTargetProvider {
 impl LocalChunkTargetProvider {
     pub async fn new(dir_path: String)->Result<Self>{
         let chunk_store = ChunkStore::new(dir_path.clone()).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-        
+        info!("new local chunk target provider, dir_path: {}", dir_path);
         Ok(LocalChunkTargetProvider { 
             dir_path,
             chunk_store 
@@ -161,8 +176,8 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
     async fn put_chunk(&self, chunk_id: &ChunkId, chunk_data: &[u8])->Result<()> {
         self.chunk_store.put_chunk(chunk_id,chunk_data,false).await.map_err(|e| anyhow::anyhow!("{}",e))
     }
-    async fn append_chunk_data(&self, chunk_id: &ChunkId, chunk_data: &[u8], is_completed: bool)->Result<()> {
-        self.chunk_store.append_chunk_data(chunk_id,chunk_data,is_completed).await.map_err(|e| anyhow::anyhow!("{}",e))
+    async fn append_chunk_data(&self, chunk_id: &ChunkId, offset_from_begin:u64,chunk_data: &[u8], is_completed: bool,chunk_size:Option<u64>)->Result<()> {
+        self.chunk_store.append_chunk_data(chunk_id,offset_from_begin,chunk_data,is_completed,chunk_size).await.map_err(|e| anyhow::anyhow!("{}",e))
     }
     //使用reader上传，允许target自己决定怎么使用reader
     async fn put_by_reader(&self, chunk_id: &ChunkId, chunk_reader: Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>)->Result<()> {

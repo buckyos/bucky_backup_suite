@@ -5,6 +5,7 @@ use uuid::Uuid;
 use rusqlite::{Connection, params, Result as SqlResult};
 use rusqlite::types::{ToSql, FromSql, ValueRef};
 use buckyos_backup_lib::*;
+use log::*;
 
 
 // impl From<ChunkItem> for BackupItem {
@@ -524,21 +525,22 @@ impl BackupTaskDb {
         let mut conn = Connection::open(&self.db_path)?;
         let tx = conn.transaction()?;
 
-        tx.execute(
-            "CREATE TABLE IF NOT EXISTS backup_items (
-                item_id TEXT NOT NULL,
-                checkpoint_id TEXT NOT NULL,
-                item_type TEXT NOT NULL,
-                chunk_id TEXT,
-                quick_hash TEXT,
-                state TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                last_modify_time INTEGER NOT NULL,
-                create_time INTEGER NOT NULL,
-                PRIMARY KEY (item_id, checkpoint_id)
-            )",
-            [],
-        )?;
+        // optimize: per checkpoint per table?
+        // tx.execute(
+        //     "CREATE TABLE IF NOT EXISTS {}_backup_items (
+        //         item_id TEXT NOT NULL,
+        //         checkpoint_id TEXT NOT NULL,
+        //         item_type TEXT NOT NULL,
+        //         chunk_id TEXT,
+        //         quick_hash TEXT,
+        //         state TEXT NOT NULL,
+        //         size INTEGER NOT NULL,
+        //         last_modify_time INTEGER NOT NULL,
+        //         create_time INTEGER NOT NULL,
+        //         PRIMARY KEY (item_id, checkpoint_id)
+        //     )",
+        //     [],
+        // )?;
 
         for item in item_list {
             tx.execute(
@@ -568,6 +570,7 @@ impl BackupTaskDb {
         }
 
         tx.commit()?;
+        info!("taskdb.save_item_list_to_checkpoint: {} {} items", checkpoint_id, item_list.len());
         Ok(())
     }
 
@@ -654,6 +657,35 @@ impl BackupTaskDb {
         Ok(items)
     }
 
+    pub fn load_wait_cacl_backup_items(&self, checkpoint_id: &str) -> Result<Vec<BackupItem>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT item_id, item_type, chunk_id, quick_hash, size, 
+                    last_modify_time, create_time 
+             FROM backup_items 
+             WHERE checkpoint_id = ? AND state = ?"
+        )?;
+
+        let items = stmt.query_map(
+            params![checkpoint_id, BackupItemState::New],
+            |row| {
+                Ok(BackupItem {
+                    item_id: row.get(0)?,
+                    item_type: row.get(1)?,
+                    chunk_id: row.get(2)?,
+                    quick_hash: row.get(3)?,
+                    state: row.get(4)?, 
+                    size: row.get(5)?,
+                    last_modify_time: row.get(6)?,
+                    create_time: row.get(7)?,
+                })
+            }
+        )?
+        .collect::<SqlResult<Vec<BackupItem>>>()?;
+
+        Ok(items)
+    }
+
     pub fn load_wait_transfer_backup_items(&self, checkpoint_id: &str) -> Result<Vec<BackupItem>> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
@@ -687,6 +719,7 @@ impl BackupTaskDb {
     }
 
     pub fn update_backup_item(&self, checkpoint_id: &str, item: &BackupItem) -> Result<()> {
+        info!("taskdb.update_backup_item: {} {} {:?}", checkpoint_id, item.item_id, item.state);
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE backup_items SET 
@@ -714,10 +747,12 @@ impl BackupTaskDb {
         if rows_affected == 0 {
             return Err(BackupTaskError::TaskNotFound);
         }
+
         Ok(())
     }
 
     pub fn update_backup_item_state(&self, checkpoint_id: &str, item_id: &str, state: BackupItemState) -> Result<()> {
+        info!("taskdb.update_backup_item_state: {} {} {:?}", checkpoint_id, item_id, state);
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE backup_items SET state = ?1 
@@ -732,6 +767,7 @@ impl BackupTaskDb {
         if rows_affected == 0 {
             return Err(BackupTaskError::TaskNotFound);
         }
+
         Ok(())
     }
 
