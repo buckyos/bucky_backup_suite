@@ -1,4 +1,5 @@
 #![allow(unused)]
+use buckyos_kit::get_buckyos_system_bin_dir;
 use ::kRPC::*;
 use async_trait::async_trait;
 use cyfs_gateway_lib::*;
@@ -32,7 +33,8 @@ pub async fn start_web_control_service() {
     register_inner_service_builder("backup_control", move || {  
         Box::new(web_control_server.clone())
     }).await;
-    let web_control_dir = format!("./web_control");
+    let web_root_dir = get_buckyos_system_bin_dir().join("backup_suite").join("webui");
+    
     let web_control_server_config = json!({
       "tls_port":5143,
       "http_port":5180,
@@ -41,7 +43,7 @@ pub async fn start_web_control_service() {
           "enable_cors":true,
           "routes": {
             "/": {
-              "local_dir": web_control_dir
+              "local_dir": web_root_dir.to_str().unwrap()
             },
             "/kapi/backup_control" : {
                 "inner_service":"backup_control"

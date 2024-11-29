@@ -1,0 +1,1 @@
+和buckyos兼容的bin目录
