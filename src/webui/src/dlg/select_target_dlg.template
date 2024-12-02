@@ -1,0 +1,39 @@
+<style>
+  .config-backup-dialog {
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem; 
+  }
+
+  sl-select,
+  sl-button {
+    width: 100%;
+    margin: 0.5rem 0;
+  }
+
+
+</style>
+
+<div class="config-backup-dialog">
+  <sl-dropdown>
+      <sl-button slot="trigger" caret>Folder at other disk</sl-button>
+      <sl-menu>
+          <sl-menu-item value="newbackup">Folder at other disk<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
+    </sl-menu>
+  </sl-dropdown>
+
+  <sl-input 
+    label="Input Will Backup Folder Path"
+    placeholder="Input full path of the folder you will backup to"
+    id="backup-target-path">
+  </sl-input>
+  <sl-checkbox checked disabled>Do not use incremental backups</sl-checkbox>
+
+  <h4>Privacy Configuration</h4>
+  <span>Encrypto Model: Auto</span>
+  <p>this backup target is sector target, you can't view file in backup online!</p>
+  <sl-button variant="primary" id="next-button">Next</sl-button>
+</div>
+
+

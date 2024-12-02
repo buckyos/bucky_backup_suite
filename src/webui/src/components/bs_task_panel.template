@@ -1,0 +1,48 @@
+<style>
+    .task-panel {
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 10px;
+      font-family: Arial, sans-serif;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .title {
+      font-size: 18px;
+      font-weight: bold;
+    }
+
+    .eta {
+      color: #666;
+    }
+
+
+
+    .status {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 8px;
+      color: #666; 
+    }
+  </style>
+
+<div class="task-panel">
+    <div class="header">
+      <div class="title">{{title}}</div>
+      <div class="eta">{{eta}}</div>
+    </div>
+    <sl-progress-bar indeterminate></sl-progress-bar>
+    <div class="status">
+      <div class="upload-status">Upload to DMCX Network...</div>
+      <div class="size-info">2.32 GB / 4GB</div>
+    </div>
+</div>
+
+

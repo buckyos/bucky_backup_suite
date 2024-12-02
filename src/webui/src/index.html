@@ -5,43 +5,45 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bucky Backup Suite</title>
     <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
-    <style>
-        body {
-            /* 使用纹理背景 */
-            background-image: url('bkg.png');
-            background-repeat: repeat;
-            margin: 0;
-            padding: 0;
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            
-        }
-
-        #active-wizzard {
-            /* 设置浮动面板样式 */
-            background: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-            max-width: 800px;
-            min-width: 520px;
-            width: 80%;
-            height: auto;
-            min-height: 800px;
-            padding: 24px;
-            margin-top: 20px; /* 离顶部的距离 */
-            box-sizing: border-box;
-        }
-    </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/themes/light.css" />
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/shoelace-autoloader.js"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/components/input/input.js"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/components/select/select.js"></script>
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/components/checkbox/checkbox.js"></script>
 </head>
 <body>
     <script src="./index.ts" type="module"></script>
-
     <div id="background">
-        <div>Bucky Backup Suite</div>
-        <div>Backup and Restore your data</div>
-
+        <div id="main_frame">
+            <div id="toolbar" style="display: flex; justify-content: space-between; align-items: center;padding: 10px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <sl-dropdown>
+                        <sl-button slot="trigger" variant="primary">New Backup</sl-button>
+                        <sl-menu>
+                            <sl-menu-item value="newbackup">New Backup<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
+                        </sl-menu>
+                    </sl-dropdown>
+                    <sl-button-group label="Control">
+                        <sl-icon-button style="font-size: 1.5rem;" name="play"></sl-icon-button>
+                        <sl-icon-button style="font-size: 1.5rem;" name="pause"></sl-icon-button>
+                        <sl-icon-button style="font-size: 1.5rem;" name="gear"></sl-icon-button>
+                    </sl-button-group>
+                </div>
+                <sl-dropdown>
+                    <sl-button slot="trigger" caret>Home</sl-button>
+                    <sl-menu>
+                        <sl-menu-item value="home">Home<sl-icon slot="prefix" name="house"></sl-icon></sl-menu-item>
+                        <sl-menu-item value="alltasks">All Tasks<sl-icon slot="prefix" name="list"></sl-icon></sl-menu-item>
+                        <sl-menu-item value="running">Running Tasks<sl-icon slot="prefix" name="box-arrow-right"></sl-icon></sl-menu-item>
+                        <sl-menu-item value="success">Success Tasks<sl-icon slot="prefix" name="check2-all"></sl-icon></sl-menu-item>
+                        <sl-menu-item value="failed">Failed Tasks<sl-icon slot="prefix" name="x-circle"></sl-icon></sl-menu-item>
+                    </sl-menu>
+                </sl-dropdown>
+            </div>
+            
+            <bs-tasklist id="tasklist"></bs-tasklist>
+            <panel-list id="panel-list" title="My Backup Plans"></panel-list>
+        </div>
     </div>    
    
 </body>

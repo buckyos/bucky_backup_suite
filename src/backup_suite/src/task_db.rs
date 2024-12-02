@@ -2,6 +2,7 @@
 use ndn_lib::ChunkId;
 use thiserror::Error;
 use uuid::Uuid;
+use serde_json::{Value, json};
 use rusqlite::{Connection, params, Result as SqlResult};
 use rusqlite::types::{ToSql, FromSql, ValueRef};
 use buckyos_backup_lib::*;
@@ -140,6 +141,18 @@ pub struct BackupPlanConfig {
 }
 
 impl BackupPlanConfig {
+    pub fn to_json_value(&self) -> Value {
+        let result = json!({
+            "source": self.source.get_source_url(),
+            "target": self.target.get_target_url(),
+            "title": self.title,
+            "description": self.description,
+            "type_str": self.type_str,
+            "last_checkpoint_index": self.last_checkpoint_index,
+        });
+        result
+    }
+
     pub fn chunk2chunk(source:&str,target_url: &str, title: &str, description: &str) -> Self {
         let source = BackupSource::ChunkList(source.to_string());
         let target = BackupTarget::ChunkList(target_url.to_string());
@@ -177,6 +190,18 @@ pub enum TaskState {
     Failed,
 }
 
+impl TaskState {
+    pub fn to_string(&self) -> &str {
+        match self {
+            TaskState::Running => "RUNNING",
+            TaskState::Pending => "PENDING",
+            TaskState::Paused => "PAUSED",
+            TaskState::Done => "DONE",
+            TaskState::Failed => "FAILED",
+        }
+    }
+}
+
 impl ToSql for TaskState {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         let s = match self {
@@ -207,6 +232,15 @@ impl FromSql for TaskState {
 pub enum TaskType {
     Backup,
     Restore,
+}
+
+impl TaskType {
+    pub fn to_string(&self) -> &str {
+        match self {
+            TaskType::Backup => "BACKUP",
+            TaskType::Restore => "RESTORE",
+        }
+    }
 }
 
 impl ToSql for TaskType {
@@ -262,6 +296,24 @@ impl WorkTask {
             completed_item_count: 0,
             wait_transfer_item_count: 0,
         }
+    }
+
+    pub fn to_json_value(&self) -> Value {
+        let result = json!({
+            "taskid": self.taskid,
+            "task_type": self.task_type.to_string(),
+            "owner_plan_id": self.owner_plan_id,
+            "checkpoint_id": self.checkpoint_id,
+            "total_size": self.total_size,
+            "completed_size": self.completed_size,
+            "state": self.state.to_string(),
+            "create_time": self.create_time,
+            "update_time": self.update_time,
+            "item_count": self.item_count,
+            "completed_item_count": self.completed_item_count,
+            "wait_transfer_item_count": self.wait_transfer_item_count,
+        });
+        result
     }
 }
 
@@ -430,6 +482,7 @@ impl BackupTaskDb {
         }
         Ok(())
     }
+
 
     pub fn load_last_checkpoint(&self, taskid: &str, count:Option<u32>) -> Result<BackupCheckPoint> {
         let conn = Connection::open(&self.db_path)?;

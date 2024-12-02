@@ -23,7 +23,10 @@
   },
   "dependencies": {
     "@material/web": "^2.2.0",
+    "@shoelace-style/shoelace": "^2.18.0",
+    "buckyos":"https://github.com/buckyos/buckyos-websdk.git",
     "handlebars": "^4.7.8",
+    "lit": "^3.2.1",
     "lit-element": "^4.1.0",
     "path": "^0.12.7",
     "terser": "^5.34.1",

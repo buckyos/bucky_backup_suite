@@ -19,6 +19,8 @@ use dyn_clone::DynClone;
 use ndn_lib::*;
 use buckyos_backup_lib::*;
 use tokio::time::{timeout, Duration};
+use lazy_static::lazy_static;
+
 use std::result::Result as StdResult;
 
 use crate::task_db::*;
@@ -26,6 +28,11 @@ use crate::task_db::*;
 const SMALL_CHUNK_SIZE:u64 = 1024*1024;//1MB
 const LARGE_CHUNK_SIZE:u64 = 1024*1024*256; //256MB 
 const HASH_CHUNK_SIZE:u64 = 1024*1024*16; //16MB
+
+lazy_static!{
+    pub static ref DEFAULT_ENGINE : Arc<Mutex<BackupEngine>> = Arc::new(Mutex::new(BackupEngine::new()));
+}
+
 
 pub struct RestoreConfig {
     pub restore_target: BackupSource,
@@ -74,14 +81,18 @@ impl BackupEngine {
     }
 
     pub async fn start(&self) -> Result<()> {
-        //start self http server for control panel
+        let plans = self.task_db.list_backup_plans()?;
+        for plan in plans { 
+            let plan_key = plan.get_plan_key();
+            self.all_plans.lock().await.insert(plan_key.clone(), Arc::new(Mutex::new(plan)));
+            info!("load backup plan: {}", plan_key);
+        }
         Ok(())
     }
 
-    pub async fn stop(&self) {
+    pub async fn stop(&self) -> Result<()> {
         // stop all running task
-        
-        unimplemented!()
+        Ok(())
     }
     
     async fn is_plan_have_running_backup_task(&self, plan_id: &str) -> bool {
@@ -109,12 +120,23 @@ impl BackupEngine {
         Ok(plan_key)
     }
 
+    pub async fn get_backup_plan(&self, plan_id: &str) -> Result<BackupPlanConfig> {
+        let all_plans = self.all_plans.lock().await;
+        let plan = all_plans.get(plan_id);
+        if plan.is_none() {
+            return Err(anyhow::anyhow!("plan {} not found", plan_id));
+        }
+        let plan = plan.unwrap().lock().await;
+        Ok(plan.clone())
+    }
+
     pub async fn delete_backup_plan(&self, plan_id: &str) -> Result<()> {
         unimplemented!()
     }
 
-    pub async fn list_backup_plans(&self) -> Result<Vec<BackupPlanConfig>> {
-        unimplemented!()
+    pub async fn list_backup_plans(&self) -> Result<Vec<String>> {
+        let all_plans = self.all_plans.lock().await;
+        Ok(all_plans.keys().map(|k| k.clone()).collect())
     }
 
     //create a backup task will create a new checkpoint
@@ -625,6 +647,23 @@ impl BackupEngine {
         //Ok(store)
     }
 
+    pub async fn list_running_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {
+        unimplemented!()
+    }
+
+    pub async fn list_done_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {
+        unimplemented!()
+    }
+
+    pub async fn list_all_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {
+        unimplemented!()
+    }
+
+    pub async fn list_failed_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {
+        unimplemented!()
+    }
+
+
     pub async fn get_task_info(&self, taskid: &str) -> Result<WorkTask> {
         let all_tasks = self.all_tasks.lock().await;
         let backup_task = all_tasks.get(taskid);
@@ -772,3 +811,5 @@ mod tests {
         engine.create_restore_task(&plan_id, &check_point_id, restore_config).await.unwrap();
     }
 }
+
+
