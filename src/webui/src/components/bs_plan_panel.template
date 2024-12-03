@@ -31,7 +31,7 @@
 </style>
 
 <div class="plan-panel">
-  <div class="title">{{title}}</div>
+  <div class="title">{{plan_title}}</div>
   <div class="type-str">{{type_str}}</div>
   <sl-button id="backup-now-btn">Run</sl-button>
   <div class="backup-info">

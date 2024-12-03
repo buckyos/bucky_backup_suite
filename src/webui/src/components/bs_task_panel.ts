@@ -7,7 +7,7 @@ import { SlProgressBar } from "@shoelace-style/shoelace";
 import templateContent from './bs_task_panel.template?raw';
 
 @customElement('bs-task-panel')
-class BSTaskPanel extends LitElement {
+export class BSTaskPanel extends LitElement {
     static properties = {
         task_title: { type: String },
         eta: { type: String },
@@ -17,6 +17,8 @@ class BSTaskPanel extends LitElement {
         total_size: { type: String },
         last_log_content: { type: String },
         task_state: { type: String },
+        progress_value: { type: Number },
+        progress_text: { type: String },
     };
 
     task_state: string;
@@ -29,22 +31,18 @@ class BSTaskPanel extends LitElement {
     last_update_time: number;
     task_title: string;
     eta: string;
+    progress_value: number;
+    progress_text: string;
 
     template_compiled: HandlebarsTemplateDelegate<any>;
 
     updateTaskInfo(task_info: TaskInfo) {
         this.task_title = task_info.taskid;//换成owner plan的title
-        let progressBar = this.shadowRoot?.querySelector('#task-progress-bar') as SlProgressBar;
-        if(progressBar) {
-            if (task_info.total_size != 0 ) {
-                progressBar.indeterminate = false;
-                progressBar.value = task_info.completed_size / task_info.total_size;
-                progressBar.textContent = `${Math.round(progressBar.value * 100)}%`;
-            } else {
-                progressBar.indeterminate = true;
-            }
-        }
 
+        if (task_info.total_size != 0 ) {
+            this.progress_value = (task_info.completed_size * 100) / task_info.total_size;
+            this.progress_text = `${((task_info.completed_size * 100) / task_info.total_size).toFixed(1)}%`;
+        }
         switch(task_info.state) {
             case 'RUNNING':
                 this.task_state = "upload";
@@ -120,23 +118,60 @@ class BSTaskPanel extends LitElement {
         this.task_title = "Test Task";
         this.last_log_content = "Starting...";
         this.task_state = "pause-fill";
+        this.progress_value = 0;
+        this.progress_text = "0%";
         this.template_compiled = Handlebars.compile(templateContent);
     }
 
     render() {
-        let uidata = {
-            task_state: this.task_state,
-            task_title: this.task_title,
-            eta: this.eta,
-            last_log_content: this.last_log_content,
-            complete_item: this.complete_item,
-            total_item: this.total_item,
-            completed_size: this.completed_size,
-            total_size: this.total_size,
-        };
-        let real_content = this.template_compiled(uidata);
-        //console.log(real_content);
-        return html`${unsafeHTML(real_content)}`;
+        return html`
+<style>
+    .task-panel {
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 15px;
+      margin: 10px;
+      font-family: Arial, sans-serif;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .title {
+      font-size: 18px;
+      font-weight: bold;
+    }
+
+    .eta {
+      color: #666;
+    }
+
+    .status {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 8px;
+      color: #666; 
+    }
+  </style>
+
+<div class="task-panel">
+    <div class="header">
+      <sl-icon-button id="task-state" name="${this.task_state}"></sl-icon-button>
+      <div class="title">${this.task_title}</div>
+      <div class="eta">${this.eta}</div>
+    </div>
+    <sl-progress-bar id="work-progress-bar" value="${this.progress_value}">${this.progress_text}</sl-progress-bar>
+    <div class="status">
+      <div class="upload-status">${this.last_log_content}</div>
+      <div class="size-info">(${this.complete_item}/${this.total_item}),${this.completed_size} / ${this.total_size}</div>
+    </div>
+</div>
+
+        `;
     }
 }
 

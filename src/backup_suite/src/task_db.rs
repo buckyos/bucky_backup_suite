@@ -462,10 +462,10 @@ impl BackupTaskDb {
     pub fn update_task(&self, task: &WorkTask) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         let new_task_state;
-        if task.state == TaskState::Done || task.state == TaskState::Failed {
+        if task.state == TaskState::Done || task.state == TaskState::Failed || task.state == TaskState::Pending {
             new_task_state = task.state.clone();
         } else {
-            new_task_state = TaskState::Pending;
+            new_task_state = TaskState::Paused;
         }
         let rows_affected = conn.execute(
             "UPDATE work_tasks SET 

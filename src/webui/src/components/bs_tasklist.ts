@@ -45,11 +45,21 @@ export class BSTaskList extends LitElement {
         this.task_timer = setInterval(async () => {
             //遍历current_task_list
             for (const [task_id, task_panel] of this.current_task_list) {
-                let task_info = await taskManager.getTaskInfo(task_id);
-                console.log("task_info:", task_info);
-                task_panel.updateTaskInfo(task_info);
+                if(task_panel.last_update_task_info) {
+                    if (task_panel.last_update_task_info.state == "RUNNING") {
+                        let task_info = await taskManager.getTaskInfo(task_id);
+                        console.log("refresh task_info:", task_info);
+                        task_panel.updateTaskInfo(task_info);
+                    }
+                }
             }
         }, 1000);
+        taskManager.addTaskEventListener(async (event, data) => {
+            if(event == "resume_task" || event == "pause_task" || event == "create_task") {
+                await this.relaod_tasklist();
+                console.log("task list reloaded");
+            }
+        });
     }
 
     disconnectedCallback() {

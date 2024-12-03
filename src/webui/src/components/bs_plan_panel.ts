@@ -3,12 +3,12 @@ import {customElement, property} from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import Handlebars from 'handlebars';
 import templateContent from './bs_plan_panel.template?raw';
-import { taskManager } from '@/utils/task_mgr';
+import { taskManager, BackupPlanInfo } from '@/utils/task_mgr';
 
 @customElement('bs-plan-panel')
 export class BSPlanPanel extends LitElement {
     static properties = {
-        title: { type: String },
+        plan_title: { type: String },
         type_str: { type: String },
         source: { type: String },
         target: { type: String },
@@ -30,6 +30,7 @@ export class BSPlanPanel extends LitElement {
 
     constructor() {
         super();
+        this.plan_id = "";
         this.plan_title = "";
         this.type_str = "";
         this.source = "";
@@ -40,16 +41,21 @@ export class BSPlanPanel extends LitElement {
         this.template_compiled = Handlebars.compile(templateContent);
     }
 
+    setBackupPlan(plan_id: string, plan: BackupPlanInfo) {
+        this.plan_id = plan_id
+        this.plan_title = plan.title;
+        this.type_str = plan.type_str;
+        this.source = plan.source;
+        this.target = plan.target;
+        this.requestUpdate();
+    }
+
     firstUpdated() {
-        console.log("firstUpdated");
         let backup_now_btn = this.shadowRoot?.querySelector("#backup-now-btn");
         if(backup_now_btn) {
             backup_now_btn.addEventListener("click", async () => {
-                console.log("backup now");
                 let new_task = await taskManager.createBackupTask(this.plan_id, null);
-                console.log("new task:", new_task);
                 taskManager.resumeBackupTask(new_task.taskid);
-                taskManager.emitTaskEvent("resume_task", new_task.taskid);
             });
         }
         
@@ -57,7 +63,7 @@ export class BSPlanPanel extends LitElement {
 
     render() {
         let uidata = {
-            title: this.plan_title,
+            plan_title: this.plan_title,
             type_str: this.type_str,
             source: this.source,
             target: this.target,

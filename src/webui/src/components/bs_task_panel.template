@@ -39,7 +39,7 @@
       <div class="title">{{task_title}}</div>
       <div class="eta">{{eta}}</div>
     </div>
-    <sl-progress-bar id="task-progress-bar"></sl-progress-bar>
+    <sl-progress-bar id="work-progress-bar"></sl-progress-bar>
     <div class="status">
       <div class="upload-status">{{last_log_content}}</div>
       <div class="size-info">({{complete_item}}/{{total_item}}),{{completed_size}} / {{total_size}}</div>

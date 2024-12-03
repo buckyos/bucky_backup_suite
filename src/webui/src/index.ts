@@ -12,13 +12,9 @@ import "./dlg/set_backup_timer_dlg";
 import { PanelList } from "./components/panel_list";
 import { BSTaskList } from "./components/bs_tasklist";
 import { BSPlanPanel } from "./components/bs_plan_panel";
-import { taskManager } from "./utils/task_mgr";
+import { taskManager, BackupPlanInfo,TaskInfo } from "./utils/task_mgr";
 
-async function load_task_list(filter:string = "all") {
-    let tasklist = await taskManager.listBackupTasks();
-    console.log("tasklist:", tasklist);
 
-}
 
 async function load_plan_list() {
     try {
@@ -29,12 +25,7 @@ async function load_plan_list() {
             console.log("plan_id:", plan_id);
             let plan = await taskManager.getBackupPlan(plan_id);
             let panel = document.createElement('bs-plan-panel') as BSPlanPanel;
-            panel.plan_id = plan_id;
-            panel.plan_title = plan.title;
-            panel.type_str = plan.type_str;
-            panel.source = plan.source;
-            panel.target = plan.target;
-            panel.is_running = plan.is_running;
+            panel.setBackupPlan(plan_id, plan);
             panel_list.add_panel(panel,plan_id);
         }
     } catch (error) {
@@ -47,16 +38,27 @@ async function load_plan_list() {
 window.onload = async () => {
     console.log("bucky backup suite webui loaded");
     
-    taskManager.addTaskEventListener((event, data) => {
-        console.log("task event:", event, data);
-        if(event == "resume_task") {
+    taskManager.addTaskEventListener(async (event, data) => {
+        console.log("get task event:", event, data);
+        switch(event) {
+        case "create_plan":
+            let plan = data as BackupPlanInfo;
+            let panel_list = document.querySelector("#panel-list") as PanelList;
+            let panel = document.createElement('bs-plan-panel') as BSPlanPanel;
+            panel.setBackupPlan(plan.plan_id,plan);
+            panel_list.add_panel(panel, plan.plan_id);
+            break;
+        case "resume_task":
             let alert = document.createElement('sl-alert') as SlAlert;
             alert.innerHTML = "Backup task created and running...";
             alert.variant = "primary";
             alert.duration = 10000;
             alert.closable = true;
             document.body.appendChild(alert);
+            break;
         }
+
+        
     });
 
     let tasklist = document.querySelector("#tasklist") as BSTaskList;
@@ -99,11 +101,9 @@ window.onload = async () => {
             });
 
             document.body.appendChild(dialog);
-            //sleep 10ms
-            setTimeout(() => {
-                const dlg = document.getElementById('create-backup-plan-dlg') as SlDialog;
-                dlg.show();
-            }, 15);
+            const dlg = document.getElementById('create-backup-plan-dlg') as SlDialog;
+            dlg.show();
+   
         });
     }
     /**
@@ -113,5 +113,4 @@ window.onload = async () => {
      * 加载Plan列表
      */
     await load_plan_list();
-    await load_task_list();
 }

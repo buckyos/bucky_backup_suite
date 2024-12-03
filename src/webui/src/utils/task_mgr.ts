@@ -16,10 +16,20 @@ export interface TaskInfo {
     last_log_content: string | null;
 }
 
+export interface BackupPlanInfo {
+    plan_id: string;
+    title: string;
+    description: string;
+    type_str: string;
+    last_checkpoint_index: number;
+    source: string;
+    target: string;
+}
+
 export class BackupTaskManager {
     private rpc_client: any;
     //可以关注task事件(全部task)
-    private task_event_listeners: ((event: string, data: any) => void)[];
+    private task_event_listeners: ((event: string, data: any) => void | Promise<void>)[] = [];
 
     constructor() {
         // Initialize RPC client for backup control service
@@ -27,14 +37,22 @@ export class BackupTaskManager {
         this.task_event_listeners = [];
     }
 
-    addTaskEventListener(listener: (event: string, data: any) => void) {
+    addTaskEventListener(listener: (event: string, data: any) => void | Promise<void>) {
         this.task_event_listeners.push(listener);
     }
 
-    emitTaskEvent(event: string, data: any) {
-        for (const listener of this.task_event_listeners) {
-            listener(event, data);
-        }
+    async emitTaskEvent(event: string, data: any) {
+        // 使用 Promise.all 等待所有监听器执行完成
+        await Promise.all(
+            this.task_event_listeners.map(listener => {
+                try {
+                    return Promise.resolve(listener(event, data));
+                } catch (error) {
+                    console.error('Error in task event listener:', error);
+                    return Promise.resolve();
+                }
+            })
+        );
     }
 
     async createBackupPlan(params: {
@@ -47,6 +65,12 @@ export class BackupTaskManager {
         description: string
     }): Promise<string> {
         const result = await this.rpc_client.call("create_backup_plan", params);
+        result.type_str = params.type_str;
+        result.source = params.source;
+        result.target = params.target;
+        result.title = params.title;
+        result.description = params.description;
+        await this.emitTaskEvent("create_plan", result);
         return result.plan_id;
     }
 
@@ -55,10 +79,11 @@ export class BackupTaskManager {
         return result.backup_plans;
     }
 
-    async getBackupPlan(planId: string) {
+    async getBackupPlan(planId: string): Promise<BackupPlanInfo> {
         const result = await this.rpc_client.call("get_backup_plan", {
             plan_id: planId
         });
+        result.plan_id = planId;
         return result;
     }
 
@@ -89,6 +114,7 @@ export class BackupTaskManager {
         const result = await this.rpc_client.call("resume_backup_task", {
             taskid: taskId
         });
+        await this.emitTaskEvent("resume_task", taskId);
         return result.result === "success";
     }
 
@@ -111,8 +137,9 @@ export class BackupTaskManager {
         let taskid_list = await this.listBackupTasks("paused");  
         if(taskid_list.length > 0) {
             let last_task = taskid_list[0];
+            console.log("resume last task:", last_task);
             this.resumeBackupTask(last_task);
-            this.emitTaskEvent("resume_task", last_task);
+            await this.emitTaskEvent("resume_task", last_task);
         }
     }
 
@@ -120,7 +147,7 @@ export class BackupTaskManager {
         let taskid_list = await this.listBackupTasks("running");
         for(let taskid of taskid_list) {
             this.pauseBackupTask(taskid);
-            this.emitTaskEvent("pause_task", taskid);
+            await this.emitTaskEvent("pause_task", taskid);
         }
     }
 
