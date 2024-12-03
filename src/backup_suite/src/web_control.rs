@@ -92,7 +92,9 @@ impl WebControlServer {
             .map_err(|e| {
                 RPCErrors::ReasonError(e.to_string())
             })?;
-        let result = plan.to_json_value();
+        let mut result = plan.to_json_value();
+        let is_running = engine.is_plan_have_running_backup_task(plan_id).await;
+        result["is_running"] = json!(is_running);
         Ok(RPCResponse::new(RPCResult::Success(result),req.seq))
     }
 
@@ -136,25 +138,11 @@ impl WebControlServer {
         let engine = DEFAULT_ENGINE.lock().await;
         //task id list
         let result_task_list : Vec<String>;
-        match filter_str {
-            "" => {
-                //all tasks
-                result_task_list = engine.list_all_backup_tasks(filter_str).await
-                    .map_err(|e| {
-                        RPCErrors::ReasonError(e.to_string())
-                    })?;
-            }
-            "running" => {
-                result_task_list = engine.list_running_backup_tasks(filter_str).await
-                    .map_err(|e| {
-                        RPCErrors::ReasonError(e.to_string())
-                    })?;
-            }
-            _ => {
-                return Err(RPCErrors::ParseRequestError(format!("unknown filter: {}", filter_str)));
-            }
-        }   
-
+        result_task_list = engine.list_backup_tasks(filter_str).await
+            .map_err(|e| {
+                RPCErrors::ReasonError(e.to_string())
+            })?;
+       
         let result = json!({
             "task_list": result_task_list
         });
@@ -162,9 +150,9 @@ impl WebControlServer {
     }
 
     async fn get_task_info(&self, req:RPCRequest) -> Result<RPCResponse,RPCErrors> {
-        let task_id = req.params.get("task_id");
+        let task_id = req.params.get("taskid");
         if task_id.is_none() {
-            return Err(RPCErrors::ParseRequestError("task_id is required".to_string()));
+            return Err(RPCErrors::ParseRequestError("taskid is required".to_string()));
         }
         let task_id = task_id.unwrap().as_str().unwrap();
         let engine = DEFAULT_ENGINE.lock().await;
@@ -177,9 +165,9 @@ impl WebControlServer {
     }
 
     async fn resume_backup_task(&self, req:RPCRequest) -> Result<RPCResponse,RPCErrors> {
-        let task_id = req.params.get("task_id");
+        let task_id = req.params.get("taskid");
         if task_id.is_none() {
-            return Err(RPCErrors::ParseRequestError("task_id is required".to_string()));
+            return Err(RPCErrors::ParseRequestError("taskid is required".to_string()));
         }
         let task_id = task_id.unwrap().as_str().unwrap();
         let engine = DEFAULT_ENGINE.lock().await;
@@ -194,9 +182,9 @@ impl WebControlServer {
     }
     
     async fn pause_backup_task(&self, req:RPCRequest) -> Result<RPCResponse,RPCErrors> {
-        let task_id = req.params.get("task_id");
+        let task_id = req.params.get("taskid");
         if task_id.is_none() {
-            return Err(RPCErrors::ParseRequestError("task_id is required".to_string()));
+            return Err(RPCErrors::ParseRequestError("taskid is required".to_string()));
         }
         let task_id = task_id.unwrap().as_str().unwrap();
         let engine = DEFAULT_ENGINE.lock().await;
@@ -224,6 +212,20 @@ impl WebControlServer {
         info!("validate_path: {} -> {}", path, path_exist);
         Ok(RPCResponse::new(RPCResult::Success(result),req.seq))
     }
+
+    async fn is_plan_running(&self, req:RPCRequest) -> Result<RPCResponse,RPCErrors> {
+        let plan_id = req.params.get("plan_id");
+        if plan_id.is_none() {
+            return Err(RPCErrors::ParseRequestError("plan_id is required".to_string()));
+        }
+        let plan_id = plan_id.unwrap().as_str().unwrap();
+        let engine = DEFAULT_ENGINE.lock().await;
+        let is_running = engine.is_plan_have_running_backup_task(plan_id).await;
+        let result = json!({
+            "is_running": is_running
+        });
+        Ok(RPCResponse::new(RPCResult::Success(result),req.seq))
+    }
 }
 
 #[async_trait]
@@ -239,6 +241,7 @@ impl kRPCHandler for WebControlServer {
             "pause_backup_task" => self.pause_backup_task(req).await,
             "list_backup_task" => self.list_backup_task(req).await,
             "validate_path" => self.validate_path(req).await,
+            "is_plan_running" => self.is_plan_running(req).await,
             _ => Err(RPCErrors::UnknownMethod(req.method)),
         }
     }

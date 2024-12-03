@@ -1,3 +1,5 @@
+import { taskManager } from "../utils/task_mgr";
+
 export class PanelList extends HTMLElement {
   title: string = '';
   showAddButton: boolean = true;
@@ -6,8 +8,33 @@ export class PanelList extends HTMLElement {
     super();
   }
 
-  connectedCallback() {
+  add_panel(panel:HTMLElement,panel_id:string) {
+    let panel_content = this.shadowRoot?.querySelector('#panel-content');
+    if(panel_content) {
+      panel_content.appendChild(panel);
+    }
+  }
 
+  remove_panel(panel_id:string) {
+    let panel_content = this.shadowRoot?.querySelector('#panel-content');
+    if(panel_content) {
+      let panel = panel_content.querySelector(`#${panel_id}`);
+      if(panel) {
+        panel_content.removeChild(panel);
+      }
+    }
+  }
+
+  clear_panels() {
+    let panel_content = this.shadowRoot?.querySelector('#panel-content');
+    if(panel_content) {
+      panel_content.innerHTML = '';
+    }
+  }
+
+
+
+  connectedCallback() {
     const template = document.createElement('template');
     template.innerHTML = `
     <style>
@@ -35,29 +62,42 @@ export class PanelList extends HTMLElement {
 
     // 添加按钮点击事件
     if (this.showAddButton) {
-      this.shadowRoot.querySelector('#add-button').addEventListener('click', () => {
+      this.shadowRoot?.querySelector('#add-button')?.addEventListener('click', () => {
         this.dispatchEvent(new CustomEvent('add-click'));
       });
     }
 
-    this.shadowRoot.querySelector('#title').textContent = this.title;
+    let title_element = this.shadowRoot?.querySelector('#title');
+    if(title_element) {
+      title_element.textContent = this.title;
+    }
   }
 
   attributeChangedCallback(attributeName:string, oldValue:string, newValue:string) {
     if (attributeName === 'title') {
       this.title = newValue;
-      this.shadowRoot.querySelector('#title').textContent = this.title;
+      let title_element = this.shadowRoot?.querySelector('#title');
+      if(title_element) {
+        title_element.textContent = this.title;
+      }
     }
 
     if (attributeName === 'add-button') {
       this.showAddButton = newValue === 'true';
       if (this.showAddButton) {
-        this.shadowRoot.querySelector('#add-button').textContent = '+';
+        let add_button = this.shadowRoot?.querySelector('#add-button');
+        if(add_button) {
+          add_button.textContent = '+';
+        }
       } else {
-        this.shadowRoot.querySelector('#add-button').textContent = '';
+        let add_button = this.shadowRoot?.querySelector('#add-button');
+        if(add_button) {
+          add_button.textContent = '';
+        }
       }
     }
   }
 }
 
 customElements.define("panel-list", PanelList);
+

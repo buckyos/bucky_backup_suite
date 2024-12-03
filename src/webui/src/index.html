@@ -4,12 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bucky Backup Suite</title>
-    <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/themes/light.css" />
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/shoelace-autoloader.js"></script>
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/components/input/input.js"></script>
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/components/select/select.js"></script>
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.18.0/cdn/components/checkbox/checkbox.js"></script>
+    <link rel="stylesheet" href="/shoelace/dist/themes/light.css" />
+    <script type="module" src="/shoelace/dist/shoelace.js"></script>
+    
 </head>
 <body>
     <script src="./index.ts" type="module"></script>
@@ -24,7 +21,7 @@
                         </sl-menu>
                     </sl-dropdown>
                     <sl-button-group label="Control">
-                        <sl-icon-button style="font-size: 1.5rem;" name="play"></sl-icon-button>
+                        <sl-icon-button style="font-size: 1.5rem;" name="play" id="resume-button"></sl-icon-button>
                         <sl-icon-button style="font-size: 1.5rem;" name="pause"></sl-icon-button>
                         <sl-icon-button style="font-size: 1.5rem;" name="gear"></sl-icon-button>
                     </sl-button-group>
@@ -45,6 +42,10 @@
             <panel-list id="panel-list" title="My Backup Plans"></panel-list>
         </div>
     </div>    
-   
+
+
+
+
+
 </body>
 </html>

@@ -11,8 +11,9 @@ use log::*;
 async fn main() {
     init_logging("backup_suite");
     info!("backup suite start");
-    let engine = BackupEngine::new();
+    let engine = DEFAULT_ENGINE.lock().await;
     engine.start().await.unwrap();
+    drop(engine);
     info!("backup engine start ok,start web control service");
     start_web_control_service().await;
 }

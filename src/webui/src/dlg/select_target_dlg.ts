@@ -9,9 +9,9 @@ import { SlInput } from '@shoelace-style/shoelace';
 import { SetBackupTimerDlg } from './set_backup_timer_dlg';
 
 @customElement('select-target-dlg')
-class SelectTargetDlg extends LitElement {
+export class SelectTargetDlg extends LitElement {
     template_compiled: HandlebarsTemplateDelegate<any>;
-    ownerWizzard: BuckyWizzardDlg;
+    ownerWizzard: BuckyWizzardDlg | null;
 
     setOwnerWizzard(wizzard: BuckyWizzardDlg) {
         this.ownerWizzard = wizzard;
@@ -19,7 +19,7 @@ class SelectTargetDlg extends LitElement {
 
     constructor() {
         super();
-        this.ownerWizzard =  null;
+        this.ownerWizzard = null;
         this.template_compiled = Handlebars.compile(templateContent);
     }
 
@@ -42,7 +42,9 @@ class SelectTargetDlg extends LitElement {
                 //alert("Path validation failed, please try again");
                 //return false;
             }
-            this.ownerWizzard.wizzard_data.backup_target_path = backup_target_path.value;
+            if (this.ownerWizzard) {
+                this.ownerWizzard.wizzard_data.backup_target_path = backup_target_path.value;
+            }
         }
         
         return true;
@@ -54,8 +56,10 @@ class SelectTargetDlg extends LitElement {
             nextButton.addEventListener("click", async () => {
                 if (await this.readDataFromUI()) {      
                     let set_backup_timer_dlg = document.createElement("set-backup-timer-dlg") as SetBackupTimerDlg;
-                    set_backup_timer_dlg.setOwnerWizzard(this.ownerWizzard);
-                    this.ownerWizzard.pushDlg(set_backup_timer_dlg,"When to run backups?");
+                    if (this.ownerWizzard) {
+                        set_backup_timer_dlg.setOwnerWizzard(this.ownerWizzard);
+                        this.ownerWizzard.pushDlg(set_backup_timer_dlg,"When to run backups?");
+                    }
                 }
             });
         }

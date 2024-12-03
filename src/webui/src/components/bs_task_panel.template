@@ -35,13 +35,14 @@
 
 <div class="task-panel">
     <div class="header">
-      <div class="title">{{title}}</div>
+      <sl-icon-button id="task-state" name="{{task_state}}"></sl-icon-button>
+      <div class="title">{{task_title}}</div>
       <div class="eta">{{eta}}</div>
     </div>
-    <sl-progress-bar indeterminate></sl-progress-bar>
+    <sl-progress-bar id="task-progress-bar"></sl-progress-bar>
     <div class="status">
-      <div class="upload-status">Upload to DMCX Network...</div>
-      <div class="size-info">2.32 GB / 4GB</div>
+      <div class="upload-status">{{last_log_content}}</div>
+      <div class="size-info">({{complete_item}}/{{total_item}}),{{completed_size}} / {{total_size}}</div>
     </div>
 </div>
 

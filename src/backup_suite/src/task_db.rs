@@ -1,4 +1,3 @@
-
 use ndn_lib::ChunkId;
 use thiserror::Error;
 use uuid::Uuid;
@@ -331,6 +330,7 @@ impl BackupTaskDb {
         db
     }
 
+
     fn init_database(&self) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         
@@ -396,6 +396,18 @@ impl BackupTaskDb {
             [],
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS worktask_log (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                level TEXT NOT NULL,
+                owner_task TEXT NOT NULL,
+                log_content TEXT NOT NULL,
+                log_event_type TEXT NOT NULL
+            )",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -449,6 +461,12 @@ impl BackupTaskDb {
 
     pub fn update_task(&self, task: &WorkTask) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
+        let new_task_state;
+        if task.state == TaskState::Done || task.state == TaskState::Failed {
+            new_task_state = task.state.clone();
+        } else {
+            new_task_state = TaskState::Pending;
+        }
         let rows_affected = conn.execute(
             "UPDATE work_tasks SET 
                 task_type = ?2,
@@ -469,7 +487,7 @@ impl BackupTaskDb {
                 task.checkpoint_id,
                 task.total_size,
                 task.completed_size,
-                task.state,
+                new_task_state,
                 chrono::Utc::now().timestamp_millis() as u64,
                 task.item_count,
                 task.completed_item_count,
@@ -526,37 +544,6 @@ impl BackupTaskDb {
         Ok(checkpoint)
     }
 
-    pub fn pause_task(&self, taskid: &str) -> Result<()> {
-        let conn = Connection::open(&self.db_path)?;
-        let rows_affected = conn.execute(
-            "UPDATE work_tasks SET state = ? WHERE taskid = ?",
-            params![
-                TaskState::Paused,
-                taskid
-            ],
-        )?;
-
-        if rows_affected == 0 {
-            return Err(BackupTaskError::TaskNotFound);
-        }
-        Ok(())
-    }
-
-    pub fn resume_task(&self, taskid: &str) -> Result<()> {
-        let conn = Connection::open(&self.db_path)?;
-        let rows_affected = conn.execute(
-            "UPDATE work_tasks SET state = ? WHERE taskid = ?",
-            params![
-                TaskState::Running,
-                taskid
-            ],
-        )?;
-
-        if rows_affected == 0 {
-            return Err(BackupTaskError::TaskNotFound);
-        }
-        Ok(())
-    }
 
     pub fn cancel_task(&self, taskid: &str) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
@@ -930,6 +917,55 @@ impl BackupTaskDb {
         .collect::<SqlResult<Vec<BackupPlanConfig>>>()?;
 
         Ok(plans)
+    }
+
+    //return all task ids
+    pub fn list_worktasks(&self, filter: &str) -> Result<Vec<String>> {
+        let conn = Connection::open(&self.db_path)?;
+        let sql;
+        match filter {
+            "running" => sql = "SELECT taskid FROM work_tasks WHERE state = 'RUNNING'",
+            "paused" => sql = "SELECT taskid FROM work_tasks WHERE state = 'PAUSED'",
+            "failed" => sql = "SELECT taskid FROM work_tasks WHERE state = 'FAILED'",
+            "pending" => sql = "SELECT taskid FROM work_tasks WHERE state = 'PENDING'",
+            "done" => sql = "SELECT taskid FROM work_tasks WHERE state = 'DONE'",
+            _ => sql = "SELECT taskid FROM work_tasks",
+        }
+        let mut stmt = conn.prepare(sql)?;
+        let tasks = stmt.query_map([], |row| {      
+            Ok(row.get(0)?)
+        })?
+        .collect::<SqlResult<Vec<String>>>()?;
+        Ok(tasks)
+    }
+
+    pub fn add_worktask_log(&self, timestamp: u64, level: &str, owner_task: &str, log_content: &str, log_event_type: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute(
+            "INSERT INTO worktask_log (timestamp, level, owner_task, log_content, log_event_type) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![timestamp, level, owner_task, log_content, log_event_type],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_worktask_logs(&self, owner_task: &str) -> Result<Vec<(u64, String, String, String, String)>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT timestamp, level, owner_task, log_content, log_event_type FROM worktask_log WHERE owner_task = ?"
+        )?;
+        
+        let logs = stmt.query_map(params![owner_task], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })?
+        .collect::<SqlResult<Vec<(u64, String, String, String, String)>>>()?;
+
+        Ok(logs)
     }
 }
 

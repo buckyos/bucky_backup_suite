@@ -3,6 +3,7 @@
 use std::io::SeekFrom;
 use std::sync::Arc;
 use std::collections::HashMap;
+use buckyos_kit::get_buckyos_service_data_dir;
 use futures::stream::futures_unordered::IterMut;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -30,7 +31,10 @@ const LARGE_CHUNK_SIZE:u64 = 1024*1024*256; //256MB
 const HASH_CHUNK_SIZE:u64 = 1024*1024*16; //16MB
 
 lazy_static!{
-    pub static ref DEFAULT_ENGINE : Arc<Mutex<BackupEngine>> = Arc::new(Mutex::new(BackupEngine::new()));
+    pub static ref DEFAULT_ENGINE : Arc<Mutex<BackupEngine>> = {
+        let engine = BackupEngine::new();
+        Arc::new(Mutex::new(engine))
+    };
 }
 
 
@@ -70,11 +74,13 @@ pub struct BackupEngine {
 
 impl BackupEngine {
     pub fn new() -> Self {
+        let task_db_path = get_buckyos_service_data_dir("backup_suite").join("bucky_backup.db");
+
         Self {
             all_plans: Arc::new(Mutex::new(HashMap::new())),
             all_tasks: Arc::new(Mutex::new(HashMap::new())),
             all_checkpoints: Arc::new(Mutex::new(HashMap::new())),
-            task_db: BackupTaskDb::new("bucky_backup.db"),
+            task_db: BackupTaskDb::new(task_db_path.to_str().unwrap()),
             small_file_content_cache: Arc::new(Mutex::new(HashMap::new())),
             is_strict_mode: false,
         }
@@ -95,7 +101,7 @@ impl BackupEngine {
         Ok(())
     }
     
-    async fn is_plan_have_running_backup_task(&self, plan_id: &str) -> bool {
+    pub async fn is_plan_have_running_backup_task(&self, plan_id: &str) -> bool {
         let all_tasks = self.all_tasks.lock().await;
         for (task_id, task) in all_tasks.iter() {
             let real_task = task.lock().await;
@@ -647,26 +653,23 @@ impl BackupEngine {
         //Ok(store)
     }
 
-    pub async fn list_running_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {
-        unimplemented!()
+    pub async fn list_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {
+        self.task_db.list_worktasks(filter).map_err(|e| {
+            let err_str = e.to_string();
+            warn!("list work tasks error: {}", err_str.as_str());
+            anyhow::anyhow!("list work tasks error: {}", err_str)
+        })
     }
-
-    pub async fn list_done_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {
-        unimplemented!()
-    }
-
-    pub async fn list_all_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {
-        unimplemented!()
-    }
-
-    pub async fn list_failed_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {
-        unimplemented!()
-    }
-
 
     pub async fn get_task_info(&self, taskid: &str) -> Result<WorkTask> {
-        let all_tasks = self.all_tasks.lock().await;
-        let backup_task = all_tasks.get(taskid);
+        let mut all_tasks = self.all_tasks.lock().await;
+        let mut backup_task = all_tasks.get(taskid);
+        if backup_task.is_none() {
+            let _backup_task = self.task_db.load_task_by_id(taskid)?;
+            all_tasks.insert(taskid.to_string(), Arc::new(Mutex::new(_backup_task)));
+            backup_task = all_tasks.get(taskid);
+        }
+
         if backup_task.is_none() {
             return Err(anyhow::anyhow!("task not found"));
         }
@@ -754,7 +757,7 @@ impl BackupEngine {
             return Err(anyhow::anyhow!("task is not running"));
         }
         backup_task.state = TaskState::Paused;
-        self.task_db.pause_task(taskid)?;
+        //self.task_db.pause_task(taskid)?;
         Ok(())
     }
 
