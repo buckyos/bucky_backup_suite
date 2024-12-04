@@ -1,4 +1,5 @@
 import os
+import platform
 import shutil
 import sys
 import tempfile
@@ -16,6 +17,8 @@ def strip_and_copy_rust_file(rust_target_dir, name, dest, need_dir=False):
         #time.sleep(0.1)
     #print(f"copying {src_file} to {dest}")
     #os.system(f"cp {src_file} {dest}")
+    if platform.system() == "Windows":
+        src_file = src_file + ".exe"
     shutil.copy(src_file, dest)
     print(f"stripping {os.path.join(dest, name)}")
     os.system(f"strip {os.path.join(dest, name)}")
@@ -31,7 +34,8 @@ def copy_web_apps(src, target):
 def copy_files(rust_target_dir):
     print("Copying files...")
     # code to copy files
-    strip_and_copy_rust_file(rust_target_dir, "backup_suite", root_bin_dir, True)
+    bin = "backup_suite"
+    strip_and_copy_rust_file(rust_target_dir, bin, root_bin_dir, True)
     copy_web_apps("webui/src", os.path.join(root_bin_dir, "backup_suite","webui"))
 
     print("Files copied successfully!")

@@ -1,6 +1,6 @@
 .vscode
 .VSCodeCounter
-
+*.exe
 cargo.lock
 target/
 src/scripts/__pycache__/
