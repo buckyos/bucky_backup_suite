@@ -332,7 +332,12 @@ impl BackupTaskDb {
 
 
     fn init_database(&self) -> Result<()> {
-        let conn = Connection::open(&self.db_path)?;
+        let dir = std::path::Path::new(&self.db_path).parent()
+            .ok_or(BackupTaskError::DatabaseError(rusqlite::Error::InvalidPath(std::path::PathBuf::from(self.db_path.clone()))))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|_| BackupTaskError::DatabaseError(rusqlite::Error::InvalidPath(std::path::PathBuf::from(self.db_path.clone()))))?;
+        
+        let conn = Connection::open(&self.db_path).map_err(BackupTaskError::DatabaseError)?;
         
         conn.execute(
             "CREATE TABLE IF NOT EXISTS work_tasks (
