@@ -171,7 +171,7 @@ impl WebControlServer {
         }
         let task_id = task_id.unwrap().as_str().unwrap();
         let engine = DEFAULT_ENGINE.lock().await;
-        engine.resume_backup_task(task_id).await
+        engine.resume_work_task(task_id).await
             .map_err(|e| {
                 RPCErrors::ReasonError(e.to_string())
             })?;
@@ -188,7 +188,7 @@ impl WebControlServer {
         }
         let task_id = task_id.unwrap().as_str().unwrap();
         let engine = DEFAULT_ENGINE.lock().await;
-        engine.pause_backup_task(task_id).await
+        engine.pause_work_task(task_id).await
             .map_err(|e| {
                 RPCErrors::ReasonError(e.to_string())
             })?;

@@ -122,6 +122,10 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
 
         Ok((backup_items,true))
     }
+
+    async fn restore_item_by_reader(&self, item_id: &str,chunk_reader: Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>,restore_config:&RestoreConfig)->Result<()> {
+        unimplemented!()
+    }
 }
 
 pub struct LocalChunkTargetProvider {
@@ -191,6 +195,10 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
     //link成功后，查询target_chunk_id和new_chunk_id的状态，应该都是exist
     async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId)->Result<()> {
         self.chunk_store.link_chunkid(target_chunk_id,new_chunk_id).await.map_err(|e| anyhow::anyhow!("{}",e))
+    }
+
+    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,quick_hash:Option<ChunkId>)->Result<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>> {
+        unimplemented!()
     }
 
 }

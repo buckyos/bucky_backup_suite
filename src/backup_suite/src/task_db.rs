@@ -4,8 +4,10 @@ use uuid::Uuid;
 use serde_json::{Value, json};
 use rusqlite::{Connection, params, Result as SqlResult};
 use rusqlite::types::{ToSql, FromSql, ValueRef};
+use serde::{Serialize, Deserialize};
 use buckyos_backup_lib::*;
 use log::*;
+use buckyos_backup_lib::RestoreConfig;
 
 
 // impl From<ChunkItem> for BackupItem {
@@ -66,7 +68,8 @@ impl BackupTarget {
 }
 
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum CheckPointState {
     New,
     Prepared,//所有的backup item确认了
@@ -276,6 +279,7 @@ pub struct WorkTask {
     pub item_count: u64,
     pub completed_item_count: u64,
     pub wait_transfer_item_count: u64,
+    pub restore_config: Option<RestoreConfig>,
 }
 
 impl WorkTask {
@@ -294,25 +298,50 @@ impl WorkTask {
             item_count: 0,
             completed_item_count: 0,
             wait_transfer_item_count: 0,
+            restore_config: None,
         }
     }
 
     pub fn to_json_value(&self) -> Value {
-        let result = json!({
-            "taskid": self.taskid,
-            "task_type": self.task_type.to_string(),
-            "owner_plan_id": self.owner_plan_id,
-            "checkpoint_id": self.checkpoint_id,
-            "total_size": self.total_size,
-            "completed_size": self.completed_size,
-            "state": self.state.to_string(),
-            "create_time": self.create_time,
-            "update_time": self.update_time,
-            "item_count": self.item_count,
-            "completed_item_count": self.completed_item_count,
-            "wait_transfer_item_count": self.wait_transfer_item_count,
-        });
-        result
+        if self.restore_config.is_some() {
+            let restore_config = self.restore_config.as_ref().unwrap();
+            let restore_config_json = json!({
+                "restore_location_url": restore_config.restore_location_url,
+                "is_clean_restore": restore_config.is_clean_restore,
+            });
+            let result = json!({
+                "taskid": self.taskid,
+                "task_type": self.task_type.to_string(),
+                "owner_plan_id": self.owner_plan_id,
+                "checkpoint_id": self.checkpoint_id,
+                "total_size": self.total_size,
+                "completed_size": self.completed_size,
+                "state": self.state.to_string(),
+                "create_time": self.create_time,
+                "update_time": self.update_time,
+                "item_count": self.item_count,
+                "completed_item_count": self.completed_item_count,
+                "wait_transfer_item_count": self.wait_transfer_item_count,
+                "restore_config": restore_config_json,
+            });
+            return result;
+        } else {
+            let result = json!({
+                "taskid": self.taskid,
+                "task_type": self.task_type.to_string(),
+                "owner_plan_id": self.owner_plan_id,
+                "checkpoint_id": self.checkpoint_id,
+                "total_size": self.total_size,
+                "completed_size": self.completed_size,
+                "state": self.state.to_string(),
+                "create_time": self.create_time,
+                "update_time": self.update_time,
+                "item_count": self.item_count,
+                "completed_item_count": self.completed_item_count,
+                "wait_transfer_item_count": self.wait_transfer_item_count,
+            });
+            return result;
+        }
     }
 }
 
@@ -352,7 +381,8 @@ impl BackupTaskDb {
                 update_time INTEGER NOT NULL,
                 item_count INTEGER NOT NULL,
                 completed_item_count INTEGER NOT NULL,
-                wait_transfer_item_count INTEGER NOT NULL
+                wait_transfer_item_count INTEGER NOT NULL,
+                restore_config TEXT
             )",
             [],
         )?;
@@ -413,6 +443,22 @@ impl BackupTaskDb {
             [],
         )?;
 
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS restore_items (
+                item_id TEXT NOT NULL,
+                owner_taskid TEXT NOT NULL,
+                item_type TEXT NOT NULL,
+                chunk_id TEXT,
+                quick_hash TEXT,
+                state TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                last_modify_time INTEGER NOT NULL,
+                create_time INTEGER NOT NULL,
+                PRIMARY KEY (item_id, owner_taskid)
+            )",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -436,6 +482,7 @@ impl BackupTaskDb {
                 item_count: row.get(9)?,
                 completed_item_count: row.get(10)?,
                 wait_transfer_item_count: row.get(11)?,
+                restore_config: row.get(12)?,
             })
         }).map_err(|_| BackupTaskError::TaskNotFound)?;
 
@@ -445,7 +492,7 @@ impl BackupTaskDb {
     pub fn create_task(&self, task: &WorkTask) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         conn.execute(
-            "INSERT INTO work_tasks VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO work_tasks VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 task.taskid,
                 task.task_type,
@@ -459,6 +506,7 @@ impl BackupTaskDb {
                 task.item_count,
                 task.completed_item_count,
                 task.wait_transfer_item_count,
+                task.restore_config,
             ],
         )?;
         Ok(())
@@ -677,7 +725,7 @@ impl BackupTaskDb {
         Ok(())
     }
 
-    pub fn load_work_backup_items(&self, checkpoint_id: &str) -> Result<Vec<BackupItem>> {
+    pub fn load_backup_items_by_checkpoint(&self, checkpoint_id: &str) -> Result<Vec<BackupItem>> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
@@ -971,6 +1019,152 @@ impl BackupTaskDb {
         .collect::<SqlResult<Vec<(u64, String, String, String, String)>>>()?;
 
         Ok(logs)
+    }
+
+    pub fn save_restore_item_list_to_task(&self, owner_taskid: &str, item_list: &Vec<BackupItem>) -> Result<()> {
+        let mut conn = Connection::open(&self.db_path)?;
+        let tx = conn.transaction()?;
+
+        for item in item_list {
+            tx.execute(
+                "INSERT INTO restore_items (
+                    item_id,
+                    owner_taskid,
+                    item_type,
+                    chunk_id,
+                    quick_hash,
+                    state,
+                    size,
+                    last_modify_time,
+                    create_time
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    item.item_id,
+                    owner_taskid,
+                    item.item_type,
+                    item.chunk_id,
+                    item.quick_hash,
+                    item.state,
+                    item.size,
+                    item.last_modify_time,
+                    item.create_time,
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        info!("taskdb.save_restore_item_list_to_task: {} {} items", owner_taskid, item_list.len());
+        Ok(())
+    }
+
+    pub fn load_restore_items_by_task(&self, owner_taskid: &str,state: &BackupItemState) -> Result<Vec<BackupItem>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
+                    last_modify_time, create_time 
+             FROM restore_items WHERE owner_taskid = ? AND state = ?"
+        )?;
+        
+        let items = stmt.query_map(params![owner_taskid, state], |row| {
+            Ok(BackupItem {
+                item_id: row.get(0)?,
+                item_type: row.get(1)?,
+                chunk_id: row.get(2)?,
+                quick_hash: row.get(3)?,
+                state: row.get(4)?,
+                size: row.get(5)?,
+                last_modify_time: row.get(6)?,
+                create_time: row.get(7)?,
+            })
+        })?
+        .collect::<SqlResult<Vec<BackupItem>>>()?;
+
+        Ok(items)
+    }
+
+    pub fn update_restore_item(&self, owner_taskid: &str, item: &BackupItem) -> Result<()> {
+        info!("taskdb.update_restore_item: {} {} {:?}", owner_taskid, item.item_id, item.state);
+        let conn = Connection::open(&self.db_path)?;
+        let rows_affected = conn.execute(
+            "UPDATE restore_items SET 
+                item_type = ?1,
+                chunk_id = ?2,
+                quick_hash = ?3,
+                state = ?4,
+                size = ?5,
+                last_modify_time = ?6,
+                create_time = ?7
+            WHERE owner_taskid = ?8 AND item_id = ?9",
+            params![
+                item.item_type,
+                item.chunk_id,
+                item.quick_hash,
+                item.state,
+                item.size,
+                item.last_modify_time,
+                item.create_time,
+                owner_taskid,
+                item.item_id,
+            ],
+        )?;
+
+        if rows_affected == 0 {
+            return Err(BackupTaskError::TaskNotFound);
+        }
+
+        Ok(())
+    }
+
+    pub fn update_restore_item_state(&self, owner_taskid: &str, item_id: &str, state: BackupItemState) -> Result<()> {
+        info!("taskdb.update_restore_item_state: {} {} {:?}", owner_taskid, item_id, state);
+        let conn = Connection::open(&self.db_path)?;
+        let rows_affected = conn.execute(
+            "UPDATE restore_items SET state = ?1 
+            WHERE owner_taskid = ?2 AND item_id = ?3",
+            params![
+                state,
+                owner_taskid,
+                item_id,
+            ],
+        )?;
+
+        if rows_affected == 0 {
+            return Err(BackupTaskError::TaskNotFound);
+        }
+
+        Ok(())
+    }
+
+    pub fn load_wait_transfer_restore_items(&self, owner_taskid: &str) -> Result<Vec<BackupItem>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT item_id, item_type, chunk_id, quick_hash, size, 
+                    last_modify_time, create_time 
+             FROM restore_items 
+             WHERE owner_taskid = ? AND state = ?"
+        )?;
+        
+        let items = stmt.query_map(
+            params![
+                owner_taskid,
+                BackupItemState::LocalDone,
+            ],
+            |row| {
+                Ok(BackupItem {
+                    item_id: row.get(0)?,
+                    item_type: row.get(1)?,
+                    chunk_id: row.get(2)?,
+                    quick_hash: row.get(3)?,
+                    state: row.get(4)?,
+                    size: row.get(5)?,
+                    last_modify_time: row.get(6)?,
+                    create_time: row.get(7)?,
+                })
+            }
+        )?
+        .collect::<SqlResult<Vec<BackupItem>>>()?;
+
+        Ok(items)
     }
 }
 

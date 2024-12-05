@@ -5,6 +5,32 @@ use serde_json::Value;
 use anyhow::Result;
 use ndn_lib::{ChunkReadSeek,ChunkId};
 use std::pin::Pin;
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RestoreConfig {
+    pub restore_location_url: String,
+    pub is_clean_restore: bool, // 为true时,恢复后只包含恢复的文件,不包含其他文件
+}
+
+impl ToSql for RestoreConfig {
+    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
+        let s = serde_json::to_string(self).map_err(|e| 
+            rusqlite::Error::ToSqlConversionFailure(Box::new(e))
+        )?;
+        Ok(s.into())
+    }
+}
+
+impl FromSql for RestoreConfig {
+    fn column_result(value: ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
+        let s = value.as_str().unwrap();
+        let config: RestoreConfig = serde_json::from_str(s)
+            .map_err(|e| rusqlite::types::FromSqlError::Other(Box::new(e)))?;
+        Ok(config)
+    }
+}
+
 //use tokio::fs::AsyncReadExt;
 #[derive(Debug,Clone)]
 pub enum BackupItemState {
@@ -109,7 +135,7 @@ pub trait IBackupChunkSourceProvider {
     fn is_local(&self)->bool;
     //返回值的bool表示是否完成
     async fn prepare_items(&self)->Result<(Vec<BackupItem>,bool)>;
-
+    async fn restore_item_by_reader(&self, item_id: &str,chunk_reader: Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>,restore_config:&RestoreConfig)->Result<()>;
     //async fn prepare_chunk(&self)->Result<String>;
     //async fn get_support_chunkid_types(&self)->Result<Vec<String>>;
 
@@ -148,6 +174,7 @@ pub trait IBackupChunkTargetProvider {
     //link成功后，查询target_chunk_id和new_chunk_id的状态，应该都是exist
     async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId)->Result<()>;
 
+    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,quick_hash:Option<ChunkId>)->Result<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>>;
     
 }
 

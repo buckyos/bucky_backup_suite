@@ -3,6 +3,7 @@
 use std::io::SeekFrom;
 use std::sync::Arc;
 use std::collections::HashMap;
+use buckyos_kit::buckyos_get_unix_timestamp;
 use buckyos_kit::get_buckyos_service_data_dir;
 use futures::stream::futures_unordered::IterMut;
 use tokio::sync::Mutex;
@@ -38,10 +39,6 @@ lazy_static!{
 }
 
 
-pub struct RestoreConfig {
-    pub restore_target: BackupSource,
-    pub description: String,
-}
 
 
 pub struct TransferCacheNode {
@@ -187,10 +184,6 @@ impl BackupEngine {
         return Ok(new_task_id);
     }
 
-    //return taskid
-    pub async fn create_restore_task(&self,plan_id: &str,check_point_id: &str, restore_config: RestoreConfig) -> Result<String> {
-        unimplemented!()
-    }
 
     async fn run_chunk2chunk_backup_task(&self,backup_task:Arc<Mutex<WorkTask>>,checkpoint_id: String,
         source:BackupChunkSourceProvider, target:BackupChunkTargetProvider) -> Result<()> {
@@ -625,8 +618,121 @@ impl BackupEngine {
     //     unimplemented!()
     // }
 
-    async fn run_chunk2chunk_restore_task(&self,backup_task: WorkTask) -> Result<()>{
-        unimplemented!()
+
+    //return taskid
+    pub async fn create_restore_task(&self,plan_id: &str,check_point_id: &str, restore_config: RestoreConfig) -> Result<String> {
+        if self.is_plan_have_running_backup_task(plan_id).await {
+            return Err(anyhow::anyhow!("plan {} already has a running backup task", plan_id));
+        }
+
+        let checkpoint = self.task_db.load_checkpoint_by_id(check_point_id)?;
+        let new_task = WorkTask::new(plan_id, check_point_id, TaskType::Restore);
+        let new_task_id = new_task.taskid.clone();
+        self.task_db.create_task(&new_task)?;
+        info!("create new restore task: {:?}", new_task);
+        let mut all_tasks = self.all_tasks.lock().await;
+        all_tasks.insert(new_task_id.clone(), Arc::new(Mutex::new(new_task)));
+        return Ok(new_task_id);
+    }
+
+    fn check_all_check_point_exist(&self,checkpoint_id: &str) -> Result<bool> {
+        let checkpoint = self.task_db.load_checkpoint_by_id(checkpoint_id)?;
+        if checkpoint.state != CheckPointState::Done {
+            return Ok(false);
+        }
+
+        if checkpoint.parent_checkpoint_id.is_none() {
+            return Ok(true);
+        }
+        let parent_checkpoint_id = checkpoint.parent_checkpoint_id.as_ref().unwrap();
+        let result = self.check_all_check_point_exist(parent_checkpoint_id)?;
+        Ok(result)
+    }
+
+
+    async fn run_chunk2chunk_restore_task(&self,restore_task:Arc<Mutex<WorkTask>>,checkpoint_id: String,
+        source:BackupChunkSourceProvider, target:BackupChunkTargetProvider) -> Result<()>{
+        
+        let mut real_task = restore_task.lock().await;
+        let need_build_items = real_task.item_count == 0;
+        let real_task_id = real_task.taskid.clone();
+        let restore_config = real_task.restore_config.clone();
+        if restore_config.is_none() {
+            return Err(anyhow::anyhow!("restore config is none"));
+        }
+        let restore_config = restore_config.unwrap();
+
+        let mut restore_item_list;
+        if need_build_items {
+            drop(real_task);
+            restore_item_list = Vec::new();
+            if !self.check_all_check_point_exist(&checkpoint_id)? {
+                return Err(anyhow::anyhow!("checkpoint {} not exist", checkpoint_id));
+            }
+            
+            let backup_items = self.task_db.load_backup_items_by_checkpoint(&checkpoint_id)?;
+            info!("load {} backup items for checkpoint: {}", backup_items.len(), checkpoint_id);
+           
+            let now = buckyos_get_unix_timestamp();
+            let mut total_size = 0;
+            for item in backup_items {
+                let restore_item = BackupItem {
+                    item_id: item.item_id.clone(),
+                    item_type: item.item_type,
+                    chunk_id: item.chunk_id,
+                    quick_hash: item.quick_hash,
+                    state: BackupItemState::New,
+                    size: item.size,
+                    last_modify_time: now,
+                    create_time: now,
+                };
+                restore_item_list.push(restore_item);
+                total_size += item.size;
+            }
+            let mut real_task = restore_task.lock().await;
+            self.task_db.save_restore_item_list_to_task(&real_task.taskid, &restore_item_list)?;
+            real_task.item_count = restore_item_list.len() as u64;
+            real_task.total_size = total_size;
+            real_task.update_time = now;
+            self.task_db.update_task(&real_task)?;
+        } else {
+            //load restore item from db
+            restore_item_list = self.task_db.load_restore_items_by_task(&real_task_id, &BackupItemState::New)?;
+            let uncomplete_size = restore_item_list.iter().map(|item| item.size).sum::<u64>();
+            real_task.completed_item_count = real_task.item_count - restore_item_list.len() as u64;
+            real_task.completed_size = real_task.total_size - uncomplete_size;
+            self.task_db.update_task(&real_task)?;
+            drop(real_task);
+        }
+        
+        for item in restore_item_list {
+            info!("restore item: {:?}", item);
+
+            //在taskdb中创建restore item
+            //开始逐个让souice检查restore item是否存在
+            //如果不存在则从target (可配置local cache)下载已经备份的数据到恢复位置
+            if item.chunk_id.is_none() {
+                warn!("restore item {} has no chunk_id,skip restore", item.item_id);
+                continue;
+            }
+            let chunk_id = ChunkId::new(item.chunk_id.as_ref().unwrap()).unwrap();
+            let quick_hash = item.quick_hash.as_ref().map(|hash| ChunkId::new(hash).unwrap());
+            let mut chunk_reader = target.open_chunk_reader_for_restore(&chunk_id,quick_hash).await?;
+            let restore_result = source.restore_item_by_reader(&item.item_id,chunk_reader, &restore_config).await;
+            if restore_result.is_err() {
+                warn!("restore item {} write error: {}", item.item_id, restore_result.err().unwrap());
+                continue;
+            }
+ 
+            //set item state to done & update task state
+            let mut real_task = restore_task.lock().await;
+            real_task.completed_item_count += 1;
+            real_task.completed_size += item.size;
+            self.task_db.update_restore_item_state(&real_task_id, &item.item_id, BackupItemState::Done)?;
+            info!("restore item {} done", item.item_id);
+        }
+
+        Ok(())
     }
 
     async fn run_dir2chunk_restore_task(&self, plan_id: &str, check_point_id: &str) -> Result<()> {
@@ -677,7 +783,68 @@ impl BackupEngine {
         Ok(backup_task)
     }
 
-    pub async fn resume_backup_task(&self, taskid: &str) -> Result<()> {
+    pub async fn resume_restore_task(&self, taskid: &str) -> Result<()> {
+        let mut all_tasks = self.all_tasks.lock().await;
+        let mut restore_task = all_tasks.get(taskid);
+        if restore_task.is_none() {
+            error!("restore task not found: {}", taskid);
+            return Err(anyhow::anyhow!("task not found"));
+        }
+        let restore_task = restore_task.unwrap().clone();
+        drop(all_tasks);
+
+        let mut real_restore_task = restore_task.lock().await;
+        if real_restore_task.state != TaskState::Paused {
+            warn!("restore task is not paused, ignore resume");
+            return Err(anyhow::anyhow!("restore task is not paused"));
+        }
+        real_restore_task.state = TaskState::Running;
+        let task_id = real_restore_task.taskid.clone();
+        let checkpoint_id = real_restore_task.checkpoint_id.clone();
+        let owner_plan_id = real_restore_task.owner_plan_id.clone();
+
+        let all_plans = self.all_plans.lock().await;
+        let plan = all_plans.get(&owner_plan_id);
+        if plan.is_none() {
+            error!("task plan not found: {} plan_id: {}", taskid,owner_plan_id.as_str());
+            return Err(anyhow::anyhow!("task plan not found"));
+        }
+        let plan = plan.unwrap().lock().await;
+        let task_type = plan.type_str.clone();
+        let source_provider = self.get_chunk_source_provider(plan.source.get_source_url()).await?;
+        let target_provider = self.get_chunk_target_provider(plan.target.get_target_url()).await?;
+
+        drop(plan);
+        drop(all_plans);
+
+        info!("resume restore task: {} type: {}", taskid, task_type.as_str());
+        let taskid = task_id.clone();
+        let engine:BackupEngine = self.clone();
+        let restore_task = restore_task.clone();
+        tokio::spawn(async move {
+            let task_result = match task_type.as_str() {
+                "c2c" => engine.run_chunk2chunk_restore_task(restore_task.clone(), checkpoint_id, source_provider, target_provider).await,
+                //"d2c" => engine.run_dir2chunk_backup_task(backup_task, source_provider, target_provider).await,
+                //"d2d" => engine.run_dir2dir_backup_task(backup_task, source_provider, target_provider).await,
+                //"c2d" => engine.run_chunk2dir_backup_task(backup_task, source_provider, target_provider).await,
+                _ => Err(anyhow::anyhow!("unknown plan type: {}", task_type)),
+            };
+
+            let mut real_restore_task = restore_task.lock().await;
+            if task_result.is_err() {
+                info!("restore task failed: {} {}", taskid.as_str(), task_result.err().unwrap());
+                real_restore_task.state = TaskState::Failed;
+            } else {
+                info!("restore task done: {} ", taskid.as_str());
+                real_restore_task.state = TaskState::Done;
+            }
+            engine.task_db.update_task(&real_restore_task);
+        });
+        
+        Ok(())
+    }
+
+    pub async fn resume_work_task(&self, taskid: &str) -> Result<()> {
         // load task from db
         let mut all_tasks = self.all_tasks.lock().await;
         let mut backup_task = all_tasks.get(taskid);
@@ -744,7 +911,7 @@ impl BackupEngine {
         Ok(())
     }
 
-    pub async fn pause_backup_task(&self, taskid: &str) -> Result<()> {
+    pub async fn pause_work_task(&self, taskid: &str) -> Result<()> {
         let all_tasks = self.all_tasks.lock().await;
         let backup_task = all_tasks.get(taskid);
         if backup_task.is_none() {
@@ -790,7 +957,7 @@ mod tests {
         let new_plan = BackupPlanConfig::chunk2chunk("file:///mnt/d/temp/test", "file:///mnt/d/temp/bucky_backup_result", "testc2c", "testc2c desc");
         let plan_id = engine.create_backup_plan(new_plan).await.unwrap();
         let task_id = engine.create_backup_task(&plan_id, None).await.unwrap();
-        engine.resume_backup_task(&task_id).await.unwrap();
+        engine.resume_work_task(&task_id).await.unwrap();
         let task_info = engine.get_task_info(&task_id).await.unwrap();
         let check_point_id = task_info.checkpoint_id.clone();
         let mut step = 0;
@@ -807,11 +974,22 @@ mod tests {
             }
         }
 
-        let restore_config = RestoreConfig {
-            restore_target: BackupSource::Directory("file:///d/temp/restore_result".to_string()),
-            description: "test c2c restore".to_string(),
-        };
-        engine.create_restore_task(&plan_id, &check_point_id, restore_config).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_run_c2c_restore_task() {
+        buckyos_kit::init_logging("bucky_backup_test");
+        let tempdb = "bucky_backup.db";
+        //delete db file if exists
+        if std::path::Path::new(tempdb).exists() {
+            std::fs::remove_file(tempdb).unwrap();
+        }
+
+        let engine = BackupEngine::new();
+        engine.start().await.unwrap();
+        let checkpoint_id = "testc2c_1".to_string();
+        //let task_id = engine.create_restore_task(&checkpoint_id, None, None).await.unwrap();
+        engine.resume_work_task(&task_id).await.unwrap();
     }
 }
 
