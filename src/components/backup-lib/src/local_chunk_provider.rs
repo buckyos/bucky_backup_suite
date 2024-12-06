@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::pin::Pin;
 use tokio::sync::Mutex;
 use serde_json::json;
+use url::Url;
+use ndn_lib::ChunkHasher;
 use log::*;
 
 
@@ -123,8 +125,81 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         Ok((backup_items,true))
     }
 
-    async fn restore_item_by_reader(&self, item_id: &str,chunk_reader: Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>,restore_config:&RestoreConfig)->Result<()> {
-        unimplemented!()
+    async fn init_for_restore(&self, restore_config:&RestoreConfig)->Result<()> {
+        let restore_url:Url = Url::parse(restore_config.restore_location_url.as_str())
+            .map_err(|e| anyhow::anyhow!("{}",e))?;
+
+        if restore_url.scheme() != "file" {
+            return Err(anyhow::anyhow!("restore_url scheme must be file"));
+        }
+
+        let restore_path = restore_url.path();  
+        //TODO : clean up restore_path
+        Ok(())
+    }
+
+    async fn restore_item_by_reader(&self, item: &BackupItem,mut chunk_reader:Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>,restore_config:&RestoreConfig)->Result<()> {
+        let restore_url:Url = Url::parse(restore_config.restore_location_url.as_str())
+           .map_err(|e| anyhow::anyhow!("{}",e))?;
+
+        if restore_url.scheme() != "file" {
+            return Err(anyhow::anyhow!("restore_url scheme must be file"));
+        }
+
+        let restore_path = restore_url.path();
+        let file_path = Path::new(&restore_path).join(&item.item_id);
+        //TODO: use ndn-client to get chunk would be better
+        //文件不存在很简单
+        if !file_path.exists() {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(&file_path)
+                .await
+                .map_err(|e| {
+                    warn!("restore_item_by_reader: create file failed! {}", e.to_string());
+                    anyhow::anyhow!("{}",e)
+                })?;
+            let mut chunk_reader = chunk_reader.as_mut();
+            tokio::io::copy(&mut chunk_reader, &mut file).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        } else {
+            let file_info = fs::metadata(&file_path).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+            let file_size = file_info.len();
+            if file_size == item.size {
+                //文件大小相同,TODO:检查quick_hash
+                return Ok(());
+            } else {
+                //文件大小不同,删除文件
+                if file_size > item.size  {
+                    //文件大于chunk,删除文件
+                    fs::remove_file(&file_path).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+                    let mut file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .open(&file_path)
+                    .await
+                    .map_err(|e| {
+                        warn!("restore_item_by_reader: create file failed! {}", e.to_string());
+                        anyhow::anyhow!("{}",e)
+                    })?;
+                    let mut chunk_reader = chunk_reader.as_mut();
+                    tokio::io::copy(&mut chunk_reader, &mut file).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+                } else {
+                    chunk_reader.seek(SeekFrom::Start(file_size)).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+                    let mut file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&file_path)
+                    .await
+                    .map_err(|e| {
+                        warn!("restore_item_by_reader: open file failed! {}", e.to_string());
+                        anyhow::anyhow!("{}",e)
+                    })?;
+                    let mut chunk_reader = chunk_reader.as_mut();
+                    tokio::io::copy(&mut chunk_reader, &mut file).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -198,7 +273,23 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
     }
 
     async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,quick_hash:Option<ChunkId>)->Result<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>> {
-        unimplemented!()
+        let reader = self.chunk_store.get_chunk_reader(&chunk_id).await;
+        if reader.is_ok() {
+            let (reader,content_length) = reader.unwrap();
+            return Ok(reader);
+        }
+
+        if quick_hash.is_some() {
+            let quick_hash = quick_hash.unwrap();
+            let reader = self.chunk_store.get_chunk_reader(&quick_hash).await;
+            if reader.is_err() {
+                return Err(anyhow::anyhow!("no chunk found for chunk_id: {} or quick_hash: {}", chunk_id.to_string(), quick_hash.to_string()));
+            }
+            let (reader,content_length) = reader.unwrap();
+            return Ok(reader);
+        }
+        
+        Err(anyhow::anyhow!("no chunk found for chunk_id: {}", chunk_id.to_string()))
     }
 
 }

@@ -325,7 +325,7 @@ impl BackupEngine {
                         }
 
                         let item_content = item_content.unwrap();
-                        let mut full_hasher = ChunkHasher::new(None);
+                        let mut full_hasher = ChunkHasher::new(None).map_err(|e| anyhow::anyhow!("{}",e))?;
                         let hash_result = full_hasher.calc_from_bytes(&item_content);
                         let chunk_id = ChunkId::from_sha256_result(&hash_result);
                         let chunk_id_str = chunk_id.to_string();
@@ -367,7 +367,7 @@ impl BackupEngine {
                         info!("start calc full hash for item: {}", backup_item.item_id);
                         item_reader.seek(SeekFrom::Start(0)).await?;
                         let mut offset = 0;
-                        let mut full_hash_context = ChunkHasher::new(None);
+                        let mut full_hash_context = ChunkHasher::new(None).map_err(|e| anyhow::anyhow!("{}",e))?;
                         let full_id = loop {
                             info!("calc full hash for item: {}, offset: {},len: {}", backup_item.item_id, offset, backup_item.size);
 
@@ -665,6 +665,7 @@ impl BackupEngine {
         let mut restore_item_list;
         if need_build_items {
             drop(real_task);
+            source.init_for_restore(&restore_config).await?;
             restore_item_list = Vec::new();
             if !self.check_all_check_point_exist(&checkpoint_id)? {
                 return Err(anyhow::anyhow!("checkpoint {} not exist", checkpoint_id));
@@ -695,6 +696,7 @@ impl BackupEngine {
             real_task.total_size = total_size;
             real_task.update_time = now;
             self.task_db.update_task(&real_task)?;
+
         } else {
             //load restore item from db
             restore_item_list = self.task_db.load_restore_items_by_task(&real_task_id, &BackupItemState::New)?;
@@ -718,7 +720,7 @@ impl BackupEngine {
             let chunk_id = ChunkId::new(item.chunk_id.as_ref().unwrap()).unwrap();
             let quick_hash = item.quick_hash.as_ref().map(|hash| ChunkId::new(hash).unwrap());
             let mut chunk_reader = target.open_chunk_reader_for_restore(&chunk_id,quick_hash).await?;
-            let restore_result = source.restore_item_by_reader(&item.item_id,chunk_reader, &restore_config).await;
+            let restore_result = source.restore_item_by_reader(&item,chunk_reader, &restore_config).await;
             if restore_result.is_err() {
                 warn!("restore item {} write error: {}", item.item_id, restore_result.err().unwrap());
                 continue;
