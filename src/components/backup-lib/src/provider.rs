@@ -3,7 +3,7 @@ use rusqlite::types::{ToSql, FromSql, ValueRef};
 use async_trait::async_trait;
 use serde_json::Value;
 use anyhow::Result;
-use ndn_lib::{ChunkReadSeek,ChunkId};
+use ndn_lib::{ChunkReader,ChunkWriter,NamedDataStore,ChunkReadSeek,ChunkId};
 use std::pin::Pin;
 use serde::{Serialize, Deserialize};
 
@@ -139,7 +139,7 @@ pub trait IBackupChunkSourceProvider {
     async fn prepare_items(&self)->Result<(Vec<BackupItem>,bool)>;
     async fn init_for_restore(&self, restore_config:&RestoreConfig)->Result<()>;
     //系统倾向于认为restore一定是一个本地操作
-    async fn restore_item_by_reader(&self, item: &BackupItem,mut chunk_reader: Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>,restore_config:&RestoreConfig)->Result<()>;
+    async fn restore_item_by_reader(&self, item: &BackupItem,mut chunk_reader:ChunkReader,restore_config:&RestoreConfig)->Result<()>;
     //async fn prepare_chunk(&self)->Result<String>;
     //async fn get_support_chunkid_types(&self)->Result<Vec<String>>;
 
@@ -168,8 +168,7 @@ pub trait IBackupChunkTargetProvider {
     //上传一个完整的chunk,允许target自己决定怎么使用reader
     async fn put_chunk(&self, chunk_id: &ChunkId, chunk_data: &[u8])->Result<()>;
     async fn append_chunk_data(&self, chunk_id: &ChunkId, offset_from_begin:u64,chunk_data: &[u8], is_completed: bool,chunk_size:Option<u64>)->Result<()>;
-    //使用reader上传，允许target自己决定怎么使用reader
-    async fn put_by_reader(&self, chunk_id: &ChunkId, chunk_reader: Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>)->Result<()>;
+
     //通过上传chunk diff文件来创建新chunk
     //async fn patch_chunk(&self, chunk_id: &str, chunk_reader: ItemReader)->Result<()>;
 
@@ -177,7 +176,7 @@ pub trait IBackupChunkTargetProvider {
     //说明两个chunk id是同一个chunk.实现者可以自己决定是否校验
     //link成功后，查询target_chunk_id和new_chunk_id的状态，应该都是exist
     async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId)->Result<()>;
-    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,quick_hash:Option<ChunkId>)->Result<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>>;
+    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,quick_hash:Option<ChunkId>)->Result<ChunkReader>;
     
 }
 

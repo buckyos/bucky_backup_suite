@@ -16,11 +16,11 @@ use std::pin::Pin;
 use tokio::sync::Mutex;
 use serde_json::json;
 use url::Url;
-use ndn_lib::ChunkHasher;
+use ndn_lib::{ChunkHasher, ChunkReadSeek};
 use log::*;
 
 
-use ndn_lib::{ChunkReadSeek,ChunkStore,ChunkId};
+use ndn_lib::{ChunkReader,ChunkWriter,NamedDataStore,ChunkId};
 use crate::provider::*;
 
 //待备份的chunk都以文件的形式平摊的保存目录下
@@ -138,7 +138,7 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         Ok(())
     }
 
-    async fn restore_item_by_reader(&self, item: &BackupItem,mut chunk_reader:Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>,restore_config:&RestoreConfig)->Result<()> {
+    async fn restore_item_by_reader(&self, item: &BackupItem,mut chunk_reader:ChunkReader,restore_config:&RestoreConfig)->Result<()> {
         let restore_url:Url = Url::parse(restore_config.restore_location_url.as_str())
            .map_err(|e| anyhow::anyhow!("{}",e))?;
 
@@ -149,68 +149,19 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         let restore_path = restore_url.path();
         let file_path = Path::new(&restore_path).join(&item.item_id);
         //TODO: use ndn-client to get chunk would be better
-        //文件不存在很简单
-        if !file_path.exists() {
-            let mut file = tokio::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(&file_path)
-                .await
-                .map_err(|e| {
-                    warn!("restore_item_by_reader: create file failed! {}", e.to_string());
-                    anyhow::anyhow!("{}",e)
-                })?;
-            let mut chunk_reader = chunk_reader.as_mut();
-            tokio::io::copy(&mut chunk_reader, &mut file).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-        } else {
-            let file_info = fs::metadata(&file_path).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-            let file_size = file_info.len();
-            if file_size == item.size {
-                //文件大小相同,TODO:检查quick_hash
-                return Ok(());
-            } else {
-                //文件大小不同,删除文件
-                if file_size > item.size  {
-                    //文件大于chunk,删除文件
-                    fs::remove_file(&file_path).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-                    let mut file = tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .open(&file_path)
-                    .await
-                    .map_err(|e| {
-                        warn!("restore_item_by_reader: create file failed! {}", e.to_string());
-                        anyhow::anyhow!("{}",e)
-                    })?;
-                    let mut chunk_reader = chunk_reader.as_mut();
-                    tokio::io::copy(&mut chunk_reader, &mut file).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-                } else {
-                    chunk_reader.seek(SeekFrom::Start(file_size)).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-                    let mut file = tokio::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&file_path)
-                    .await
-                    .map_err(|e| {
-                        warn!("restore_item_by_reader: open file failed! {}", e.to_string());
-                        anyhow::anyhow!("{}",e)
-                    })?;
-                    let mut chunk_reader = chunk_reader.as_mut();
-                    tokio::io::copy(&mut chunk_reader, &mut file).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-                }
-            }
-        }
+
         Ok(())
     }
 }
 
 pub struct LocalChunkTargetProvider {
     pub dir_path: String,
-    pub chunk_store:ChunkStore,
+    pub chunk_store:NamedDataStore,
 }
 
 impl LocalChunkTargetProvider {
     pub async fn new(dir_path: String)->Result<Self>{
-        let chunk_store = ChunkStore::new(dir_path.clone()).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        let chunk_store = NamedDataStore::new(dir_path.clone()).await.map_err(|e| anyhow::anyhow!("{}",e))?;
         info!("new local chunk target provider, dir_path: {}", dir_path);
         Ok(LocalChunkTargetProvider { 
             dir_path,
@@ -256,24 +207,28 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         self.chunk_store.put_chunk(chunk_id,chunk_data,false).await.map_err(|e| anyhow::anyhow!("{}",e))
     }
     async fn append_chunk_data(&self, chunk_id: &ChunkId, offset_from_begin:u64,chunk_data: &[u8], is_completed: bool,chunk_size:Option<u64>)->Result<()> {
-        self.chunk_store.append_chunk_data(chunk_id,offset_from_begin,chunk_data,is_completed,chunk_size).await.map_err(|e| anyhow::anyhow!("{}",e))
+        let (mut writer,offset) = self.chunk_store.open_chunk_writer(chunk_id,chunk_size.unwrap_or(0),offset_from_begin).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        writer.write_all(chunk_data).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        if is_completed {
+           self.chunk_store.complete_chunk_writer(chunk_id).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        }
+        Ok(())
     }
     //使用reader上传，允许target自己决定怎么使用reader
-    async fn put_by_reader(&self, chunk_id: &ChunkId, chunk_reader: Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>)->Result<()> {
-        self.chunk_store.put_by_reader(chunk_id,chunk_reader,false).await.map_err(|e| anyhow::anyhow!("{}",e))
-    }
     //通过上传chunk diff文件来创建新chunk
     //async fn patch_chunk(&self, chunk_id: &str, chunk_reader: ItemReader)->Result<()>;
 
     //async fn remove_chunk(&self, chunk_list: Vec<String>)->Result<()>;
     //说明两个chunk id是同一个chunk.实现者可以自己决定是否校验
     //link成功后，查询target_chunk_id和new_chunk_id的状态，应该都是exist
-    async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId)->Result<()> {
-        self.chunk_store.link_chunkid(target_chunk_id,new_chunk_id).await.map_err(|e| anyhow::anyhow!("{}",e))
+    async fn link_chunkid(&self, from_chunk_id: &ChunkId, to_chunk_id: &ChunkId)->Result<()> {
+        let from_obj_id = from_chunk_id.to_obj_id();
+        let to_obj_id = to_chunk_id.to_obj_id();
+        self.chunk_store.link_object(&from_obj_id,&to_obj_id).await.map_err(|e| anyhow::anyhow!("{}",e))
     }
 
-    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,quick_hash:Option<ChunkId>)->Result<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>> {
-        let reader = self.chunk_store.get_chunk_reader(&chunk_id).await;
+    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,quick_hash:Option<ChunkId>)->Result<ChunkReader> {
+        let reader = self.chunk_store.open_chunk_reader(&chunk_id,SeekFrom::Start(0)).await;
         if reader.is_ok() {
             let (reader,content_length) = reader.unwrap();
             return Ok(reader);
@@ -281,7 +236,7 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
 
         if quick_hash.is_some() {
             let quick_hash = quick_hash.unwrap();
-            let reader = self.chunk_store.get_chunk_reader(&quick_hash).await;
+            let reader = self.chunk_store.open_chunk_reader(&quick_hash,SeekFrom::Start(0)).await;
             if reader.is_err() {
                 return Err(anyhow::anyhow!("no chunk found for chunk_id: {} or quick_hash: {}", chunk_id.to_string(), quick_hash.to_string()));
             }
