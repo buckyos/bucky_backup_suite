@@ -1,0 +1,11 @@
+[package]
+name = "s3-chunk-target"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1"
+buckyos-backup-lib = { path = "../../components/backup-lib" }
+aws-config = "1.0"
+aws-sdk-s3 = "1.5"
+tokio = { version = "1.0", features = ["full"] } 

@@ -9,5 +9,6 @@ members = [
     "./components/sector",
     "./backup_suite",
     "./plugins/dmcx/common",
-    "./plugins/dmcx/user",
+    "./plugins/dmcx/user", 
+    "./plugins/s3",
 ]
