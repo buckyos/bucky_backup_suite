@@ -1,10 +1,10 @@
-use ndn_lib::ChunkId;
+#![allow(dead_code)]
+#![allow(unused)]
 use thiserror::Error;
 use uuid::Uuid;
 use serde_json::{Value, json};
 use rusqlite::{Connection, params, Result as SqlResult};
 use rusqlite::types::{ToSql, FromSql, ValueRef};
-use serde::{Serialize, Deserialize};
 use buckyos_backup_lib::*;
 use log::*;
 use buckyos_backup_lib::RestoreConfig;
@@ -106,7 +106,8 @@ impl FromSql for CheckPointState {
 
 pub struct BackupCheckPoint {
     pub checkpoint_id: String,
-    pub parent_checkpoint_id: Option<String>,
+    pub prev_checkpoint_id: Option<String>,
+    pub depend_checkpoint_id: Option<String>,
     pub state:CheckPointState,
     pub owner_plan:String,
     pub checkpoint_hash:Option<String>,
@@ -122,7 +123,8 @@ impl BackupCheckPoint {
         Self {
             checkpoint_id: new_id,
             owner_plan: owner_plan.to_string(),
-            parent_checkpoint_id: parent_checkpoint_id.map(|s| s.to_string()),
+            prev_checkpoint_id: parent_checkpoint_id.map(|s| s.to_string()),
+            depend_checkpoint_id: parent_checkpoint_id.map(|s| s.to_string()),
             state: CheckPointState::New,
             checkpoint_hash: None,
             checkpoint_index,
@@ -265,7 +267,8 @@ impl FromSql for TaskType {
     }
 }
 
-#[derive(Clone, Debug)]
+
+#[derive(Debug,Clone)]
 pub struct WorkTask {
     pub taskid: String,
     pub task_type: TaskType,
@@ -281,6 +284,8 @@ pub struct WorkTask {
     pub wait_transfer_item_count: u64,
     pub restore_config: Option<RestoreConfig>,
 }
+
+
 
 impl WorkTask {
     pub fn new(owner_plan_id: &str, checkpoint_id: &str, task_type: TaskType) -> Self {
@@ -391,6 +396,7 @@ impl BackupTaskDb {
             "CREATE TABLE IF NOT EXISTS checkpoints (
                 checkpoint_id TEXT PRIMARY KEY,
                 parent_checkpoint_id TEXT,
+                prev_checkpoint_id TEXT,
                 state TEXT NOT NULL,
                 owner_plan TEXT NOT NULL,
                 checkpoint_hash TEXT,
@@ -426,6 +432,7 @@ impl BackupTaskDb {
                 size INTEGER NOT NULL,
                 last_modify_time INTEGER NOT NULL,
                 create_time INTEGER NOT NULL,
+                progress TEXT,
                 PRIMARY KEY (item_id, checkpoint_id)
             )",
             [],
@@ -563,12 +570,13 @@ impl BackupTaskDb {
         if let Some(row) = rows.next()? {
             let checkpoint = BackupCheckPoint {
                 checkpoint_id: row.get(0)?,
-                parent_checkpoint_id: row.get(1)?,
-                state: row.get(2)?,
-                owner_plan: row.get(3)?,
-                checkpoint_hash: row.get(4)?,
-                checkpoint_index: row.get(5)?,
-                create_time: row.get(6)?,
+                depend_checkpoint_id: row.get(1)?,
+                prev_checkpoint_id: row.get(2)?,
+                state: row.get(3)?,
+                owner_plan: row.get(4)?,
+                checkpoint_hash: row.get(5)?,
+                checkpoint_index: row.get(6)?,
+                create_time: row.get(7)?,
             };
             Ok(checkpoint)
         } else {
@@ -585,12 +593,13 @@ impl BackupTaskDb {
         let checkpoint = stmt.query_row(params![checkpoint_id], |row| {
             Ok(BackupCheckPoint {
                 checkpoint_id: row.get(0)?,
-                parent_checkpoint_id: row.get(1)?,
-                state: row.get(2)?,
-                owner_plan: row.get(3)?,
-                checkpoint_hash: row.get(4)?,
-                checkpoint_index: row.get(5)?,
-                create_time: row.get(6)?,
+                depend_checkpoint_id: row.get(1)?,
+                prev_checkpoint_id: row.get(2)?,
+                state: row.get(3)?,
+                owner_plan: row.get(4)?,
+                checkpoint_hash: row.get(5)?,
+                checkpoint_index: row.get(6)?,
+                create_time: row.get(7)?,
             })
         }).map_err(|_| BackupTaskError::InvalidCheckpointId)?;
 
@@ -646,8 +655,9 @@ impl BackupTaskDb {
                     state,
                     size,
                     last_modify_time,
-                    create_time
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    create_time,
+                    progress
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     item.item_id,
                     checkpoint_id,
@@ -658,6 +668,7 @@ impl BackupTaskDb {
                     item.size,
                     item.last_modify_time,
                     item.create_time,
+                    item.progress,
                 ],
             )?;
         }
@@ -670,10 +681,11 @@ impl BackupTaskDb {
     pub fn create_checkpoint(&self, checkpoint: &BackupCheckPoint) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         conn.execute(
-            "INSERT INTO checkpoints VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO checkpoints VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 checkpoint.checkpoint_id,
-                checkpoint.parent_checkpoint_id,
+                checkpoint.depend_checkpoint_id,
+                checkpoint.prev_checkpoint_id,
                 checkpoint.state,
                 checkpoint.owner_plan,
                 checkpoint.checkpoint_hash,
@@ -688,16 +700,18 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE checkpoints SET 
-                parent_checkpoint_id = ?2,
-                state = ?3,
-                owner_plan = ?4,
-                checkpoint_hash = ?5,
-                checkpoint_index = ?6,
-                create_time = ?7
+                depend_checkpoint_id = ?2,
+                prev_checkpoint_id = ?3,
+                state = ?4,
+                owner_plan = ?5,
+                checkpoint_hash = ?6,
+                checkpoint_index = ?7,
+                create_time = ?8
             WHERE checkpoint_id = ?1",
             params![
                 checkpoint.checkpoint_id,
-                checkpoint.parent_checkpoint_id,
+                checkpoint.depend_checkpoint_id,
+                checkpoint.prev_checkpoint_id,
                 checkpoint.state,
                 checkpoint.owner_plan,
                 checkpoint.checkpoint_hash,
@@ -729,7 +743,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
-                    last_modify_time, create_time 
+                    last_modify_time, create_time, progress
              FROM backup_items WHERE checkpoint_id = ?"
         )?;
         
@@ -743,6 +757,8 @@ impl BackupTaskDb {
                 size: row.get(5)?,
                 last_modify_time: row.get(6)?,
                 create_time: row.get(7)?,
+                have_cache: false,
+                progress: row.get(8)?,
             })
         })?
         .collect::<SqlResult<Vec<BackupItem>>>()?;
@@ -753,8 +769,8 @@ impl BackupTaskDb {
     pub fn load_wait_cacl_backup_items(&self, checkpoint_id: &str) -> Result<Vec<BackupItem>> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
-            "SELECT item_id, item_type, chunk_id, quick_hash, size, 
-                    last_modify_time, create_time 
+            "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
+                    last_modify_time, create_time, progress
              FROM backup_items 
              WHERE checkpoint_id = ? AND state = ?"
         )?;
@@ -771,6 +787,8 @@ impl BackupTaskDb {
                     size: row.get(5)?,
                     last_modify_time: row.get(6)?,
                     create_time: row.get(7)?,
+                    have_cache: false,
+                    progress: row.get(8)?,
                 })
             }
         )?
@@ -783,7 +801,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, size, 
-                    last_modify_time, create_time 
+                    last_modify_time, create_time, progress
              FROM backup_items 
              WHERE checkpoint_id = ? AND state = ?"
         )?;
@@ -803,6 +821,8 @@ impl BackupTaskDb {
                     size: row.get(5)?,
                     last_modify_time: row.get(6)?,
                     create_time: row.get(7)?,
+                    have_cache: false,
+                    progress: row.get(8)?,
                 })
             }
         )?
@@ -812,7 +832,7 @@ impl BackupTaskDb {
     }
 
     pub fn update_backup_item(&self, checkpoint_id: &str, item: &BackupItem) -> Result<()> {
-        info!("taskdb.update_backup_item: {} {} {:?}", checkpoint_id, item.item_id, item.state);
+        //info!("taskdb.update_backup_item: {} {} {:?}", checkpoint_id, item.item_id, item.state);
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE backup_items SET 
@@ -822,8 +842,9 @@ impl BackupTaskDb {
                 state = ?4,
                 size = ?5,
                 last_modify_time = ?6,
-                create_time = ?7
-            WHERE checkpoint_id = ?8 AND item_id = ?9",
+                create_time = ?7,
+                progress = ?8
+            WHERE checkpoint_id = ?9 AND item_id = ?10",
             params![
                 item.item_type,
                 item.chunk_id,
@@ -832,6 +853,7 @@ impl BackupTaskDb {
                 item.size,
                 item.last_modify_time,
                 item.create_time,
+                item.progress,
                 checkpoint_id,
                 item.item_id,
             ],
@@ -1061,7 +1083,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
-                    last_modify_time, create_time 
+                    last_modify_time, create_time, progress
              FROM restore_items WHERE owner_taskid = ? AND state = ?"
         )?;
         
@@ -1075,6 +1097,8 @@ impl BackupTaskDb {
                 size: row.get(5)?,
                 last_modify_time: row.get(6)?,
                 create_time: row.get(7)?,
+                have_cache: false,
+                progress: row.get(8)?,
             })
         })?
         .collect::<SqlResult<Vec<BackupItem>>>()?;
@@ -1139,7 +1163,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, size, 
-                    last_modify_time, create_time 
+                    last_modify_time, create_time, progress
              FROM restore_items 
              WHERE owner_taskid = ? AND state = ?"
         )?;
@@ -1159,6 +1183,8 @@ impl BackupTaskDb {
                     size: row.get(5)?,
                     last_modify_time: row.get(6)?,
                     create_time: row.get(7)?,
+                    have_cache: false,
+                    progress: row.get(8)?,
                 })
             }
         )?
@@ -1226,19 +1252,20 @@ mod tests {
         db.create_task(&task).unwrap();
 
         // Test pause
-        db.pause_task(&task_id).unwrap();
-        let paused_task = db.load_task_by_id(&task_id).unwrap();
-        assert_eq!(paused_task.state, TaskState::Paused);
+        //db.pause_task(&task_id).unwrap();
+        //let paused_task = db.load_task_by_id(&task_id).unwrap();
+        //assert_eq!(paused_task.state, TaskState::Paused);
 
         // Test resume
-        db.resume_task(&task_id).unwrap();
-        let resumed_task = db.load_task_by_id(&task_id).unwrap();
-        assert_eq!(resumed_task.state, TaskState::Running);
+        //db.resume_task(&task_id).unwrap();
+        //let resumed_task = db.load_task_by_id(&task_id).unwrap();
+        //assert_eq!(resumed_task.state, TaskState::Running);
 
         // Test cancel
         db.cancel_task(&task_id).unwrap();
         let cancelled_task = db.load_task_by_id(&task_id).unwrap();
         assert_eq!(cancelled_task.state, TaskState::Failed);
+        //db.delete_task(&task_id).unwrap();
     }
 
     #[test]

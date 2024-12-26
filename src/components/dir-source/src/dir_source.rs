@@ -118,7 +118,7 @@ impl DirSource {
                 status TEXT NOT NULL,
                 last_hash TEXT,
                 mode INTEGER NOT NULL,
-                metadata TEXT NOT NULL  -- JSON格式存储额外的metadata
+                metadata TEXT NOT NULL 
             )",
             [],
         )?;

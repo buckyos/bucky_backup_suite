@@ -1,8 +1,8 @@
+#![allow(unused)]
 use std::ops::Range;
 use generic_array::typenum::{U16, U32};
 use generic_array::GenericArray;
 use aes::Aes256;
-use sha2::{Sha256, Digest}; 
 use cipher::{BlockSizeUser, Iv, KeyIvInit};
 use chunk::*;
 

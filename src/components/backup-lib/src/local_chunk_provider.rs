@@ -8,7 +8,7 @@ use tokio::{
     fs::{self, File,OpenOptions}, 
     io::{self, AsyncRead,AsyncWrite, AsyncReadExt, AsyncWriteExt, AsyncSeek, AsyncSeekExt}, 
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, os::unix::process};
 use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::Arc;
@@ -41,7 +41,6 @@ impl LocalDirChunkProvider {
 #[async_trait]
 impl IBackupChunkSourceProvider for LocalDirChunkProvider {
 
-
     async fn get_source_info(&self) -> Result<Value> {
         let result = json!({
             "type": "local_chunk_source",
@@ -68,6 +67,18 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
             warn!("open_item: open file failed! {}", e.to_string());
             anyhow::anyhow!("{}",e)
         })?;      
+        Ok(Box::pin(file))
+    }
+
+    async fn open_item_chunk_reader(&self, item_id: &str,offset:u64)->Result<ChunkReader> {
+        let file_path = Path::new(&self.dir_path).join(item_id);
+        let mut file = File::open(&file_path).await.map_err(|e| {
+            warn!("open_item: open file failed! {}", e.to_string());
+            anyhow::anyhow!("{}",e)
+        })?;      
+        if offset > 0 {
+            file.seek(SeekFrom::Start(offset)).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        }
         Ok(Box::pin(file))
     }
 
@@ -116,6 +127,8 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
                     size: metadata.len(),
                     last_modify_time: metadata.modified()?.elapsed()?.as_secs(),
                     create_time: now,
+                    have_cache: false,
+                    progress: "".to_string(),
                 };
                 backup_items.push(backup_item);
             }
@@ -138,7 +151,7 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         Ok(())
     }
 
-    async fn restore_item_by_reader(&self, item: &BackupItem,mut chunk_reader:ChunkReader,restore_config:&RestoreConfig)->Result<()> {
+    async fn open_writer_for_restore(&self, item: &BackupItem,restore_config:&RestoreConfig,offset:u64)->Result<(ChunkWriter,u64)> {
         let restore_url:Url = Url::parse(restore_config.restore_location_url.as_str())
            .map_err(|e| anyhow::anyhow!("{}",e))?;
 
@@ -148,9 +161,30 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
 
         let restore_path = restore_url.path();
         let file_path = Path::new(&restore_path).join(&item.item_id);
-        //TODO: use ndn-client to get chunk would be better
+        let mut real_offset = offset;
 
-        Ok(())
+        let file_meta = fs::metadata(&file_path).await.map_err(|e| {
+            warn!("restore_item_by_reader: get metadata failed! {}", e.to_string());
+            anyhow::anyhow!("{}",e)
+        })?;
+
+        let file_size = file_meta.len();
+        if offset > file_size {
+            real_offset = file_size;
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .open(&file_path)
+            .await
+            .map_err(|e| {
+                warn!("open file failed! {}", e.to_string());
+                anyhow::anyhow!("{}",e)
+            })?;
+
+        if offset > 0 {
+            file.seek(SeekFrom::Start(real_offset)).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        }
+        Ok((Box::pin(file),real_offset))
     }
 }
 
@@ -202,6 +236,17 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
     async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>)->Result<()> {
         self.chunk_store.put_chunklist(chunk_list,false).await.map_err(|e| anyhow::anyhow!("{}",e))
     }
+
+    async fn open_chunk_writer(&self, chunk_id: &ChunkId,offset:u64,size:u64)->Result<(ChunkWriter,u64)> {
+        let (mut writer,process) = self.chunk_store.open_chunk_writer(chunk_id,size,offset)
+            .await.map_err(|e| anyhow::anyhow!("{}",e))?;
+        let json_value : serde_json::Value = serde_json::from_str(&process).map_err(|e| anyhow::anyhow!("{}",e))?;
+        let offset = json_value.get("pos").unwrap().as_u64().unwrap();
+        Ok((writer,offset))
+    }
+    async fn complete_chunk_writer(&self, chunk_id: &ChunkId)->Result<()> {
+        self.chunk_store.complete_chunk_writer(chunk_id).await.map_err(|e| anyhow::anyhow!("{}",e))
+    }
     //上传一个完整的chunk,允许target自己决定怎么使用reader
     async fn put_chunk(&self, chunk_id: &ChunkId, chunk_data: &[u8])->Result<()> {
         self.chunk_store.put_chunk(chunk_id,chunk_data,false).await.map_err(|e| anyhow::anyhow!("{}",e))
@@ -227,23 +272,13 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         self.chunk_store.link_object(&from_obj_id,&to_obj_id).await.map_err(|e| anyhow::anyhow!("{}",e))
     }
 
-    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,quick_hash:Option<ChunkId>)->Result<ChunkReader> {
-        let reader = self.chunk_store.open_chunk_reader(&chunk_id,SeekFrom::Start(0)).await;
+    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,offset:u64)->Result<ChunkReader> {
+        let reader = self.chunk_store.open_chunk_reader(&chunk_id,SeekFrom::Start(offset)).await;
         if reader.is_ok() {
             let (reader,content_length) = reader.unwrap();
             return Ok(reader);
         }
 
-        if quick_hash.is_some() {
-            let quick_hash = quick_hash.unwrap();
-            let reader = self.chunk_store.open_chunk_reader(&quick_hash,SeekFrom::Start(0)).await;
-            if reader.is_err() {
-                return Err(anyhow::anyhow!("no chunk found for chunk_id: {} or quick_hash: {}", chunk_id.to_string(), quick_hash.to_string()));
-            }
-            let (reader,content_length) = reader.unwrap();
-            return Ok(reader);
-        }
-        
         Err(anyhow::anyhow!("no chunk found for chunk_id: {}", chunk_id.to_string()))
     }
 

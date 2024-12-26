@@ -452,12 +452,12 @@ impl<T: 'static + ChunkTarget + Clone> ChunkTarget for SectorStore<T> {
     }
 
     async fn get(&self, chunk_id: &str) -> ChunkResult<Option<ChunkStatus>> {
-        let row = sqlx::query_as::<_, ChunkRow>("SELECT * FROM chunks WHERE id = ?")
+        let _row = sqlx::query_as::<_, ChunkRow>("SELECT * FROM chunks WHERE id = ?")
             .bind(chunk_id).fetch_optional(self.sql_pool()).await?;
         todo!()
     }
 
-    async fn delete(&self, chunk_id: &str) -> ChunkResult<()> {
+    async fn delete(&self, _chunk_id: &str) -> ChunkResult<()> {
         Ok(())
     }
 

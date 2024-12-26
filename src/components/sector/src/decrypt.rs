@@ -1,4 +1,5 @@
-use std::{collections::LinkedList, future::Future, io::SeekFrom, ops::Range, pin::Pin, sync::{Arc, Mutex}, task::{Context, Poll}};
+
+use std::{collections::LinkedList, future::Future, io::SeekFrom, ops::Range, pin::Pin, sync::{Mutex}, task::{Context, Poll}};
 use aes::Aes256;
 use tokio::io::{AsyncRead, AsyncSeek, ReadBuf, AsyncSeekExt, AsyncReadExt};
 use cipher::{Block, BlockDecryptMut, BlockSizeUser};
