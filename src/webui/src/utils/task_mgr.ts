@@ -52,6 +52,7 @@ export class BackupTaskManager {
                     return Promise.resolve();
                 }
             })
+            
         );
     }
 

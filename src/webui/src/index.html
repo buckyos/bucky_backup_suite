@@ -14,19 +14,20 @@
         <div id="main_frame">
             <div id="toolbar" style="display: flex; justify-content: space-between; align-items: center;padding: 10px;">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                    <sl-dropdown>
-                        <sl-button slot="trigger" variant="primary">New Backup</sl-button>
+                    <sl-dropdown id = "create-dropdown">
+                        <sl-button slot="trigger" variant="primary">New Task</sl-button>
                         <sl-menu>
                             <sl-menu-item value="newbackup">New Backup<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
+                            <sl-menu-item value="restore">Restore<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
                         </sl-menu>
                     </sl-dropdown>
                     <sl-button-group label="Control">
                         <sl-icon-button style="font-size: 1.5rem;" name="play" id="resume-button"></sl-icon-button>
-                        <sl-icon-button style="font-size: 1.5rem;" name="pause"></sl-icon-button>
+                        <sl-icon-button style="font-size: 1.5rem;" name="pause" id="pause-all-button"></sl-icon-button>
                         <sl-icon-button style="font-size: 1.5rem;" name="gear"></sl-icon-button>
                     </sl-button-group>
                 </div>
-                <sl-dropdown>
+                <sl-dropdown id = "panel-type-dropdown">
                     <sl-button slot="trigger" caret>Home</sl-button>
                     <sl-menu>
                         <sl-menu-item value="home">Home<sl-icon slot="prefix" name="house"></sl-icon></sl-menu-item>

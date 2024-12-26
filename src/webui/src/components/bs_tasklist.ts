@@ -3,11 +3,12 @@ import {LitElement, html} from 'lit';
 import {customElement, property} from 'lit/decorators.js';
 import { BSTaskPanel } from './bs_task_panel';
 
+export type TaskFilter = "all" | "running" | "paused";
 
 @customElement('bs-tasklist')
 export class BSTaskList extends LitElement {
-    filter: string;
-    private task_timer;
+    filter: TaskFilter;
+    private task_timer: number | null;
     private current_task_list:Map<string, BSTaskPanel> = new Map();
 
     constructor() {
@@ -18,11 +19,14 @@ export class BSTaskList extends LitElement {
         
     }
 
-    setTaskFilter(filter: string) {
-        this.filter = filter;
+    setTaskFilter(filter: TaskFilter) {
+        if (this.filter != filter) {
+            this.filter = filter;
+            this.reload_tasklist();
+        }
     }
 
-    async relaod_tasklist() {
+    async reload_tasklist() {
         let task_list = await taskManager.listBackupTasks(this.filter);
         this.current_task_list.clear();
         //clean all task panel
@@ -40,7 +44,7 @@ export class BSTaskList extends LitElement {
     }
 
     firstUpdated() {
-        this.relaod_tasklist();
+        this.reload_tasklist();
         //创建Timer刷新task的状态
         this.task_timer = setInterval(async () => {
             //遍历current_task_list
@@ -56,7 +60,7 @@ export class BSTaskList extends LitElement {
         }, 1000);
         taskManager.addTaskEventListener(async (event, data) => {
             if(event == "resume_task" || event == "pause_task" || event == "create_task") {
-                await this.relaod_tasklist();
+                await this.reload_tasklist();
                 console.log("task list reloaded");
             }
         });
