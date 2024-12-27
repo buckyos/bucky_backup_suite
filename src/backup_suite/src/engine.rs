@@ -228,9 +228,11 @@ impl BackupEngine {
 
         let checkpoint2 = checkpoint.clone();
         let checkpoint3 = checkpoint.clone();
+        let checkpoint4 = checkpoint.clone();
 
         let real_backup_task = backup_task.lock().await;
         let task_id = real_backup_task.taskid.clone();
+        let task_id2 = task_id.clone();
         let task_session = Arc::new(Mutex::new(BackupTaskSession::new(task_id)));
         drop(real_backup_task);
         let task_session_eval = task_session.clone();
@@ -238,23 +240,41 @@ impl BackupEngine {
 
         let engine_prepare = self.clone();
         let source_prepare_thread = tokio::spawn(async move {
-            BackupEngine::backup_chunk_source_prepare_thread(engine_prepare,source,
+            let prepare_result = BackupEngine::backup_chunk_source_prepare_thread(engine_prepare,source,
                 backup_task.clone(),task_session.clone(),checkpoint.clone()).await;
+            if prepare_result.is_err() {
+                error!("prepare thread error: {}", prepare_result.err().unwrap());
+            }
         });
         let engine_eval = self.clone();
 
         let eval_thread = tokio::spawn(async move {
-            BackupEngine::backup_chunk_source_eval_thread(engine_eval,source2,target,
+            let eval_result =BackupEngine::backup_chunk_source_eval_thread(engine_eval,source2,target,
                 backup_task_eval,task_session_eval,checkpoint2).await;
+            if eval_result.is_err() {
+                error!("eval thread error: {}", eval_result.err().unwrap());
+            }
         });
 
         let engine_transfer = self.clone();
         let transfer_thread = tokio::spawn(async move {
-            BackupEngine::backup_work_thread(engine_transfer,source3,target2,
+            let transfer_result = BackupEngine::backup_work_thread(engine_transfer,source3,target2,
                 backup_task_trans,task_session_trans,checkpoint3).await;
+            if transfer_result.is_err() {
+                error!("transfer thread error: {}", transfer_result.err().unwrap());
+            }
         });
 
         tokio::join!(source_prepare_thread, eval_thread, transfer_thread);
+        let is_all_done = self.task_db.check_is_checkpoint_items_all_done(&checkpoint_id)?;
+        if is_all_done {
+            info!("checkpoint {} is all done, set to DONE", checkpoint_id);
+            let mut real_checkpoint = checkpoint4.lock().await;
+            real_checkpoint.state = CheckPointState::Done;
+            self.task_db.update_checkpoint(&real_checkpoint)?;
+        }
+        info!("backup task {} is done, main thread exit", task_id2);
+        
         Ok(())
     }
 
@@ -329,6 +349,7 @@ impl BackupEngine {
         let mut real_checkpoint = checkpoint.lock().await;
         real_checkpoint.state = CheckPointState::Prepared;
         engine.task_db.update_checkpoint(&real_checkpoint)?;
+        drop(real_checkpoint);
         Ok(())
     }
 
@@ -442,7 +463,7 @@ impl BackupEngine {
                 if next_item.is_none() {
                     next_item = eval_queue.pop();
                 }
-
+               
                 if next_item.is_some() {
                     //process item
                     debug!("eval thread process item");
@@ -450,20 +471,17 @@ impl BackupEngine {
                     let mut item_chunk_id = None;
                     if backup_item.chunk_id.is_some() {
                         item_chunk_id = Some(ChunkId::new(backup_item.chunk_id.as_ref().unwrap()).unwrap());
-                    } else {
-                        if backup_item.size > SMALL_CHUNK_SIZE && !engine.is_strict_mode {
-                            let item_reader = source.open_item(&backup_item.item_id).await;
-                            if item_reader.is_err() {
-                                warn!("open item {} reader error", backup_item.item_id);
-                                continue;
-                            }
-                            let mut item_reader = item_reader.unwrap();
-                            let quick_hash = calc_quick_hash(&mut item_reader, Some(backup_item.size)).await?;
-                            info!("calc quick hash done, quick_hash: {}", quick_hash.to_string());
-                            backup_item.quick_hash = Some(quick_hash.to_string());
-                            //backup_item.chunk_id = Some(quick_hash.to_string());
-                            item_chunk_id = Some(quick_hash);
+                    } else if backup_item.size > SMALL_CHUNK_SIZE && !engine.is_strict_mode {
+                        let item_reader = source.open_item(&backup_item.item_id).await;
+                        if item_reader.is_err() {
+                            warn!("open item {} reader error", backup_item.item_id);
+                            continue;
                         }
+                        let mut item_reader = item_reader.unwrap();
+                        let quick_hash = calc_quick_hash(&mut item_reader, Some(backup_item.size)).await?;
+                        info!("calc quick hash done, quick_hash: {}", quick_hash.to_string());
+                        backup_item.quick_hash = Some(quick_hash.to_string());
+                        item_chunk_id = Some(quick_hash);
                     }
 
                     if item_chunk_id.is_some() {
@@ -471,9 +489,9 @@ impl BackupEngine {
                         debug!("check chunk {} is exist ...", real_chunk_id.to_string());
                         let (is_exist,chunk_size) = target.is_chunk_exist(&real_chunk_id).await?;
                         if is_exist {
-                            info!("item {} 's chunk_id: {}, is exist! will skip", backup_item.item_id, real_chunk_id.to_string());
                             backup_item.state = BackupItemState::Done;
                             engine.task_db.update_backup_item(checkpoint_id.as_str(), &backup_item)?;
+                            info!("item {} 's chunk_id: {}, is exist! will skip", backup_item.item_id, real_chunk_id.to_string());
                             continue;
                         }
                     }
@@ -507,6 +525,7 @@ impl BackupEngine {
         let mut real_checkpoint = checkpoint.lock().await;
         real_checkpoint.state = CheckPointState::Evaluated;
         engine.task_db.update_checkpoint(&real_checkpoint)?;
+        drop(real_checkpoint);
         info!("eval thread exit,checpoint {} is evaluated", checkpoint_id);
         Ok(())
     }
@@ -521,6 +540,7 @@ impl BackupEngine {
         info!("transfer thread start");
         loop {
             let real_checkpoint = checkpoint.lock().await;
+            let checkpoint_id = real_checkpoint.checkpoint_id.clone();
             if real_checkpoint.state == CheckPointState::Done {
                 info!("checkpoint {} is done, exit transfer thread", real_checkpoint.checkpoint_id);
                 drop(real_checkpoint);
@@ -559,7 +579,7 @@ impl BackupEngine {
 
                 if next_item.is_some() {
                     debug!("transfer thread process item");
-                    //do transfer 实现的核心目标是:
+                    //do transfer 实现的核���目标是:
                     // 1) 实现"只IO"一次的目标,尽量释放chunk piece cache
                     // 2) 减少临时文件(diff)的占用,尽快完成并删除                
                     let backup_item = next_item.unwrap();
@@ -570,6 +590,8 @@ impl BackupEngine {
                     let open_result = target.open_chunk_writer(&chunk_id,0,backup_item.size).await;
                     if open_result.is_err() {
                         info!("chunk {} already exist, skip upload", chunk_id.to_string());
+                        engine.task_db.update_backup_item_state(checkpoint_id.as_str(), &backup_item.item_id, BackupItemState::Done)?;
+                        
                         let mut real_task = backup_task.lock().await;
                         target.complete_chunk_writer(&chunk_id).await?;
                         real_task.completed_item_count += 1;
@@ -690,6 +712,8 @@ impl BackupEngine {
         let mut real_checkpoint = checkpoint.lock().await;
         real_checkpoint.state = CheckPointState::Done;
         engine.task_db.update_checkpoint(&real_checkpoint)?;
+        info!("checkpoint {} is done", real_checkpoint.checkpoint_id);
+        drop(real_checkpoint);
         
         let mut real_task = backup_task.lock().await;
         real_task.state = TaskState::Done;
@@ -707,7 +731,8 @@ impl BackupEngine {
         }
 
         let checkpoint = self.task_db.load_checkpoint_by_id(check_point_id)?;
-        let new_task = WorkTask::new(plan_id, check_point_id, TaskType::Restore);
+        let mut new_task = WorkTask::new(plan_id, check_point_id, TaskType::Restore);
+        new_task.set_restore_config(restore_config);
         let new_task_id = new_task.taskid.clone();
         self.task_db.create_task(&new_task)?;
         info!("create new restore task: {:?}", new_task);
@@ -719,12 +744,14 @@ impl BackupEngine {
     fn check_all_check_point_exist(&self,checkpoint_id: &str) -> Result<bool> {
         let checkpoint = self.task_db.load_checkpoint_by_id(checkpoint_id)?;
         if checkpoint.state != CheckPointState::Done {
+            info!("checkpoint {} is not done! cannot restore", checkpoint_id);
             return Ok(false);
         }
 
         if checkpoint.depend_checkpoint_id.is_none() {
             return Ok(true);
         }
+        debug!("checkpoint {} depend checkpoint: {}", checkpoint_id, checkpoint.depend_checkpoint_id.as_ref().unwrap());
         let parent_checkpoint_id = checkpoint.depend_checkpoint_id.as_ref().unwrap();
         let result = self.check_all_check_point_exist(parent_checkpoint_id)?;
         Ok(result)
@@ -769,6 +796,7 @@ impl BackupEngine {
                     create_time: now,
                     have_cache: false,
                     progress: "".to_string(),
+                    diff_info: None,
                 };
                 restore_item_list.push(restore_item);
                 total_size += item.size;
@@ -976,7 +1004,7 @@ impl BackupEngine {
                 real_restore_task.state = TaskState::Done;
             }
             engine.task_db.update_task(&real_restore_task);
-        });
+        }); 
         
         Ok(())
     }
@@ -1118,18 +1146,38 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_c2c_restore_task() {
+        std::env::set_var("BUCKY_LOG", "debug");
         buckyos_kit::init_logging("bucky_backup_test");
-        let tempdb = "bucky_backup.db";
-        //delete db file if exists
-        if std::path::Path::new(tempdb).exists() {
-            std::fs::remove_file(tempdb).unwrap();
-        }
 
         let engine = BackupEngine::new();
         engine.start().await.unwrap();
-        let checkpoint_id = "testc2c_1".to_string();
-        //let task_id = engine.create_restore_task(&checkpoint_id, None, None).await.unwrap();
-        //engine.resume_work_task(&task_id).await.unwrap();
+
+        let checkpoint_id = "chk_10e12f32-fa20-44e0-b3a7-4e07baafdc9f".to_string();
+        let plan_id = "c2c-file:///tmp/test-file:///tmp/bucky_backup_result".to_string();
+        info!("checkpoint_id: {}", checkpoint_id);
+        info!("plan_id: {}", plan_id);
+        let restore_config = RestoreConfig {
+            restore_location_url: "file:///tmp/restore_result".to_string(),
+            is_clean_restore: true,
+            params: None,
+        };
+
+        let task_id = engine.create_restore_task(&plan_id, &checkpoint_id, restore_config).await.unwrap();
+        info!("restore task_id: {}", task_id);
+        engine.resume_restore_task(&task_id).await.unwrap();
+        let mut step = 0;
+        loop {
+            step += 1;
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let task_info = engine.get_task_info(&task_id).await.unwrap();
+            if task_info.state == TaskState::Done {
+                println!("restore task done");
+                break;
+            }
+            if step > 600 {
+                panic!("task run too long");
+            }
+        }
     }
 }
 

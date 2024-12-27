@@ -1,9 +1,8 @@
 #![allow(unused)]
-use anyhow::Ok;
+
 use serde_json::Value;
 use async_trait::async_trait;
 use anyhow::Result;
-use log::info;
 use tokio::{
     fs::{self, File,OpenOptions}, 
     io::{self, AsyncRead,AsyncWrite, AsyncReadExt, AsyncWriteExt, AsyncSeek, AsyncSeekExt}, 
@@ -16,11 +15,10 @@ use std::pin::Pin;
 use tokio::sync::Mutex;
 use serde_json::json;
 use url::Url;
+use ndn_lib::{ChunkReader,ChunkWriter,NamedDataStore,ChunkId};
 use ndn_lib::{ChunkHasher, ChunkReadSeek};
 use log::*;
 
-
-use ndn_lib::{ChunkReader,ChunkWriter,NamedDataStore,ChunkId};
 use crate::provider::*;
 
 //待备份的chunk都以文件的形式平摊的保存目录下
@@ -53,41 +51,38 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         return format!("file:///{}",self.dir_path);
     }
 
-    async fn lock_for_backup(&self,source_url: &str)->Result<()> {
-        Ok(())
-    }
-    
-    async fn unlock_for_backup(&self,source_url: &str)->Result<()> {
-        Ok(())
-    }
-
-    async fn open_item(&self, item_id: &str)->Result<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>> {
+    async fn open_item(&self, item_id: &str)->BackupResult<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>> {
         let file_path = Path::new(&self.dir_path).join(item_id);
-        let file = File::open(&file_path).await.map_err(|e| {
-            warn!("open_item: open file failed! {}", e.to_string());
-            anyhow::anyhow!("{}",e)
-        })?;      
+        let file = OpenOptions::new()
+            .read(true)
+            .open(&file_path)
+            .await
+            .map_err(|e| {
+                warn!("open_item: open file failed! {}", e.to_string());
+                BuckyBackupError::TryLater(e.to_string())
+            })?;
+
         Ok(Box::pin(file))
     }
 
-    async fn open_item_chunk_reader(&self, item_id: &str,offset:u64)->Result<ChunkReader> {
+    async fn open_item_chunk_reader(&self, item_id: &str,offset:u64)->BackupResult<ChunkReader> {
         let file_path = Path::new(&self.dir_path).join(item_id);
-        let mut file = File::open(&file_path).await.map_err(|e| {
-            warn!("open_item: open file failed! {}", e.to_string());
-            anyhow::anyhow!("{}",e)
-        })?;      
+        let mut file = OpenOptions::new()
+            .read(true)
+            .open(&file_path)
+            .await
+            .map_err(|e| {
+                warn!("open_item_chunk_reader: open file failed! {}", e.to_string());
+                BuckyBackupError::TryLater(e.to_string())
+            })?;      
+    
         if offset > 0 {
-            file.seek(SeekFrom::Start(offset)).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+            file.seek(SeekFrom::Start(offset)).await.map_err(|e| {
+                warn!("open_item_chunk_reader: seek file failed! {}", e.to_string());
+                BuckyBackupError::TryLater(e.to_string())
+            })?;
         }
         Ok(Box::pin(file))
-    }
-
-    async fn get_item_data(&self, item_id: &str)->Result<Vec<u8>> {
-        let file_path = Path::new(&self.dir_path).join(item_id);
-        let mut file = File::open(&file_path).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-        Ok(buffer)
     }
     //async fn close_item(&self, item_id: &str)->Result<()>;
     async fn on_item_backuped(&self, item_id: &str)->Result<()> {
@@ -98,25 +93,55 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         true
     }
 
-    async fn prepare_items(&self)->Result<(Vec<BackupItem>,bool)> {
+    async fn prepare_items(&self)->BackupResult<(Vec<BackupItem>,bool)> {
         //遍历dir_path目录下的所有文件，生成BackupItem列表
 
         let mut backup_items = Vec::new();
 
         // Read the directory
-        let mut entries = fs::read_dir(&self.dir_path).await?;
+        let mut entries = fs::read_dir(&self.dir_path).await
+            .map_err(|e| {
+                warn!("prepare_items error:{}",e.to_string());
+                BuckyBackupError::Internal(e.to_string())
+            })?;
+
         let now = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        //info!("prepare items, dir_path: {}", self.dir_path);
-        while let Some(entry) = entries.next_entry().await? {
+
+        loop {
+            let entry = entries.next_entry().await
+                .map_err(|e| {
+                    warn!("prepare_items error:{}",e.to_string());
+                    BuckyBackupError::Internal(e.to_string())
+                })?;
+
+            if entry.is_none() {
+                break;
+            }
+            let entry = entry.unwrap();
             let path = entry.path();
-            //info!("prepare item: {:?}", path);
-            // Check if the entry is a file
             if path.is_file() {
                 // Create a BackupItem for each file
-                let metadata = fs::metadata(&path).await?;
+                let metadata = fs::metadata(&path).await
+                    .map_err(|e| {
+                        warn!("prepare_items error:{}",e.to_string());
+                        BuckyBackupError::Internal(e.to_string())
+                    })?;
+                
+                let last_modify_time = metadata.modified()
+                    .map_err(|e| {
+                        warn!("prepare_items error:{}",e.to_string());
+                        BuckyBackupError::Internal(e.to_string())
+                    })?
+                    .elapsed()
+                    .map_err(|e| {
+                        warn!("prepare_items error:{}",e.to_string());
+                        BuckyBackupError::Internal(e.to_string())
+                    })?
+                    .as_secs();
+
                 info!("prepare item: {:?}, size: {}", path, metadata.len());
                 let backup_item = BackupItem {
                     item_id: path.file_name().unwrap().to_string_lossy().to_string(),
@@ -125,10 +150,11 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
                     quick_hash: None,
                     state: BackupItemState::New,
                     size: metadata.len(),
-                    last_modify_time: metadata.modified()?.elapsed()?.as_secs(),
+                    last_modify_time,
                     create_time: now,
                     have_cache: false,
                     progress: "".to_string(),
+                    diff_info:None,
                 };
                 backup_items.push(backup_item);
             }
@@ -151,12 +177,15 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         Ok(())
     }
 
-    async fn open_writer_for_restore(&self, item: &BackupItem,restore_config:&RestoreConfig,offset:u64)->Result<(ChunkWriter,u64)> {
+    async fn open_writer_for_restore(&self, item: &BackupItem,restore_config:&RestoreConfig,offset:u64)->BackupResult<(ChunkWriter,u64)> {
         let restore_url:Url = Url::parse(restore_config.restore_location_url.as_str())
-           .map_err(|e| anyhow::anyhow!("{}",e))?;
+           .map_err(|e| {
+            warn!("open_writer_for_restore error:{}",e.to_string());
+            BuckyBackupError::Failed(e.to_string())
+           })?;
 
         if restore_url.scheme() != "file" {
-            return Err(anyhow::anyhow!("restore_url scheme must be file"));
+            return Err(BuckyBackupError::Failed("restore_url scheme must be file".to_string()));
         }
 
         let restore_path = restore_url.path();
@@ -165,7 +194,7 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
 
         let file_meta = fs::metadata(&file_path).await.map_err(|e| {
             warn!("restore_item_by_reader: get metadata failed! {}", e.to_string());
-            anyhow::anyhow!("{}",e)
+            BuckyBackupError::TryLater(e.to_string())
         })?;
 
         let file_size = file_meta.len();
@@ -178,11 +207,14 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
             .await
             .map_err(|e| {
                 warn!("open file failed! {}", e.to_string());
-                anyhow::anyhow!("{}",e)
+                BuckyBackupError::TryLater(e.to_string())
             })?;
 
         if offset > 0 {
-            file.seek(SeekFrom::Start(real_offset)).await.map_err(|e| anyhow::anyhow!("{}",e))?;
+            file.seek(SeekFrom::Start(real_offset)).await.map_err(|e| {
+                warn!("seek file failed! {}", e.to_string());
+                BuckyBackupError::TryLater(e.to_string())
+            })?;
         }
         Ok((Box::pin(file),real_offset))
     }
@@ -225,61 +257,60 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         Ok(())
     }
     
+
+    // //查询多个chunk的状态
+    // async fn query_chunk_state_by_list(&self, chunk_list: &mut Vec<ChunkId>)->Result<()> {
+    //     unimplemented!()
+    // }
+
+    // async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>)->Result<()> {
+    //     self.chunk_store.put_chunklist(chunk_list,false).await.map_err(|e| anyhow::anyhow!("{}",e))
+    // }
     async fn is_chunk_exist(&self, chunk_id: &ChunkId)->Result<(bool,u64)> {
         self.chunk_store.is_chunk_exist(chunk_id,None).await.map_err(|e| anyhow::anyhow!("{}",e))
     }
-    //查询多个chunk的状态
-    async fn query_chunk_state_by_list(&self, chunk_list: &mut Vec<ChunkId>)->Result<()> {
-        unimplemented!()
-    }
 
-    async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>)->Result<()> {
-        self.chunk_store.put_chunklist(chunk_list,false).await.map_err(|e| anyhow::anyhow!("{}",e))
-    }
-
-    async fn open_chunk_writer(&self, chunk_id: &ChunkId,offset:u64,size:u64)->Result<(ChunkWriter,u64)> {
+    async fn open_chunk_writer(&self, chunk_id: &ChunkId,offset:u64,size:u64)->BackupResult<(ChunkWriter,u64)> {
         let (mut writer,process) = self.chunk_store.open_chunk_writer(chunk_id,size,offset)
-            .await.map_err(|e| anyhow::anyhow!("{}",e))?;
-        let json_value : serde_json::Value = serde_json::from_str(&process).map_err(|e| anyhow::anyhow!("{}",e))?;
+            .await.map_err(|e| {
+                warn!("open_chunk_writer error:{}",e.to_string());
+                BuckyBackupError::TryLater(e.to_string())
+            })?;
+        let json_value : serde_json::Value = serde_json::from_str(&process).map_err(|e| {
+            warn!("can't load process info:{}",e.to_string());
+            BuckyBackupError::Failed(e.to_string())
+        })?;
         let offset = json_value.get("pos").unwrap().as_u64().unwrap();
         Ok((writer,offset))
     }
-    async fn complete_chunk_writer(&self, chunk_id: &ChunkId)->Result<()> {
-        self.chunk_store.complete_chunk_writer(chunk_id).await.map_err(|e| anyhow::anyhow!("{}",e))
-    }
-    //上传一个完整的chunk,允许target自己决定怎么使用reader
-    async fn put_chunk(&self, chunk_id: &ChunkId, chunk_data: &[u8])->Result<()> {
-        self.chunk_store.put_chunk(chunk_id,chunk_data,false).await.map_err(|e| anyhow::anyhow!("{}",e))
-    }
-    async fn append_chunk_data(&self, chunk_id: &ChunkId, offset_from_begin:u64,chunk_data: &[u8], is_completed: bool,chunk_size:Option<u64>)->Result<()> {
-        let (mut writer,offset) = self.chunk_store.open_chunk_writer(chunk_id,chunk_size.unwrap_or(0),offset_from_begin).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-        writer.write_all(chunk_data).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-        if is_completed {
-           self.chunk_store.complete_chunk_writer(chunk_id).await.map_err(|e| anyhow::anyhow!("{}",e))?;
-        }
-        Ok(())
-    }
-    //使用reader上传，允许target自己决定怎么使用reader
-    //通过上传chunk diff文件来创建新chunk
-    //async fn patch_chunk(&self, chunk_id: &str, chunk_reader: ItemReader)->Result<()>;
 
-    //async fn remove_chunk(&self, chunk_list: Vec<String>)->Result<()>;
+    async fn complete_chunk_writer(&self, chunk_id: &ChunkId)->BackupResult<()> {
+        self.chunk_store.complete_chunk_writer(chunk_id).await.map_err(|e| {
+            warn!("complete_chunk_writer error:{}",e.to_string());
+            BuckyBackupError::TryLater(e.to_string())
+        })
+    }
+
+
     //说明两个chunk id是同一个chunk.实现者可以自己决定是否校验
     //link成功后，查询target_chunk_id和new_chunk_id的状态，应该都是exist
-    async fn link_chunkid(&self, from_chunk_id: &ChunkId, to_chunk_id: &ChunkId)->Result<()> {
+    async fn link_chunkid(&self, from_chunk_id: &ChunkId, to_chunk_id: &ChunkId)->BackupResult<()> {
         let from_obj_id = from_chunk_id.to_obj_id();
         let to_obj_id = to_chunk_id.to_obj_id();
-        self.chunk_store.link_object(&from_obj_id,&to_obj_id).await.map_err(|e| anyhow::anyhow!("{}",e))
+        self.chunk_store.link_object(&from_obj_id,&to_obj_id).await.map_err(|e| {
+            warn!("link_chunkid error:{}",e.to_string());
+            BuckyBackupError::TryLater(e.to_string())
+        })
     }
 
-    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,offset:u64)->Result<ChunkReader> {
+    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,offset:u64)->BackupResult<ChunkReader> {
         let reader = self.chunk_store.open_chunk_reader(&chunk_id,SeekFrom::Start(offset)).await;
         if reader.is_ok() {
             let (reader,content_length) = reader.unwrap();
             return Ok(reader);
         }
-
-        Err(anyhow::anyhow!("no chunk found for chunk_id: {}", chunk_id.to_string()))
+        warn!("no chunk found for chunk_id: {}", chunk_id.to_string());
+        Err(BuckyBackupError::Failed(format!("no chunk found for chunk_id: {}", chunk_id.to_string())))
     }
 
 }

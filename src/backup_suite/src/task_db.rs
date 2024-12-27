@@ -289,7 +289,7 @@ pub struct WorkTask {
 
 impl WorkTask {
     pub fn new(owner_plan_id: &str, checkpoint_id: &str, task_type: TaskType) -> Self {
-        let new_id = format!("chk_{}" ,Uuid::new_v4());
+        let new_id = format!("task_{}" ,Uuid::new_v4());
         Self {
             taskid: new_id.to_string(),
             task_type,
@@ -305,6 +305,10 @@ impl WorkTask {
             wait_transfer_item_count: 0,
             restore_config: None,
         }
+    }
+
+    pub fn set_restore_config(&mut self, restore_config: RestoreConfig) {
+        self.restore_config = Some(restore_config);
     }
 
     pub fn to_json_value(&self) -> Value {
@@ -395,7 +399,7 @@ impl BackupTaskDb {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS checkpoints (
                 checkpoint_id TEXT PRIMARY KEY,
-                parent_checkpoint_id TEXT,
+                depend_checkpoint_id TEXT,
                 prev_checkpoint_id TEXT,
                 state TEXT NOT NULL,
                 owner_plan TEXT NOT NULL,
@@ -433,6 +437,7 @@ impl BackupTaskDb {
                 last_modify_time INTEGER NOT NULL,
                 create_time INTEGER NOT NULL,
                 progress TEXT,
+                diff_info TEXT,
                 PRIMARY KEY (item_id, checkpoint_id)
             )",
             [],
@@ -656,8 +661,9 @@ impl BackupTaskDb {
                     size,
                     last_modify_time,
                     create_time,
-                    progress
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    progress,
+                    diff_info
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     item.item_id,
                     checkpoint_id,
@@ -669,6 +675,7 @@ impl BackupTaskDb {
                     item.last_modify_time,
                     item.create_time,
                     item.progress,
+                    item.diff_info.clone().unwrap_or("".to_string()),
                 ],
             )?;
         }
@@ -743,11 +750,23 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
-                    last_modify_time, create_time, progress
+                    last_modify_time, create_time, progress, diff_info
              FROM backup_items WHERE checkpoint_id = ?"
         )?;
         
+        
         let items = stmt.query_map(params![checkpoint_id], |row| {
+            let diff_info: Option<String> = row.get(9)?;
+            let diff_info = if diff_info.is_none() {
+                None
+            } else {
+                let diff_info_str = diff_info.unwrap();
+                if diff_info_str.is_empty() {
+                    None
+                } else {
+                    Some(diff_info_str)
+                }
+            };
             Ok(BackupItem {
                 item_id: row.get(0)?,
                 item_type: row.get(1)?,
@@ -759,6 +778,7 @@ impl BackupTaskDb {
                 create_time: row.get(7)?,
                 have_cache: false,
                 progress: row.get(8)?,
+                diff_info,
             })
         })?
         .collect::<SqlResult<Vec<BackupItem>>>()?;
@@ -770,7 +790,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
-                    last_modify_time, create_time, progress
+                    last_modify_time, create_time, progress, diff_info
              FROM backup_items 
              WHERE checkpoint_id = ? AND state = ?"
         )?;
@@ -789,6 +809,7 @@ impl BackupTaskDb {
                     create_time: row.get(7)?,
                     have_cache: false,
                     progress: row.get(8)?,
+                    diff_info: Some(row.get(9)?),
                 })
             }
         )?
@@ -801,7 +822,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, size, 
-                    last_modify_time, create_time, progress
+                    last_modify_time, create_time, progress, diff_info
              FROM backup_items 
              WHERE checkpoint_id = ? AND state = ?"
         )?;
@@ -823,12 +844,24 @@ impl BackupTaskDb {
                     create_time: row.get(7)?,
                     have_cache: false,
                     progress: row.get(8)?,
+                    diff_info: Some(row.get(9)?),
                 })
             }
         )?
         .collect::<SqlResult<Vec<BackupItem>>>()?;
 
         Ok(items)
+    }
+
+    pub fn check_is_checkpoint_items_all_done(&self, checkpoint_id: &str) -> Result<bool> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT COUNT(*) FROM backup_items WHERE checkpoint_id = ? AND state != 'DONE'"
+        )?;
+        let count: i32 = stmt.query_row(params![checkpoint_id], |row| {
+            row.get(0)
+        })?;
+        Ok(count == 0)
     }
 
     pub fn update_backup_item(&self, checkpoint_id: &str, item: &BackupItem) -> Result<()> {
@@ -843,8 +876,9 @@ impl BackupTaskDb {
                 size = ?5,
                 last_modify_time = ?6,
                 create_time = ?7,
-                progress = ?8
-            WHERE checkpoint_id = ?9 AND item_id = ?10",
+                progress = ?8,
+                diff_info = ?9
+            WHERE checkpoint_id = ?10 AND item_id = ?11",
             params![
                 item.item_type,
                 item.chunk_id,
@@ -854,6 +888,7 @@ impl BackupTaskDb {
                 item.last_modify_time,
                 item.create_time,
                 item.progress,
+                item.diff_info.clone().unwrap_or("".to_string()),
                 checkpoint_id,
                 item.item_id,
             ],
@@ -1083,7 +1118,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
-                    last_modify_time, create_time, progress
+                    last_modify_time, create_time, progress, diff_info
              FROM restore_items WHERE owner_taskid = ? AND state = ?"
         )?;
         
@@ -1099,6 +1134,7 @@ impl BackupTaskDb {
                 create_time: row.get(7)?,
                 have_cache: false,
                 progress: row.get(8)?,
+                diff_info: Some(row.get(9)?),
             })
         })?
         .collect::<SqlResult<Vec<BackupItem>>>()?;
@@ -1163,7 +1199,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT item_id, item_type, chunk_id, quick_hash, size, 
-                    last_modify_time, create_time, progress
+                    last_modify_time, create_time, progress, diff_info
              FROM restore_items 
              WHERE owner_taskid = ? AND state = ?"
         )?;
@@ -1185,6 +1221,7 @@ impl BackupTaskDb {
                     create_time: row.get(7)?,
                     have_cache: false,
                     progress: row.get(8)?,
+                    diff_info: Some(row.get(9)?),
                 })
             }
         )?
