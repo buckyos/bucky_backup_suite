@@ -609,8 +609,8 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
 
         // get and remove upload id in states
         if let Some(upload_id) = {
-            let mut states = self.upload_states.lock().unwrap();
-            states.remove(&key).map(|state| state.get_upload_id().unwrap().to_owned())
+            let states = self.upload_states.lock().unwrap();
+            states.get(&key).map(|state| state.get_upload_id().unwrap().to_owned())
         } {
             // 获取已上传的分片
             let parts = self.client
@@ -645,6 +645,10 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
                 .send()
                 .await
                 .map_err(|e| BuckyBackupError::Failed(format!("Failed to complete multipart upload: {}", e)))?;
+
+            // 删除状态
+            let mut states = self.upload_states.lock().unwrap();
+            states.remove(&key);
 
             Ok(())
         } else {
