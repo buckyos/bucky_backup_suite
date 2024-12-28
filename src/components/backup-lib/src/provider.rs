@@ -1,11 +1,28 @@
-use std::collections::HashMap;
+
 use rusqlite::types::{ToSql, FromSql, ValueRef};
 use async_trait::async_trait;
 use serde_json::Value;
-use anyhow::Result;
 use ndn_lib::{ChunkReader,ChunkWriter,ChunkReadSeek,ChunkId};
 use std::pin::Pin;
 use serde::{Serialize, Deserialize};
+use thiserror::Error;
+use anyhow::Result;
+
+#[derive(Error, Debug)]
+pub enum BuckyBackupError {
+    #[error("Internal error: {0}")]
+    Internal(String),
+    #[error("AlreadyDone: {0}")]
+    AlreadyDone(String),
+    #[error("TryLater: {0}")]
+    TryLater(String),
+    #[error("NeedProcess: {0}")]
+    NeedProcess(String),
+    #[error("Failed: {0}")]
+    Failed(String),
+}
+
+pub type BackupResult<T> = std::result::Result<T, BuckyBackupError>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RestoreConfig {
@@ -118,33 +135,24 @@ pub struct BackupItem {
     pub create_time:u64, //item在系统里的创建时间，不是文件的创建时间
     pub progress:String,
     pub have_cache:bool,//是否已经缓存到本地
+    pub diff_info:Option<String>,//diff信息
 }
-
-
-
 
 #[async_trait]
 pub trait IBackupChunkSourceProvider {
     //return json string?
     async fn get_source_info(&self) -> Result<Value>;
     fn get_source_url(&self)->String;
-    async fn lock_for_backup(&self,source_url: &str)->Result<()>;
-    async fn unlock_for_backup(&self,source_url: &str)->Result<()>;
-    async fn open_item(&self, item_id: &str)->Result<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>>;
-    async fn open_item_chunk_reader(&self, item_id: &str,offset:u64)->Result<ChunkReader>;
-    async fn get_item_data(&self, item_id: &str)->Result<Vec<u8>>;
-    //async fn close_item(&self, item_id: &str)->Result<()>;
-    async fn on_item_backuped(&self, item_id: &str)->Result<()>;
-
     fn is_local(&self)->bool;
-    //返回值的bool表示是否完成
-    async fn prepare_items(&self)->Result<(Vec<BackupItem>,bool)>;
+    //async fn lock_for_backup(&self,source_url: &str)->BackupResult<()>;
+    //async fn unlock_for_backup(&self,source_url: &str)->BackupResult<()>;
+    async fn prepare_items(&self)->BackupResult<(Vec<BackupItem>,bool)>;
+    async fn open_item(&self, item_id: &str)->BackupResult<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>>;
+    async fn open_item_chunk_reader(&self, item_id: &str,offset:u64)->BackupResult<ChunkReader>;
+    async fn on_item_backuped(&self, item_id: &str)->Result<()>;
+    //restore
     async fn init_for_restore(&self, restore_config:&RestoreConfig)->Result<()>;
-    
-    //系统倾向于认为restore一定是一个本地操作
-    //async fn restore_item_by_reader(&self, item: &BackupItem,mut chunk_reader:ChunkReader,restore_config:&RestoreConfig)->Result<()>;
-    async fn open_writer_for_restore(&self, item: &BackupItem,restore_config:&RestoreConfig,offset:u64)->Result<(ChunkWriter,u64)>;
-
+    async fn open_writer_for_restore(&self, item: &BackupItem,restore_config:&RestoreConfig,offset:u64)->BackupResult<(ChunkWriter,u64)>;
 }
 
 
@@ -163,24 +171,14 @@ pub trait IBackupChunkTargetProvider {
     //async fn get_support_chunkid_types(&self)->Result<Vec<String>>;
     
     async fn is_chunk_exist(&self, chunk_id: &ChunkId)->Result<(bool,u64)>;
+    async fn open_chunk_writer(&self, chunk_id: &ChunkId,offset:u64,size:u64)->BackupResult<(ChunkWriter,u64)>;
+    async fn complete_chunk_writer(&self, chunk_id: &ChunkId)->BackupResult<()>;
+    async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId)->BackupResult<()>;
     //查询多个chunk的状态
-    async fn query_chunk_state_by_list(&self, chunk_list: &mut Vec<ChunkId>)->Result<()>;
-
-    async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>)->Result<()>;
-    //上传一个完整的chunk,允许target自己决定怎么使用reader
-    async fn open_chunk_writer(&self, chunk_id: &ChunkId,offset:u64,size:u64)->Result<(ChunkWriter,u64)>;
-    async fn complete_chunk_writer(&self, chunk_id: &ChunkId)->Result<()>;
-    async fn put_chunk(&self, chunk_id: &ChunkId, chunk_data: &[u8])->Result<()>;
-    // async fn append_chunk_data(&self, chunk_id: &ChunkId, offset_from_begin:u64,chunk_data: &[u8], is_completed: bool,chunk_size:Option<u64>)->Result<()>;
-
-    //通过上传chunk diff文件来创建新chunk
-    //async fn patch_chunk(&self, chunk_id: &str, chunk_reader: ItemReader)->Result<()>;
-
-    //async fn remove_chunk(&self, chunk_list: Vec<String>)->Result<()>;
-    //说明两个chunk id是同一个chunk.实现者可以自己决定是否校验
-    //link成功后，查询target_chunk_id和new_chunk_id的状态，应该都是exist
-    async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId)->Result<()>;
-    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,offset:u64)->Result<ChunkReader>;
+    //async fn query_chunk_state_by_list(&self, chunk_list: &mut Vec<ChunkId>)->Result<()>;
+    //async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>)->Result<()>;
+    // restore
+    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId,offset:u64)->BackupResult<ChunkReader>;
     
 }
 
