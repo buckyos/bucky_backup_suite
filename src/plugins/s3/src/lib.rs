@@ -1,13 +1,20 @@
 use async_trait::async_trait;
-use buckyos_backup_lib::{IBackupChunkTargetProvider, ChunkId, Error as BackupError, ChunkReader};
+use buckyos_backup_lib::IBackupChunkTargetProvider;
+use ndn_lib::{ChunkId, ChunkReader, ChunkWriter};
+use anyhow::{Result, anyhow};
 use aws_sdk_s3::{Client, Config};
 use aws_config::meta::region::RegionProviderChain;
+use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
+use aws_credential_types::Credentials;
 use aws_config::BehaviorVersion;
-use std::collections::HashMap;
+use std::future::Future;
+use std::task::{Context, Poll};
+use std::{collections::HashMap, pin::Pin};
 use std::sync::Mutex;
-use aws_sdk_s3::types::CompletedMultipartUpload;
-use aws_sdk_s3::types::CompletedPart;
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use serde::{Serialize, Deserialize};
+use tokio::io::AsyncWrite;
+use futures::FutureExt;  
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -23,33 +30,53 @@ enum AccountSession {
     }
 }
 
-#[derive(Default)]
+enum UploadCreateState {
+    Creating,
+    Created(String), // upload_id
+}
+
 struct MultipartUploadState {
-    upload_id: String,
-    completed_parts: Vec<CompletedPart>,
-    total_size: Option<u64>,
+    create_state: UploadCreateState,
+    total_size: u64,
+}
+
+impl MultipartUploadState {
+    fn new(total_size: u64) -> Self {
+        Self {
+            create_state: UploadCreateState::Creating,
+            total_size,
+        }
+    }
+
+    fn set_created(&mut self, upload_id: String) {
+        self.create_state = UploadCreateState::Created(upload_id);
+    }
+
+    fn get_upload_id(&self) -> Option<&str> {
+        match &self.create_state {
+            UploadCreateState::Created(id) => Some(id),
+            _ => None,
+        }
+    }
 }
 
 pub struct S3ChunkTarget {
     client: Client,
     bucket: String,
-    prefix: String,
-    upload_states: Mutex<HashMap<String, MultipartUploadState>>,
+    upload_states: Mutex<HashMap<String, MultipartUploadState>>, 
 }
 
 impl S3ChunkTarget {
-    pub async fn new(bucket: String, prefix: String, region: Option<String>) -> Result<Self, BackupError> {
-        // 使用环境变量配置创建客户端
-        Self::new_with_session(bucket, prefix, region, AccountSession::Environment).await
+    pub async fn new(bucket: String, region: Option<String>) -> Result<Self> {
+        Self::new_with_session(bucket, region, AccountSession::Environment).await
     }
 
     pub async fn new_with_session(
         bucket: String, 
-        prefix: String, 
         region: Option<String>,
         session: AccountSession,
-    ) -> Result<Self, BackupError> {
-        let region_provider = RegionProviderChain::first_try(region.map(aws_sdk_s3::Region::new))
+    ) -> Result<Self> {
+        let region_provider = RegionProviderChain::first_try(region.map(aws_config::Region::new))
             .or_default_provider();
 
         let config_builder = aws_config::defaults(BehaviorVersion::latest())
@@ -62,9 +89,9 @@ impl S3ChunkTarget {
                 secret_access_key, 
                 session_token 
             } => {
-                let credentials_provider = aws_config::credentials::ProvideCredentials::provide_credentials(
-                    &aws_config::credentials::SharedCredentialsProvider::new(
-                        aws_config::Credentials::new(
+                let credentials_provider = ProvideCredentials::provide_credentials(
+                    &SharedCredentialsProvider::new(
+                        Credentials::new(
                             access_key_id,
                             secret_access_key,
                             session_token,
@@ -72,7 +99,7 @@ impl S3ChunkTarget {
                             "s3-chunk-target",
                         )
                     )
-                ).await.map_err(|e| BackupError::Provider(format!("Failed to create credentials: {}", e)))?;
+                ).await.map_err(|e| anyhow!("Failed to create credentials: {}", e))?;
 
                 config_builder
                     .credentials_provider(credentials_provider)
@@ -87,131 +114,283 @@ impl S3ChunkTarget {
         Ok(Self {
             client,
             bucket,
-            prefix,
             upload_states: Mutex::new(HashMap::new()),
         })
     }
+}
 
-    fn get_object_key(&self, chunk_id: &ChunkId) -> String {
-        if self.prefix.is_empty() {
-            chunk_id.to_string()
-        } else {
-            format!("{}/{}", self.prefix.trim_end_matches('/'), chunk_id)
-        }
+
+struct UploadingState {
+    upload_part_future: Pin<Box<dyn Future<Output = Result<()>> + Send>>,
+    upload_size: usize,
+}
+
+enum UploadState {
+    None, 
+    Uploading(UploadingState),
+    Err(String),
+}
+
+struct WriterState {
+    uploaded_size: u64,
+    part_limit: usize, 
+    part_buffer: Vec<u8>,
+    upload_state: UploadState,
+}
+
+struct S3ChunkWriter {
+    client: Client,
+    bucket: String,
+    key: String,
+    upload_id: String,
+    chunk_size: u64,
+    state: Mutex<WriterState>,
+}
+
+impl S3ChunkWriter {
+    fn part_size() -> usize {
+        5 * 1024 * 1024
     }
 
-    async fn ensure_multipart_upload(&self, chunk_id: &ChunkId, total_size: Option<u64>) -> Result<String, BackupError> {
-        let key = self.get_object_key(chunk_id);
-        let mut states = self.upload_states.lock().unwrap();
-        
-        if let Some(state) = states.get(&key) {
-            return Ok(state.upload_id.clone());
-        }
-
-        // 创建新的分片上传
-        let create_upload = self.client
-            .create_multipart_upload()
-            .bucket(&self.bucket)
+    async fn upload_part(client: Client, bucket: String, key: String, upload_id: String, data: Vec<u8>, part_number: i32) -> Result<()> { 
+        let _ = client
+            .upload_part()
+            .bucket(&bucket)
             .key(&key)
+            .upload_id(&upload_id)
+            .part_number(part_number)
+            .body(data.into())
             .send()
             .await
-            .map_err(|e| BackupError::Provider(format!("Failed to create multipart upload: {}", e)))?;
-
-        let upload_id = create_upload.upload_id()
-            .ok_or_else(|| BackupError::Provider("No upload ID received".to_string()))?
-            .to_string();
-
-        let state = MultipartUploadState {
-            upload_id: upload_id.clone(),
-            completed_parts: Vec::new(),
-            total_size,
-        };
-
-        states.insert(key, state);
-        Ok(upload_id)
+            .map_err(|e| anyhow!("Failed to upload part: {}", e))?;
+        Ok(())
     }
 
-    async fn try_complete_upload(&self, key: &str, chunk_size: Option<u64>) -> Result<bool, BackupError> {
-        let mut states = self.upload_states.lock().unwrap();
+
+    fn poll_write_part(
+        &self,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<(bool, usize)>> {
+        let mut state = self.state.lock().unwrap();
+        let write_size = state.part_limit - state.part_buffer.len();
         
-        if let Some(state) = states.get(key) {
-            let total_size = state.total_size.or(chunk_size);
-            
-            if let Some(expected_size) = total_size {
-                // 计算已上传的大小
-                let uploaded_size: u64 = state.completed_parts.iter()
-                    .map(|part| (part.part_number() as u64) * 5 * 1024 * 1024)
-                    .sum();
+        if write_size > buf.len() {
+            // 如果写入的数据小于part_limit，则直接写入part_buffer
+            state.part_buffer.extend_from_slice(buf);
+            Poll::Ready(Ok((false, buf.len())))
+        } else if write_size > 0 {
+            // 如果写入的数据大于0，则将数据写入part_buffer，并创建新的ToUploadPart
+            state.part_buffer.extend_from_slice(&buf[..write_size]);
+            let to_continue = if let UploadState::None = &state.upload_state {
+                let mut part_buffer = Vec::new();
+                std::mem::swap(&mut state.part_buffer, &mut part_buffer);
+                state.part_limit = usize::min(S3ChunkWriter::part_size(), (self.chunk_size - (state.uploaded_size + part_buffer.len() as u64)) as usize);
+                let part_number = (state.uploaded_size / Self::part_size() as u64 + 1) as i32;
+                let upload_size = part_buffer.len();
+                let mut upload_part_future = Box::pin(Self::upload_part(self.client.clone(), self.bucket.clone(), self.key.clone(), self.upload_id.clone(), part_buffer, part_number));
+                match upload_part_future.poll_unpin(cx) {
+                    Poll::Ready(result) => {
+                        match result {
+                            Ok(_) => {
+                                state.upload_state = UploadState::None;
+                                state.uploaded_size += upload_size as u64;
+                                true
+                            },
+                            Err(e) => {
+                                state.upload_state = UploadState::Err(e.to_string());
+                                return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                            }
+                        }
+                    }, 
+                    Poll::Pending => {
+                        state.upload_state = UploadState::Uploading(UploadingState {
+                            upload_part_future,
+                            upload_size,
+                        });
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+            Poll::Ready(Ok((to_continue, write_size)))
+        } else {
+            // 如果写入的数据为0，等待upload
+            let to_continue = if let UploadState::Uploading(uploading_state) = &mut state.upload_state {
+                match uploading_state.upload_part_future.as_mut().poll(cx) {
+                    Poll::Ready(Ok(_)) => {
+                        state.uploaded_size += uploading_state.upload_size as u64;
+                        if state.part_buffer.len() == state.part_limit {
+                            let mut part_buffer = Vec::new();
+                            std::mem::swap(&mut state.part_buffer, &mut part_buffer);
+                            state.part_limit = usize::min(S3ChunkWriter::part_size(), (self.chunk_size - (state.uploaded_size + part_buffer.len() as u64)) as usize);
+                            let part_number = (state.uploaded_size / Self::part_size() as u64 + 1) as i32;
+                            let upload_size = part_buffer.len();
+                            let mut upload_part_future = Box::pin(Self::upload_part(self.client.clone(), self.bucket.clone(), self.key.clone(), self.upload_id.clone(), part_buffer, part_number));
+                            match upload_part_future.poll_unpin(cx) {
+                                Poll::Ready(result) => {
+                                    match result {
+                                        Ok(_) => {
+                                            state.upload_state = UploadState::None;
+                                            state.uploaded_size += upload_size as u64;
+                                        },
+                                        Err(e) => {
+                                            state.upload_state = UploadState::Err(e.to_string());
+                                            return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                                        }
+                                    }
+                                }, 
+                                Poll::Pending => {
+                                    state.upload_state = UploadState::Uploading(UploadingState {
+                                        upload_part_future,
+                                        upload_size,
+                                    });
+                                }
+                            }
+                        } else {
+                            state.upload_state = UploadState::None;
+                        }
+                        true
+                    },
+                    Poll::Ready(Err(e)) => {
+                        state.upload_state = UploadState::Err(e.to_string());
+                        return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                    },
+                    Poll::Pending => {
+                        false
+                    }
+                }
+            } else {
+                unreachable!()
+            };
+            Poll::Ready(Ok((to_continue, 0)))
+        }
+    }
+}
 
-                // 如果已上传大小达到或超过预期大小，完成上传
-                if uploaded_size >= expected_size {
-                    let state = states.remove(key).unwrap();
-                    
-                    // 按分片号排序
-                    let mut sorted_parts = state.completed_parts;
-                    sorted_parts.sort_by_key(|part| part.part_number());
 
-                    let completed_upload = CompletedMultipartUpload::builder()
-                        .set_parts(Some(sorted_parts))
-                        .build();
+impl AsyncWrite for S3ChunkWriter {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        let mut_self = self.get_mut();
+        {
+            let state = mut_self.state.lock().unwrap();
+            if let UploadState::Err(e) = &state.upload_state {
+                return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+            }
+        }
 
-                    self.client
-                        .complete_multipart_upload()
-                        .bucket(&self.bucket)
-                        .key(key)
-                        .upload_id(&state.upload_id)
-                        .multipart_upload(completed_upload)
-                        .send()
-                        .await
-                        .map_err(|e| BackupError::Provider(format!("Failed to complete multipart upload: {}", e)))?;
-
-                    return Ok(true);
+        let mut total_write_size = 0;
+        loop {
+            match mut_self.poll_write_part(cx, &buf[total_write_size..]) {
+                Poll::Ready(Ok((to_continue, write_size))) => {
+                    total_write_size += write_size;
+                    if !to_continue {
+                        return Poll::Ready(Ok(total_write_size));
+                    }
+                }, 
+                Poll::Ready(Err(e)) => {
+                    return Poll::Ready(Err(e));
+                },
+                Poll::Pending => {
+                    return Poll::Pending;
                 }
             }
         }
-        
-        Ok(false)
+
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>, 
+        cx: &mut Context<'_>
+    ) -> Poll<Result<(), std::io::Error>> {
+        // 如果缓冲区有数据，上传它
+        let mut_self = self.get_mut();
+        let mut state = mut_self.state.lock().unwrap();
+        if let UploadState::Uploading(uploading_state) = &mut state.upload_state {
+            match uploading_state.upload_part_future.as_mut().poll(cx) {
+                Poll::Ready(Ok(_)) => {
+                    state.uploaded_size += uploading_state.upload_size as u64;
+                    if state.part_buffer.len() == state.part_limit {
+                        let mut part_buffer = Vec::new();
+                        std::mem::swap(&mut state.part_buffer, &mut part_buffer);
+                        state.part_limit = usize::min(S3ChunkWriter::part_size(), (mut_self.chunk_size - (state.uploaded_size + part_buffer.len() as u64)) as usize);
+                        let part_number = (state.uploaded_size / Self::part_size() as u64 + 1) as i32;
+                        let upload_size = part_buffer.len();
+                        let mut upload_part_future = Box::pin(Self::upload_part(mut_self.client.clone(), mut_self.bucket.clone(), mut_self.key.clone(), mut_self.upload_id.clone(), part_buffer, part_number));
+                        match upload_part_future.poll_unpin(cx) {
+                            Poll::Ready(result) => {
+                                match result {
+                                    Ok(_) => {
+                                        state.upload_state = UploadState::None;
+                                        state.uploaded_size += upload_size as u64;
+                                        Poll::Ready(Ok(()))
+                                    },
+                                    Err(e) => {
+                                        state.upload_state = UploadState::Err(e.to_string());
+                                        Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())))
+                                    }
+                                }
+                            }, 
+                            Poll::Pending => {
+                                state.upload_state = UploadState::Uploading(UploadingState {
+                                    upload_part_future,
+                                    upload_size,
+                                });
+                                Poll::Pending
+                            }
+                        }
+                    } else {
+                        state.upload_state = UploadState::None;
+                        Poll::Ready(Ok(()))
+                    }
+                },
+                Poll::Ready(Err(e)) => {
+                    state.upload_state = UploadState::Err(e.to_string());
+                    return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())));
+                },
+                Poll::Pending => {
+                    Poll::Pending
+                }
+            }
+        } else {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>
+    ) -> Poll<Result<(), std::io::Error>> {
+        // call flush
+        Poll::Ready(Ok(()))
     }
 }
 
 #[async_trait]
 impl IBackupChunkTargetProvider for S3ChunkTarget {
-    async fn get_target_info(&self) -> Result<String, BackupError> {
-        Ok(format!("s3://{}/{}", self.bucket, self.prefix))
+    async fn get_target_info(&self) -> Result<String> {
+        Ok(format!("s3://{}", self.bucket))
     }
 
     fn get_target_url(&self) -> String {
-        format!("s3://{}/{}", self.bucket, self.prefix)
+        format!("s3://{}", self.bucket)
     }
 
-    async fn get_account_session_info(&self) -> Result<String, BackupError> {
-        // 返回环境变量配置的序列化结果
-        serde_json::to_string(&AccountSession::Environment)
-            .map_err(|e| BackupError::Provider(format!("Failed to serialize session info: {}", e)))
+    async fn get_account_session_info(&self) -> Result<String> {
+        Ok(String::new())
     }
 
-    async fn set_account_session_info(&self, session_info: &str) -> Result<(), BackupError> {
-        // 解析会话信息
-        let session: AccountSession = serde_json::from_str(session_info)
-            .map_err(|e| BackupError::Provider(format!("Failed to parse session info: {}", e)))?;
-
-        // 使用新的会话信息重新创建客户端
-        let new_target = Self::new_with_session(
-            self.bucket.clone(),
-            self.prefix.clone(),
-            None, // 保持现有区域设置
-            session
-        ).await?;
-
-        // 更新客户端
-        // 注意：这里可能需要处理正在进行的上传
-        *self = new_target;
-
+    async fn set_account_session_info(&self, _: &str) -> Result<()> {
         Ok(())
     }
 
-    async fn is_chunk_exist(&self, chunk_id: &ChunkId) -> Result<(bool, u64), BackupError> {
-        let key = self.get_object_key(chunk_id);
+    async fn is_chunk_exist(&self, chunk_id: &ChunkId) -> Result<(bool, u64)> {
+        let key = chunk_id.to_string();
         
         match self.client.head_object()
             .bucket(&self.bucket)
@@ -227,31 +406,25 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
                 if err.to_string().contains("NotFound") {
                     Ok((false, 0))
                 } else {
-                    Err(BackupError::Provider(format!("Failed to check object existence: {}", err)))
+                    Err(anyhow!("Failed to check object existence: {}", err))
                 }
             }
         }
     }
 
-    async fn query_chunk_state_by_list(&self, chunk_list: &mut Vec<ChunkId>) -> Result<(), BackupError> {
-        for chunk_id in chunk_list.iter_mut() {
-            let (exists, size) = self.is_chunk_exist(chunk_id).await?;
-            if exists {
-                chunk_id.set_length(size);
-            }
-        }
-        Ok(())
+    async fn query_chunk_state_by_list(&self, _: &mut Vec<ChunkId>) -> Result<()> {
+        unimplemented!()
     }
 
-    async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>) -> Result<(), BackupError> {
+    async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>) -> Result<()> {
         for (chunk_id, data) in chunk_list {
             self.put_chunk(&chunk_id, &data).await?;
         }
         Ok(())
     }
 
-    async fn put_chunk(&self, chunk_id: &ChunkId, chunk_data: &[u8]) -> Result<(), BackupError> {
-        let key = self.get_object_key(chunk_id);
+    async fn put_chunk(&self, chunk_id: &ChunkId, chunk_data: &[u8]) -> Result<()> {
+        let key = chunk_id.to_string();
 
         self.client
             .put_object()
@@ -260,72 +433,15 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
             .body(chunk_data.to_vec().into())
             .send()
             .await
-            .map_err(|e| BackupError::Provider(format!("Failed to put object to S3: {}", e)))?;
+            .map_err(|e| anyhow!("Failed to put object to S3: {}", e))?;
 
         Ok(())
     }
 
-    async fn append_chunk_data(
-        &self,
-        chunk_id: &ChunkId,
-        offset_from_begin: u64,
-        chunk_data: &[u8],
-        is_completed: bool,
-        chunk_size: Option<u64>,
-    ) -> Result<(), BackupError> {
-        let key = self.get_object_key(chunk_id);
+    async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId) -> Result<()> {
+        let target_key = target_chunk_id.to_string();
+        let new_key = new_chunk_id.to_string();
 
-        // 如果是从头开始写且是完整数据，直接上传
-        if offset_from_begin == 0 && is_completed {
-            return self.put_chunk(chunk_id, chunk_data).await;
-        }
-
-        // 确保存在分片上传，并传入总大小信息
-        let upload_id = self.ensure_multipart_upload(chunk_id, chunk_size).await?;
-
-        // 计算当前分片号（S3要求分片号从1开始）
-        let part_number = (offset_from_begin / (5 * 1024 * 1024) + 1) as i32;
-
-        // 上传当前分片
-        let upload_part_output = self.client
-            .upload_part()
-            .bucket(&self.bucket)
-            .key(&key)
-            .upload_id(&upload_id)
-            .part_number(part_number)
-            .body(chunk_data.to_vec().into())
-            .send()
-            .await
-            .map_err(|e| BackupError::Provider(format!("Failed to upload part: {}", e)))?;
-
-        // 记录已完成的分片
-        let completed_part = CompletedPart::builder()
-            .part_number(part_number)
-            .e_tag(upload_part_output.e_tag.unwrap_or_default())
-            .build();
-
-        // 更新上传状态
-        {
-            let mut states = self.upload_states.lock().unwrap();
-            if let Some(state) = states.get_mut(&key) {
-                state.completed_parts.push(completed_part);
-            }
-        }
-
-        // 尝试完成上传（如果所有分片都已上传）
-        if is_completed || self.try_complete_upload(&key, chunk_size).await? {
-            // 上传已完成，无需额外操作
-            return Ok(());
-        }
-
-        Ok(())
-    }
-
-    async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId) -> Result<(), BackupError> {
-        let target_key = self.get_object_key(target_chunk_id);
-        let new_key = self.get_object_key(new_chunk_id);
-
-        // 使用 S3 的复制功能创建链接
         self.client
             .copy_object()
             .copy_source(format!("{}/{}", self.bucket, target_key))
@@ -333,27 +449,198 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
             .key(new_key)
             .send()
             .await
-            .map_err(|e| BackupError::Provider(format!("Failed to link chunks: {}", e)))?;
+            .map_err(|e| anyhow!("Failed to link chunks: {}", e))?;
 
         Ok(())
     }
 
-    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId, _quick_hash: Option<ChunkId>) -> Result<ChunkReader, BackupError> {
-        let key = self.get_object_key(chunk_id);
+    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId, offset:u64) -> Result<ChunkReader> {
+        let key = chunk_id.to_string();
         
-        // 获取对象大小
         let head = self.client
             .head_object()
             .bucket(&self.bucket)
             .key(&key)
             .send()
             .await
-            .map_err(|e| BackupError::Provider(format!("Failed to get object head: {}", e)))?;
+            .map_err(|e| anyhow!("Failed to get object head: {}", e))?;
 
         let size = head.content_length().unwrap_or(0) as u64;
+
+        // 从指定的offset开始请求
+        let response = self.client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .range(format!("bytes={}-{}", offset, size - 1))
+            .send()
+            .await
+            .map_err(|e| anyhow!("获取对象内容失败: {}", e))?;
         
-        // 创建并返回 ChunkReader
-        // 注意：这里需要 ChunkReader 的具体实现
-        todo!("Implement ChunkReader creation")
+        let reader = response.body.into_async_read();
+        Ok(Box::pin(reader))
+    }
+
+    async fn open_chunk_writer(&self, chunk_id: &ChunkId, _offset: u64, size: u64) -> Result<(ChunkWriter,u64)> {
+        let key = chunk_id.to_string();
+        
+        {
+            // 先检查是否已有进行中的上传
+            let mut states = self.upload_states.lock().unwrap();
+            if let Some(_) = states.get(&key) {
+                //    返回正在上传的错误
+                return Err(anyhow!("Chunk is being uploaded"));
+            }
+
+            let state = MultipartUploadState::new(size);
+            states.insert(key.clone(), state);
+        }
+        
+
+        // 检查对象是否已存在
+        let head_result = self.client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .send()
+            .await;
+
+        match head_result {
+            Ok(head) => {
+                // 如果对象存在且大小相等,返回错误
+                if head.content_length() == Some(size as i64) {
+                    return Err(anyhow!("Chunk already exists"));
+                }
+            },
+            Err(err) => {
+                // 如果是对象不存在的错误则继续,其他错误则返回
+                if !err.to_string().contains("NotFound") {
+                    return Err(anyhow!("Failed to check object existence: {}", err));
+                }
+            }
+        }
+
+        // 如果没有现有上传，创建新的
+        // 先查询是否有未完成的上传
+        let list_uploads = self.client
+            .list_multipart_uploads()
+            .bucket(&self.bucket)
+            .prefix(&key)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to list multipart uploads: {}", e))?;
+
+        let existing_upload = list_uploads.uploads()
+            .iter().find(|u| u.key() == Some(&key));
+
+        let (upload_id, uploaded_size) = if let Some(upload) = existing_upload {
+            // 如果存在未完成的上传,直接使用
+            // 查询已上传的分片
+            let parts = self.client
+                .list_parts()
+                .bucket(&self.bucket)
+                .key(&key)
+                .upload_id(upload.upload_id().unwrap_or_default())
+                .send()
+                .await
+                .map_err(|e| anyhow!("Failed to list parts: {}", e))?;
+            // 找到最大的part num，生成下一个part num
+            let (_max_part_number, uploaded_size) = parts.parts().iter().fold((0, 0), |(max_num, size), p| {
+                (max_num.max(p.part_number().unwrap_or(0)), 
+                 size + p.size().unwrap_or(0) as u64)
+            });
+
+            let upload_id = upload.upload_id.clone()
+                .ok_or_else(|| anyhow!("No upload ID received"))?;
+
+            (upload_id, uploaded_size)
+        } else {
+            // 否则创建新的上传
+            let create_upload = self.client
+                .create_multipart_upload()
+                .bucket(&self.bucket)
+                .key(&key)
+                .send()
+                .await
+                .map_err(|e| anyhow!("Failed to create multipart upload: {}", e))?;
+
+            let upload_id = create_upload.upload_id()
+                .ok_or_else(|| anyhow!("No upload ID received"))?
+                .to_string();
+
+            (upload_id, 0)
+        };
+
+        // 更新状态为已创建
+        {
+            let mut states = self.upload_states.lock().unwrap();
+            if let Some(state) = states.get_mut(&key) {
+                state.set_created(upload_id.clone());
+            }
+        }
+
+        let writer = S3ChunkWriter {
+            client: self.client.clone(),
+            bucket: self.bucket.clone(),
+            key,
+            upload_id, 
+            chunk_size: size,
+            state: Mutex::new(WriterState {
+                uploaded_size,
+                part_limit: usize::min(S3ChunkWriter::part_size(), (size - uploaded_size) as usize),
+                part_buffer: Vec::new(),
+                upload_state: UploadState::None,
+            }),
+        };
+
+        Ok((Box::pin(writer), uploaded_size))
+    }
+
+    async fn complete_chunk_writer(&self, chunk_id: &ChunkId) -> Result<()> {
+        let key = chunk_id.to_string();
+
+        // get and remove upload id in states
+        if let Some(upload_id) = {
+            let mut states = self.upload_states.lock().unwrap();
+            states.remove(&key).map(|state| state.get_upload_id().unwrap().to_owned())
+        } {
+            // 获取已上传的分片
+            let parts = self.client
+                .list_parts()
+                .bucket(&self.bucket)
+                .key(&key)
+                .upload_id(&upload_id)
+                .send()
+                .await
+                .map_err(|e| anyhow!("Failed to list parts: {}", e))?;
+
+            let mut sorted_parts = parts.parts().to_vec();
+            sorted_parts.sort_by_key(|part| part.part_number());
+
+            // convert to completed part
+            let completed_parts = sorted_parts.iter().map(|part| CompletedPart::builder()
+                .part_number(part.part_number().unwrap_or(0))
+                .e_tag(part.e_tag().unwrap_or_default())
+                .build()
+            ).collect::<Vec<_>>();
+
+            let completed_upload = CompletedMultipartUpload::builder()
+                .set_parts(Some(completed_parts))
+                .build();
+
+            self.client
+                .complete_multipart_upload()
+                .bucket(&self.bucket)
+                .key(&key)
+                .upload_id(&upload_id)
+                .multipart_upload(completed_upload)
+                .send()
+                .await
+                .map_err(|e| anyhow!("Failed to complete multipart upload: {}", e))?;
+
+            Ok(())
+        } else {
+            return Err(anyhow!("No upload ID found"));
+        }
     }
 } 
