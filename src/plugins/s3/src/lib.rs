@@ -12,7 +12,7 @@ use std::future::Future;
 use std::task::{Context, Poll};
 use std::{collections::HashMap, pin::Pin};
 use std::sync::Mutex;
-use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
+use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart, MetadataDirective};
 use serde::{Serialize, Deserialize};
 use tokio::io::AsyncWrite;
 use futures::FutureExt;  
@@ -450,16 +450,61 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
         let target_key = target_chunk_id.to_string();
         let new_key = new_chunk_id.to_string();
 
+        // 先获取源对象的元数据
+        let head = self.client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(&target_key)
+            .send()
+            .await
+            .map_err(|e| BuckyBackupError::Failed(format!("Failed to get source object metadata: {}", e)))?;
+
+        // 构建新的元数据
+        let metadata = head.metadata().cloned().unwrap_or_default();
+        let mut target_metadata = metadata.clone();
+        target_metadata.insert("link_target".to_string(), new_key.clone());
+
+        // 更新源对象的元数据
+        self.client
+            .copy_object()
+            .copy_source(format!("{}/{}", self.bucket, target_key))
+            .bucket(&self.bucket)
+            .key(&target_key)
+            .metadata_directive(MetadataDirective::Replace)
+            .set_metadata(Some(target_metadata))
+            .send()
+            .await
+            .map_err(|e| BuckyBackupError::Failed(format!("Failed to update source metadata: {}", e)))?;
+
+
+        let mut new_metadata = metadata;
+        new_metadata.insert("link_target".to_string(), target_key.clone());
+        // 复制对象并创建新的链接
         self.client
             .copy_object()
             .copy_source(format!("{}/{}", self.bucket, target_key))
             .bucket(&self.bucket)
             .key(new_key)
+            .metadata_directive(MetadataDirective::Replace)
+            .set_metadata(Some(new_metadata))
             .send()
             .await
-            .map_err(|e| BuckyBackupError::Failed(format!("Failed to link chunks: {}", e)))?;
+            .map_err(|e| BuckyBackupError::Failed(format!("Failed to create link: {}", e)))?;
 
         Ok(())
+    }
+
+    async fn query_link_target(&self, source_chunk_id: &ChunkId)->BackupResult<Option<ChunkId>> {
+        let key = source_chunk_id.to_string();
+        let head = self.client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(&key)
+            .send()
+            .await
+            .map_err(|e| BuckyBackupError::Failed(format!("Failed to get object head: {}", e)))?;
+        Ok(head.metadata().and_then(|metadata| metadata.get("link_target"))
+            .map(|target_key| ChunkId::new(target_key).unwrap()))
     }
 
     async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId, offset:u64) -> BackupResult<ChunkReader> {

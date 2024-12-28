@@ -51,7 +51,7 @@ impl FromSql for RestoreConfig {
 }
 
 //use tokio::fs::AsyncReadExt;
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,PartialEq)]
 pub enum BackupItemState {
     New,
     LocalDone,
@@ -173,7 +173,8 @@ pub trait IBackupChunkTargetProvider {
     async fn is_chunk_exist(&self, chunk_id: &ChunkId)->Result<(bool,u64)>;
     async fn open_chunk_writer(&self, chunk_id: &ChunkId,offset:u64,size:u64)->BackupResult<(ChunkWriter,u64)>;
     async fn complete_chunk_writer(&self, chunk_id: &ChunkId)->BackupResult<()>;
-    async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId)->BackupResult<()>;
+    async fn link_chunkid(&self, source_chunk_id: &ChunkId, new_chunk_id: &ChunkId)->BackupResult<()>;
+    async fn query_link_target(&self, source_chunk_id: &ChunkId)->BackupResult<Option<ChunkId>>;
     //查询多个chunk的状态
     //async fn query_chunk_state_by_list(&self, chunk_list: &mut Vec<ChunkId>)->Result<()>;
     //async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>)->Result<()>;

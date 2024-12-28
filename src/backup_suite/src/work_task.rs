@@ -28,7 +28,7 @@ impl ChunkCacheNode {
 
     }    
 
-    pub fn free_piece_before_offset(&mut self,offset:u64) -> u64 {
+    pub fn free_piece_before_offset(&mut self, _:u64) -> u64 {
         //TODO: implement
         return 0;
     }
