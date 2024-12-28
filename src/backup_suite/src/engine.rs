@@ -26,6 +26,7 @@ use ndn_lib::*;
 use buckyos_backup_lib::*;
 use tokio::time::{timeout, Duration};
 use lazy_static::lazy_static;
+use s3_chunk_target::*;
 
 use std::result::Result as StdResult;
 
@@ -1053,10 +1054,18 @@ impl BackupEngine {
 
     async fn get_chunk_target_provider(&self, target_url:&str) -> Result<BackupChunkTargetProvider> {
         let url = Url::parse(target_url)?;
-        assert_eq!(url.scheme(), "file");
-        let store = LocalChunkTargetProvider::new(url.path().to_string()).await?;
-        Ok(Box::new(store))
-        //Ok(store)
+        match url.scheme() {
+            "file" => {
+                let store = LocalChunkTargetProvider::new(url.path().to_string()).await?;
+                Ok(Box::new(store))
+            }
+            "s3" => {
+                // 从 URL 中提取 S3 配置参数
+                let store = S3ChunkTarget::with_url(url).await?;
+                Ok(Box::new(store))
+            }
+            _ => Err(anyhow::anyhow!("不支持的 target URL scheme: {}", url.scheme()))
+        }
     }
 
     pub async fn list_backup_tasks(&self, filter:&str) -> Result<Vec<String>> {

@@ -1,5 +1,6 @@
+#![allow(dead_code)]
 use async_trait::async_trait;
-use buckyos_backup_lib::IBackupChunkTargetProvider;
+use buckyos_backup_lib::{IBackupChunkTargetProvider, BackupResult, BuckyBackupError};
 use ndn_lib::{ChunkId, ChunkReader, ChunkWriter};
 use anyhow::{Result, anyhow};
 use aws_sdk_s3::{Client, Config};
@@ -15,10 +16,11 @@ use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use serde::{Serialize, Deserialize};
 use tokio::io::AsyncWrite;
 use futures::FutureExt;  
+use url::Url;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type")]
-enum AccountSession {
+pub enum S3AccountSession {
     #[serde(rename = "env")]
     Environment,
     #[serde(rename = "key")]
@@ -64,27 +66,43 @@ pub struct S3ChunkTarget {
     client: Client,
     bucket: String,
     upload_states: Mutex<HashMap<String, MultipartUploadState>>, 
+    url: String,
 }
 
 impl S3ChunkTarget {
-    pub async fn new(bucket: String, region: Option<String>) -> Result<Self> {
-        Self::new_with_session(bucket, region, AccountSession::Environment).await
+    pub async fn with_url(url:Url) -> Result<Self> {
+        // s3://bucket-name?region=region-name&access_key=xxx&secret_key=yyy
+        let bucket = url.host_str().unwrap_or_default().to_string();
+        let region = url.query_pairs().find(|(k, _)| k == "region").map(|(_, v)| v.to_string());
+        let access_key = url.query_pairs().find(|(k, _)| k == "access_key").map(|(_, v)| v.to_string());
+        let secret_key = url.query_pairs().find(|(k, _)| k == "secret_key").map(|(_, v)| v.to_string());
+        let session_token = url.query_pairs().find(|(k, _)| k == "session_token").map(|(_, v)| v.to_string());
+        let account = if access_key.is_none() || secret_key.is_none() {
+            S3AccountSession::Environment
+        } else {
+            S3AccountSession::AccessKey {
+                access_key_id: access_key.unwrap(),
+                secret_access_key: secret_key.unwrap(),
+                session_token,
+            }
+        };
+        Self::with_session(bucket, region, account).await
     }
 
-    pub async fn new_with_session(
+    pub async fn with_session(
         bucket: String, 
         region: Option<String>,
-        session: AccountSession,
+        session: S3AccountSession,
     ) -> Result<Self> {
-        let region_provider = RegionProviderChain::first_try(region.map(aws_config::Region::new))
+        let region_provider = RegionProviderChain::first_try(region.clone().map(aws_config::Region::new))
             .or_default_provider();
 
         let config_builder = aws_config::defaults(BehaviorVersion::latest())
             .region(region_provider);
 
-        let config = match session {
-            AccountSession::Environment => config_builder.load().await,
-            AccountSession::AccessKey { 
+        let config = match &session {
+            S3AccountSession::Environment => config_builder.load().await,
+            S3AccountSession::AccessKey { 
                 access_key_id, 
                 secret_access_key, 
                 session_token 
@@ -94,7 +112,7 @@ impl S3ChunkTarget {
                         Credentials::new(
                             access_key_id,
                             secret_access_key,
-                            session_token,
+                            session_token.clone(),
                             None,
                             "s3-chunk-target",
                         )
@@ -110,11 +128,27 @@ impl S3ChunkTarget {
 
         let s3_config = Config::new(&config);
         let client = Client::from_conf(s3_config);
+        
+        // 用bucket, region 和 account 生成url
+        let mut params = vec![];
+
+        if let Some(region) = region {
+            params.push(("region", region));
+        }
+
+        if let S3AccountSession::AccessKey { access_key_id, secret_access_key, session_token } = session {
+            params.push(("access_key", access_key_id));
+            params.push(("secret_key", secret_access_key));
+            if let Some(session_token) = session_token {
+                params.push(("session_token", session_token));
+            }
+        }
 
         Ok(Self {
             client,
+            upload_states: Mutex::new(HashMap::new()), 
+            url: Url::parse_with_params(&format!("s3://{}", bucket), params).unwrap().to_string(),
             bucket,
-            upload_states: Mutex::new(HashMap::new()),
         })
     }
 }
@@ -374,11 +408,11 @@ impl AsyncWrite for S3ChunkWriter {
 #[async_trait]
 impl IBackupChunkTargetProvider for S3ChunkTarget {
     async fn get_target_info(&self) -> Result<String> {
-        Ok(format!("s3://{}", self.bucket))
+        Ok("aws s3".to_string())
     }
 
     fn get_target_url(&self) -> String {
-        format!("s3://{}", self.bucket)
+        self.url.clone()
     }
 
     async fn get_account_session_info(&self) -> Result<String> {
@@ -412,33 +446,7 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
         }
     }
 
-    async fn query_chunk_state_by_list(&self, _: &mut Vec<ChunkId>) -> Result<()> {
-        unimplemented!()
-    }
-
-    async fn put_chunklist(&self, chunk_list: HashMap<ChunkId, Vec<u8>>) -> Result<()> {
-        for (chunk_id, data) in chunk_list {
-            self.put_chunk(&chunk_id, &data).await?;
-        }
-        Ok(())
-    }
-
-    async fn put_chunk(&self, chunk_id: &ChunkId, chunk_data: &[u8]) -> Result<()> {
-        let key = chunk_id.to_string();
-
-        self.client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .body(chunk_data.to_vec().into())
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to put object to S3: {}", e))?;
-
-        Ok(())
-    }
-
-    async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId) -> Result<()> {
+    async fn link_chunkid(&self, target_chunk_id: &ChunkId, new_chunk_id: &ChunkId) -> BackupResult<()> {
         let target_key = target_chunk_id.to_string();
         let new_key = new_chunk_id.to_string();
 
@@ -449,12 +457,12 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
             .key(new_key)
             .send()
             .await
-            .map_err(|e| anyhow!("Failed to link chunks: {}", e))?;
+            .map_err(|e| BuckyBackupError::Failed(format!("Failed to link chunks: {}", e)))?;
 
         Ok(())
     }
 
-    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId, offset:u64) -> Result<ChunkReader> {
+    async fn open_chunk_reader_for_restore(&self, chunk_id: &ChunkId, offset:u64) -> BackupResult<ChunkReader> {
         let key = chunk_id.to_string();
         
         let head = self.client
@@ -463,7 +471,7 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
             .key(&key)
             .send()
             .await
-            .map_err(|e| anyhow!("Failed to get object head: {}", e))?;
+            .map_err(|e| BuckyBackupError::Failed(format!("Failed to get object head: {}", e)))?;
 
         let size = head.content_length().unwrap_or(0) as u64;
 
@@ -475,13 +483,13 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
             .range(format!("bytes={}-{}", offset, size - 1))
             .send()
             .await
-            .map_err(|e| anyhow!("获取对象内容失败: {}", e))?;
+            .map_err(|e| BuckyBackupError::Failed(format!("Failed to get object content: {}", e)))?;
         
         let reader = response.body.into_async_read();
         Ok(Box::pin(reader))
     }
 
-    async fn open_chunk_writer(&self, chunk_id: &ChunkId, _offset: u64, size: u64) -> Result<(ChunkWriter,u64)> {
+    async fn open_chunk_writer(&self, chunk_id: &ChunkId, _offset: u64, size: u64) -> BackupResult<(ChunkWriter,u64)> {
         let key = chunk_id.to_string();
         
         {
@@ -489,7 +497,7 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
             let mut states = self.upload_states.lock().unwrap();
             if let Some(_) = states.get(&key) {
                 //    返回正在上传的错误
-                return Err(anyhow!("Chunk is being uploaded"));
+                return Err(BuckyBackupError::Failed(format!("Chunk is being uploaded")));
             }
 
             let state = MultipartUploadState::new(size);
@@ -509,13 +517,13 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
             Ok(head) => {
                 // 如果对象存在且大小相等,返回错误
                 if head.content_length() == Some(size as i64) {
-                    return Err(anyhow!("Chunk already exists"));
+                    return Err(BuckyBackupError::AlreadyDone(format!("Chunk already exists")));
                 }
             },
             Err(err) => {
                 // 如果是对象不存在的错误则继续,其他错误则返回
                 if !err.to_string().contains("NotFound") {
-                    return Err(anyhow!("Failed to check object existence: {}", err));
+                    return Err(BuckyBackupError::Failed(format!("Failed to check object existence: {}", err)));
                 }
             }
         }
@@ -528,7 +536,7 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
             .prefix(&key)
             .send()
             .await
-            .map_err(|e| anyhow!("Failed to list multipart uploads: {}", e))?;
+            .map_err(|e| BuckyBackupError::Failed(format!("Failed to list multipart uploads: {}", e)))?;
 
         let existing_upload = list_uploads.uploads()
             .iter().find(|u| u.key() == Some(&key));
@@ -543,7 +551,7 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
                 .upload_id(upload.upload_id().unwrap_or_default())
                 .send()
                 .await
-                .map_err(|e| anyhow!("Failed to list parts: {}", e))?;
+                .map_err(|e| BuckyBackupError::Failed(format!("Failed to list parts: {}", e)))?;
             // 找到最大的part num，生成下一个part num
             let (_max_part_number, uploaded_size) = parts.parts().iter().fold((0, 0), |(max_num, size), p| {
                 (max_num.max(p.part_number().unwrap_or(0)), 
@@ -551,7 +559,7 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
             });
 
             let upload_id = upload.upload_id.clone()
-                .ok_or_else(|| anyhow!("No upload ID received"))?;
+                .ok_or_else(|| BuckyBackupError::Failed("No upload ID received".to_string()))?;
 
             (upload_id, uploaded_size)
         } else {
@@ -562,10 +570,10 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
                 .key(&key)
                 .send()
                 .await
-                .map_err(|e| anyhow!("Failed to create multipart upload: {}", e))?;
+                .map_err(|e| BuckyBackupError::Failed(format!("Failed to create multipart upload: {}", e)))?;
 
             let upload_id = create_upload.upload_id()
-                .ok_or_else(|| anyhow!("No upload ID received"))?
+                .ok_or_else(|| BuckyBackupError::Failed("No upload ID received".to_string()))?
                 .to_string();
 
             (upload_id, 0)
@@ -596,7 +604,7 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
         Ok((Box::pin(writer), uploaded_size))
     }
 
-    async fn complete_chunk_writer(&self, chunk_id: &ChunkId) -> Result<()> {
+    async fn complete_chunk_writer(&self, chunk_id: &ChunkId) -> BackupResult<()> {
         let key = chunk_id.to_string();
 
         // get and remove upload id in states
@@ -612,7 +620,7 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
                 .upload_id(&upload_id)
                 .send()
                 .await
-                .map_err(|e| anyhow!("Failed to list parts: {}", e))?;
+                .map_err(|e| BuckyBackupError::Failed(format!("Failed to list parts: {}", e)))?;
 
             let mut sorted_parts = parts.parts().to_vec();
             sorted_parts.sort_by_key(|part| part.part_number());
@@ -636,11 +644,11 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
                 .multipart_upload(completed_upload)
                 .send()
                 .await
-                .map_err(|e| anyhow!("Failed to complete multipart upload: {}", e))?;
+                .map_err(|e| BuckyBackupError::Failed(format!("Failed to complete multipart upload: {}", e)))?;
 
             Ok(())
         } else {
-            return Err(anyhow!("No upload ID found"));
+            return Err(BuckyBackupError::Failed("No upload ID found".to_string()));
         }
     }
 } 
