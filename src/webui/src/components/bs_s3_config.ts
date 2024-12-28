@@ -9,7 +9,6 @@ import templateContent from './bs_s3_config.template?raw';
 export class BSS3Config extends LitElement {
     @property({ type: String }) bucket: string = '';
     @property({ type: String }) region: string = '';
-    @property({ type: String }) prefix: string = '';
     @property({ type: Boolean }) use_env_credentials: boolean = true;
     @property({ type: String }) access_key_id: string = '';
     @property({ type: String }) secret_access_key: string = '';
@@ -64,13 +63,6 @@ export class BSS3Config extends LitElement {
             });
         }
 
-        const prefixInput = this.shadowRoot?.querySelector('#prefix') as SlInput;
-        if (prefixInput) {
-            prefixInput.addEventListener('sl-change', (e: any) => {
-                this.prefix = e.target.value;
-            });
-        }
-
         const accessKeyInput = this.shadowRoot?.querySelector('#access-key') as SlInput;
         if (accessKeyInput) {
             accessKeyInput.addEventListener('sl-change', (e: any) => {
@@ -93,45 +85,19 @@ export class BSS3Config extends LitElement {
         }
     }
 
-    getConfig() {
-        const config = {
-            bucket: this.bucket,
-            region: this.region,
-            prefix: this.prefix,
-            session: this.use_env_credentials ? 
-                { type: 'env' } :
-                {
-                    type: 'key',
-                    access_key_id: this.access_key_id,
-                    secret_access_key: this.secret_access_key,
-                    session_token: this.session_token || undefined
-                }
-        };
-        return config;
+    getUrl() {
+        let url = `s3://${this.bucket}/${this.region}`;
+        if (!this.use_env_credentials) {
+            url += `?type=key&access_key=${this.access_key_id}&secret_key=${this.secret_access_key}`;
+        }
+        return url;
     }
 
-    setConfig(config: any) {
-        this.bucket = config.bucket || '';
-        this.region = config.region || '';
-        this.prefix = config.prefix || '';
-        
-        if (config.session) {
-            this.use_env_credentials = config.session.type === 'env';
-            if (config.session.type === 'key') {
-                this.access_key_id = config.session.access_key_id || '';
-                this.secret_access_key = config.session.secret_access_key || '';
-                this.session_token = config.session.session_token || '';
-            }
-        }
-        
-        this.requestUpdate();
-    }
 
     render() {
         const templateData = {
             bucket: this.bucket,
             region: this.region,
-            prefix: this.prefix,
             use_env_credentials: this.use_env_credentials,
             access_key_id: this.access_key_id,
             secret_access_key: this.secret_access_key,

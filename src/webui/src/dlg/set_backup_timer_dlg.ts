@@ -32,8 +32,8 @@ export class SetBackupTimerDlg extends LitElement {
                 type_str: "c2c",
                 source_type: "local_chunk",
                 source: "file:///" + this.ownerWizzard.wizzard_data.backup_source_path,
-                target_type: "local_chunk",
-                target: "file:///" + this.ownerWizzard.wizzard_data.backup_target_path,
+                target_type: this.ownerWizzard.wizzard_data.backup_target_type,
+                target: this.ownerWizzard.wizzard_data.backup_target_url,
                 title: this.ownerWizzard.wizzard_data.description,
                 description: this.ownerWizzard.wizzard_data.description,
             }

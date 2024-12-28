@@ -1,5 +1,5 @@
 <style>
-    .config-container {
+    .s3-target-config {
         display: flex;
         flex-direction: column;
         gap: 1rem;
@@ -21,7 +21,7 @@
     }
 </style>
 
-<div class="config-container">
+<div class="s3-target-config">
     <div class="form-group">
         <label for="bucket">Bucket Name</label>
         <sl-input 
@@ -40,14 +40,6 @@
                 <sl-option value="{{value}}">{{label}}</sl-option>
             {{/each}}
         </sl-select>
-    </div>
-
-    <div class="form-group">
-        <label for="prefix">Prefix (Optional)</label>
-        <sl-input 
-            id="prefix"
-            value="{{prefix}}"
-        ></sl-input>
     </div>
 
     <div class="credentials-section">

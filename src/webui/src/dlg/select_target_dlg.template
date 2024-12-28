@@ -12,22 +12,36 @@
     margin: 0.5rem 0;
   }
 
+  .target-config {
+    margin-top: 1rem;
+  }
 
+  .hidden {
+    display: none;
+  }
 </style>
 
 <div class="config-backup-dialog">
-  <sl-dropdown>
-      <sl-button slot="trigger" caret>Folder at other disk</sl-button>
-      <sl-menu>
-          <sl-menu-item value="newbackup">Folder at other disk<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
-    </sl-menu>
-  </sl-dropdown>
+  <div class="form-group">
+    <label>Select Backup Target Type</label>
+    <sl-select id="target-type" value="local">
+      <sl-option value="local">Local Folder</sl-option>
+      <sl-option value="s3">Amazon S3</sl-option>
+    </sl-select>
+  </div>
 
-  <sl-input 
-    label="Input Will Backup Folder Path"
-    placeholder="Input full path of the folder you will backup to"
-    id="backup-target-path">
-  </sl-input>
+  <div id="local-config" class="target-config">
+    <sl-input 
+      label="Input Will Backup Folder Path"
+      placeholder="Input full path of the folder you will backup to"
+      id="backup-target-path">
+    </sl-input>
+  </div>
+
+  <div id="s3-config" class="target-config hidden">
+    <bs-s3-config id="s3-target-config"></bs-s3-config>
+  </div>
+
   <sl-checkbox checked disabled>Do not use incremental backups</sl-checkbox>
 
   <h4>Privacy Configuration</h4>
