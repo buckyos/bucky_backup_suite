@@ -628,6 +628,27 @@ impl BackupTaskDb {
         Ok(())
     }
 
+    pub fn save_backup_item(&self, checkpoint_id: &str, item: &BackupItem) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute(
+            "INSERT INTO backup_items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                item.item_id,
+                checkpoint_id,
+                item.item_type,
+                item.chunk_id,
+                item.quick_hash,
+                item.state,
+                item.size,
+                item.last_modify_time,
+                item.create_time,
+                item.progress,
+                item.diff_info.clone().unwrap_or("".to_string()),
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn save_item_list_to_checkpoint(&self, checkpoint_id: &str, item_list: &Vec<BackupItem>) -> Result<()> {
         let mut conn = Connection::open(&self.db_path)?;
         let tx = conn.transaction()?;
@@ -821,7 +842,7 @@ impl BackupTaskDb {
     pub fn load_wait_transfer_backup_items(&self, checkpoint_id: &str) -> Result<Vec<BackupItem>> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
-            "SELECT item_id, item_type, chunk_id, quick_hash, size, 
+            "SELECT item_id, item_type, chunk_id, quick_hash, state,size, 
                     last_modify_time, create_time, progress, diff_info
              FROM backup_items 
              WHERE checkpoint_id = ? AND state = ?"

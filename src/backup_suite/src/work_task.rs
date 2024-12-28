@@ -3,37 +3,34 @@ use tokio::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::collections::HashMap;
 use crossbeam::queue::SegQueue;
+
 use anyhow::Result;
 use std::sync::Arc;
 use buckyos_backup_lib::*;
+use log::*;
 
 const MAX_CACHE_SIZE:u64 = 1024*1024*512;
 
 pub struct ChunkCacheNode {
     pub start_offset: u64,
     pub end_offset: u64,
-    pub cache_pieces: SegQueue<Vec<u8>>,
+    pub cache_pieces: SegQueue<(u64,Vec<u8>)>,
 }
 
 impl ChunkCacheNode {
 
     pub fn add_piece(&mut self,piece:Vec<u8>) {
-        self.end_offset += piece.len() as u64;
-        self.cache_pieces.push(piece);
+        let piece_len = piece.len() as u64;
+        let piece_start_offset = self.end_offset;
+        debug!("add piece [{} - {}] (size: {}) to cache",piece_start_offset, piece_start_offset + piece_len, piece_len);
+        self.cache_pieces.push((piece_start_offset,piece));
+        self.end_offset += piece_len;
+
     }    
 
     pub fn free_piece_before_offset(&mut self,offset:u64) -> u64 {
-        let mut free_size = 0;
-        while let Some(piece) = self.cache_pieces.pop() {
-            if piece.len() as u64 + self.start_offset <= offset {
-                free_size += piece.len() as u64;
-                self.start_offset += piece.len() as u64;
-            } else {
-                self.cache_pieces.push(piece);
-                break;
-            }
-        }
-        free_size
+        //TODO: implement
+        return 0;
     }
     
 }
@@ -73,14 +70,19 @@ impl ChunkTaskCacheMgr {
 
     //then can access the cache piece
     pub fn get_chunk_cache_node(&self,chunk_id:&str) -> Option<Arc<Mutex<ChunkCacheNode>>> {
-        self.chunk_cache.get(chunk_id).map(|node| node.clone())
+        let result_node = self.chunk_cache.get(chunk_id)?;
+        Some(result_node.clone())
     }
 
     pub async fn free_chunk_cache(&mut self,chunk_id:&str) -> Result<()> {
         if let Some(chunk_cache_node) = self.chunk_cache.remove(chunk_id) {
             let chunk_cache_node = chunk_cache_node.lock().await;
-            let cache_size: u64 = chunk_cache_node.end_offset - chunk_cache_node.start_offset;
-            self.total_size.fetch_sub(cache_size, Ordering::Relaxed);
+            let mut free_size = 0;
+            while let Some((_piece_start_offset,piece)) = chunk_cache_node.cache_pieces.pop() {
+                free_size += piece.len() as u64;
+            }
+            self.total_size.fetch_sub(free_size, Ordering::Relaxed);
+            debug!("free {} chunk cache, size: {} MB", chunk_id, free_size / 1024 / 1024);
             Ok(())
         } else {
             Err(anyhow::anyhow!("Chunk cache not found"))
@@ -246,6 +248,7 @@ pub struct BackupTaskSession {
     pub eval_queue: Arc<SegQueue<BackupItem>>,
     pub transfer_cache_queue:Arc<SegQueue<BackupItem>>,
     pub transfer_queue:Arc<SegQueue<BackupItem>>,
+    pub done_items:Arc<Mutex<HashMap<String,u64>>>,
 }
 
 impl BackupTaskSession {
@@ -256,6 +259,7 @@ impl BackupTaskSession {
             eval_queue: Arc::new(SegQueue::new()),
             transfer_cache_queue:Arc::new(SegQueue::new()),
             transfer_queue:Arc::new(SegQueue::new()),
+            done_items:Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
