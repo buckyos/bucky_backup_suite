@@ -87,9 +87,23 @@ export class BSS3Config extends LitElement {
 
     getUrl() {
         let url = `s3://${this.bucket}/${this.region}`;
+        
+        const params = new URLSearchParams();
+        
         if (!this.use_env_credentials) {
-            url += `?type=key&access_key=${this.access_key_id}&secret_key=${this.secret_access_key}`;
+            params.set('type', 'key');
+            params.set('access_key', this.access_key_id);
+            params.set('secret_key', this.secret_access_key);
         }
+        
+        const copy_id = Date.now().toString();
+        params.set('copy_id', copy_id);
+        
+        const queryString = params.toString();
+        if (queryString) {
+            url += `?${queryString}`;
+        }
+        
         return url;
     }
 

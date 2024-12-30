@@ -115,8 +115,8 @@ export class BSTaskPanel extends LitElement {
         this.total_size = "Unknown";
         this.last_update_time = 0;
         this.last_update_task_info = null;
-        this.task_title = "Test Task";
         this.last_log_content = "Starting...";
+        this.task_title = "Test Task";
         this.task_state = "pause-fill";
         this.progress_value = 0;
         this.progress_text = "0%";
