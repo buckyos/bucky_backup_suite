@@ -13,13 +13,20 @@
     <div id="background">
         <div id="main_frame">
             <div id="toolbar" style="display: flex; justify-content: space-between; align-items: center;padding: 10px;">
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <sl-dropdown id = "create-dropdown">
+                <div style="display: flex; align-items: center; gap: 8px; position: relative;">
+                    <sl-dropdown id = "create-dropdown" style="position: relative;">
                         <sl-button slot="trigger" variant="primary">New Task</sl-button>
                         <sl-menu>
-                            <sl-menu-item value="newbackup">New Backup<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
-                            <sl-menu-item value="restore">Restore<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
+                            <sl-menu-item id="newbackup-menuitem">New Backup
+                                <sl-icon slot="prefix" name="plus-circle"></sl-icon>
+                                <sl-icon slot="suffix" name="chevron-right"></sl-icon>
+                            </sl-menu-item>
+                            <sl-menu-item value="newplan" id="newplan-menuitem">New Plan<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
+                            <sl-menu-item value="restore" id="restore-menuitem">Restore<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
                         </sl-menu>
+                    </sl-dropdown>
+                    <sl-dropdown id="plan-list-dropdown" style="position: absolute; left: 100%; top: 100%; background-color: white; border: 1px solid #ccc; z-index: 1000;">
+                        <sl-menu id="create-backup"></sl-menu>
                     </sl-dropdown>
                     <sl-button-group label="Control">
                         <sl-icon-button style="font-size: 1.5rem;" name="play" id="resume-button"></sl-icon-button>

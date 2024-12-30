@@ -15,7 +15,7 @@ import { BSPlanPanel } from "./components/bs_plan_panel";
 import { taskManager, BackupPlanInfo,TaskInfo } from "./utils/task_mgr";
 import { BSTaskPanel } from "./components/bs_task_panel";
 
-enum PanelType {
+enum TaskPanelType {
     Home = "home",
     AllTask = "alltasks",
     Running = "running",
@@ -43,39 +43,47 @@ async function load_plan_list() {
 //after dom loaded
 window.onload = async () => {
     console.log("bucky backup suite webui loaded");
-    let panel_type: PanelType | null = null;
+    let task_panel_type: TaskPanelType | null = null;
 
-    let switch_panel_list = async (to: PanelType): Promise<void> =>  {
-        if (to == panel_type) {
+    let switch_task_list = async (to: TaskPanelType): Promise<void> =>  {
+        if (to == task_panel_type) {
             return;
         }
 
-        panel_type = to;
+        task_panel_type = to;
 
         let tasklist = document.querySelector("#tasklist") as BSTaskList;
+        let panel_type_dropdown = document.querySelector("#panel-type-dropdown") as SlDropdown;
+        const button = panel_type_dropdown.querySelector('sl-button') as SlButton;
         let taskFilter: TaskFilter = "all";
-        switch (panel_type) {
-            case PanelType.Home:
+        switch (task_panel_type) {
+            case TaskPanelType.Home:
                 console.log("Switching to Home panel");
                 taskFilter = "running";
+                button.textContent = "Home";
                 break;
-            case PanelType.AllTask:
+            case TaskPanelType.AllTask:
                 console.log("Switching to All Tasks panel");
                 taskFilter = "all";
+                button.textContent = "All Tasks";
                 break;
-            case PanelType.Running:
+            case TaskPanelType.Running:
                 console.log("Switching to Running Tasks panel");
                 taskFilter = "running";
+                button.textContent = "Running Tasks";
                 break;
-            case PanelType.Success:
+            case TaskPanelType.Success:
                 console.log("Switching to Success Tasks panel");
                 taskFilter = "all";
+                button.textContent = "Success Tasks";
                 break;
-            case PanelType.Failed:
+            case TaskPanelType.Failed:
                 console.log("Switching to Failed Tasks panel");
                 taskFilter = "paused";
+                button.textContent = "Failed Tasks";
                 break;
         }
+        console.log("switch_task_list:", taskFilter, button.textContent);
         tasklist.setTaskFilter(taskFilter);
     }
     
@@ -100,8 +108,6 @@ window.onload = async () => {
             document.body.appendChild(alert);
             break;
         }
-
-        
     });
 
     let panel_list = document.querySelector("#panel-list") as PanelList;
@@ -158,9 +164,8 @@ window.onload = async () => {
         menu.addEventListener('sl-select', (event) => {
             const selectedItem = event.detail.item;
             const value = selectedItem.value;
-            button.textContent = selectedItem.textContent!.trim();
 
-            switch_panel_list(value as PanelType);
+            switch_task_list(value as TaskPanelType);
         });
     }
 
@@ -168,16 +173,55 @@ window.onload = async () => {
         let create_dropdown = document.querySelector("#create-dropdown") as SlDropdown;
         const menu = create_dropdown.querySelector('sl-menu') as SlMenu;
     
-        menu.addEventListener('sl-select', (event) => {
+        const create_backup_menu = document.querySelector("#create-backup") as SlMenu;
+
+        menu.addEventListener('sl-select', async (event) => {
             const selectedItem = event.detail.item;
             const value = selectedItem.value;
             switch (value) {
-                case "newbackup":
+                case "newplan":
                     doModelAddPlan();
                     break;
                 case "restore":
                     break;
             }
+        });
+
+        let new_backup_menuitem = document.getElementById('newbackup-menuitem')!;
+        let new_plan_menuitem = document.getElementById('newplan-menuitem')!;
+        let new_plan_restore = document.getElementById('restore-menuitem')!;
+        let plan_list_dropdown = document.querySelector('#plan-list-dropdown') as SlDropdown;
+        new_backup_menuitem.addEventListener('mouseenter', async () => {
+            create_backup_menu.innerHTML = '';
+            let planid_list = await taskManager.listBackupPlans() as string[];
+            let plan_list = await Promise.all(
+                planid_list.map((plan_id) => 
+                    taskManager.getBackupPlan(plan_id)
+                )
+            )
+            for(let plan of plan_list) {
+                console.log("plan_id:", plan.plan_id);
+                const newItem = document.createElement('sl-menu-item');
+                newItem.textContent = plan.title;
+                newItem.value = plan.plan_id;
+                create_backup_menu.appendChild(newItem);
+            }
+            plan_list_dropdown.open = true;
+            plan_list_dropdown.style.left = `${new_backup_menuitem.offsetWidth}px`;
+        });
+
+        let close_plan_list_dropdown_items = [new_plan_menuitem, new_plan_restore];
+        close_plan_list_dropdown_items.forEach((item) => {
+            item.addEventListener('mouseenter', function() {
+                plan_list_dropdown.open = false;
+            });
+        })
+    
+        create_backup_menu.addEventListener('sl-select', async (event) => {
+            const selectedItem = event.detail.item;
+            const plan_id = selectedItem.value;
+            let new_task = await taskManager.createBackupTask(plan_id, null);
+            taskManager.resumeBackupTask(new_task.taskid);
         });
     }
 
