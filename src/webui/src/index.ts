@@ -8,6 +8,8 @@ import "./components/wizzard_dlg";
 import "./dlg/create_plan_dlg";
 import "./dlg/select_target_dlg";
 import "./dlg/set_backup_timer_dlg";
+import "./dlg/restore_checkpoint_dlg";
+import "./dlg/restore_select_target_dlg";
 
 import { PanelList } from "./components/panel_list";
 import { BSTaskList, TaskFilter } from "./components/bs_tasklist";
@@ -128,7 +130,6 @@ window.onload = async () => {
         dialog.id = 'create-backup-plan-dlg';
         dialog.setAttribute('no-header', '');
         dialog.setAttribute('overlay-dismiss', 'false');
-        dialog.id = 'create-backup-plan-dlg';
         dialog.innerHTML = `
             <bucky-wizzard-dlg id="create-wizzard" title="Create Backup Plan">
                 <create-plan-dlg></create-plan-dlg>
@@ -143,12 +144,46 @@ window.onload = async () => {
         });
         //console.log(dialog);
         //await dialog.show();
-        dialog.addEventListener('sl-after-hide', () => {
-            dialog.remove();
+        dialog.addEventListener('sl-after-hide', (event) => {
+            if (event.target === dialog) {
+                dialog.remove();
+            }
         });
 
         document.body.appendChild(dialog);
         const dlg = document.getElementById('create-backup-plan-dlg') as SlDialog;
+        dlg.show();
+    }
+
+    let doModelRestore = async () => {
+        console.log("doModelRestore");
+        const dialog = document.createElement('sl-dialog') as SlDialog;
+        dialog.id = 'create-restore-task-dlg';
+        dialog.setAttribute('no-header', '');
+        dialog.setAttribute('overlay-dismiss', 'false');
+        dialog.innerHTML = `
+            <bucky-wizzard-dlg id="create-restore-task-dlg" title="Create Restore Task">
+                <restore-checkpoint-dlg></restore-checkpoint-dlg>
+            </bucky-wizzard-dlg>
+        `;
+    
+        dialog.addEventListener('sl-request-close', event => {
+            //console.log("sl-request-close");
+            //if (event.detail.source === 'overlay') {
+              event.preventDefault();
+            //}
+        });
+        //console.log(dialog);
+        //await dialog.show();
+        dialog.addEventListener('sl-after-hide', (event) => {
+            // console.log("event.composedPath():", event.composedPath());
+            if (event.target === dialog) {
+                dialog.remove();
+            }
+        });
+
+        document.body.appendChild(dialog);
+        const dlg = document.getElementById('create-restore-task-dlg') as SlDialog;
         dlg.show();
     }
 
@@ -183,6 +218,7 @@ window.onload = async () => {
                     doModelAddPlan();
                     break;
                 case "restore":
+                    doModelRestore();
                     break;
             }
         });

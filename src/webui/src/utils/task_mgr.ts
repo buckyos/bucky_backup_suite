@@ -97,6 +97,16 @@ export class BackupTaskManager {
         return result;
     }
 
+    async createRestoreTask(planId: string, checkpointId: string, targetLocationUrl: string, is_clean_folder?: boolean) {
+        const params: any = { plan_id: planId, checkpoint_id: checkpointId, cfg: {
+            restore_location_url: targetLocationUrl,
+            is_clean_restore: is_clean_folder
+        } };
+
+        const result = await this.rpc_client.call("create_restore_task", params);
+        return result;
+    }
+
     async listBackupTasks(filter: "all" | "running" | "paused" = "all") {
         const result = await this.rpc_client.call("list_backup_task", {
             filter: filter
