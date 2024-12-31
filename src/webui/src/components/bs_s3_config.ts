@@ -1,4 +1,4 @@
-import {LitElement, html} from 'lit';
+import {LitElement, html, css} from 'lit';
 import {customElement, property} from 'lit/decorators.js';
 import { SlInput, SlSelect, SlCheckbox } from '@shoelace-style/shoelace';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
@@ -7,12 +7,68 @@ import templateContent from './bs_s3_config.template?raw';
 
 @customElement('bs-s3-config')
 export class BSS3Config extends LitElement {
-    @property({ type: String }) bucket: string = '';
-    @property({ type: String }) region: string = '';
-    @property({ type: Boolean }) use_env_credentials: boolean = true;
-    @property({ type: String }) access_key_id: string = '';
-    @property({ type: String }) secret_access_key: string = '';
-    @property({ type: String }) session_token: string = '';
+    static styles = css`
+        :host {
+            display: block;
+            width: 100%;
+            min-height: 100px;
+            border: 1px solid transparent;
+        }
+    `;
+
+    @property({ type: String })
+    get bucket() { return this._bucket; }
+    set bucket(value: string) { 
+        const oldValue = this._bucket;
+        this._bucket = value;
+        this.requestUpdate('bucket', oldValue);
+    }
+    private _bucket: string = '';
+
+    @property({ type: String })
+    get region() { return this._region; }
+    set region(value: string) {
+        const oldValue = this._region;
+        this._region = value;
+        this.requestUpdate('region', oldValue);
+    }
+    private _region: string = 'us-east-1';
+
+    @property({ type: Boolean })
+    get use_env_credentials() { return this._use_env_credentials; }
+    set use_env_credentials(value: boolean) {
+        const oldValue = this._use_env_credentials;
+        this._use_env_credentials = value;
+        this.requestUpdate('use_env_credentials', oldValue);
+    }
+    private _use_env_credentials: boolean = true;
+
+    @property({ type: String })
+    get access_key_id() { return this._access_key_id; }
+    set access_key_id(value: string) {
+        const oldValue = this._access_key_id;
+        this._access_key_id = value;
+        this.requestUpdate('access_key_id', oldValue);
+    }
+    private _access_key_id: string = '';
+
+    @property({ type: String })
+    get secret_access_key() { return this._secret_access_key; }
+    set secret_access_key(value: string) {
+        const oldValue = this._secret_access_key;
+        this._secret_access_key = value;
+        this.requestUpdate('secret_access_key', oldValue);
+    }
+    private _secret_access_key: string = '';
+
+    @property({ type: String })
+    get session_token() { return this._session_token; }
+    set session_token(value: string) {
+        const oldValue = this._session_token;
+        this._session_token = value;
+        this.requestUpdate('session_token', oldValue);
+    }
+    private _session_token: string = '';
 
     private template_compiled: HandlebarsTemplateDelegate;
     
@@ -36,11 +92,31 @@ export class BSS3Config extends LitElement {
 
     constructor() {
         super();
-        this.template_compiled = Handlebars.compile(templateContent);
+        try {
+            this.template_compiled = Handlebars.compile(templateContent);
+        } catch (error) {
+            console.error('Template compilation failed:', error);
+        }
+        this.region = 'us-east-1';
+    }
+
+    createRenderRoot() {
+        return this;
+    }
+
+    connectedCallback() {
+        super.connectedCallback();
+        this.requestUpdate();
     }
 
     firstUpdated() {
-        const useEnvCheckbox = this.shadowRoot?.querySelector('#use-env-credentials') as SlCheckbox;
+        setTimeout(() => {
+            this.bindEvents();
+        }, 0);
+    }
+
+    private bindEvents() {
+        const useEnvCheckbox = this.querySelector('#use-env-credentials') as SlCheckbox;
         if (useEnvCheckbox) {
             useEnvCheckbox.addEventListener('sl-change', () => {
                 this.use_env_credentials = useEnvCheckbox.checked;
@@ -48,36 +124,35 @@ export class BSS3Config extends LitElement {
             });
         }
 
-        // Add event listeners for inputs
-        const bucketInput = this.shadowRoot?.querySelector('#bucket') as SlInput;
+        const bucketInput = this.querySelector('#bucket') as SlInput;
         if (bucketInput) {
             bucketInput.addEventListener('sl-change', (e: any) => {
                 this.bucket = e.target.value;
             });
         }
 
-        const regionSelect = this.shadowRoot?.querySelector('#region') as SlSelect;
+        const regionSelect = this.querySelector('#region') as SlSelect;
         if (regionSelect) {
             regionSelect.addEventListener('sl-change', (e: any) => {
                 this.region = e.target.value;
             });
         }
 
-        const accessKeyInput = this.shadowRoot?.querySelector('#access-key') as SlInput;
+        const accessKeyInput = this.querySelector('#access-key') as SlInput;
         if (accessKeyInput) {
             accessKeyInput.addEventListener('sl-change', (e: any) => {
                 this.access_key_id = e.target.value;
             });
         }
 
-        const secretKeyInput = this.shadowRoot?.querySelector('#secret-key') as SlInput;
+        const secretKeyInput = this.querySelector('#secret-key') as SlInput;
         if (secretKeyInput) {
             secretKeyInput.addEventListener('sl-change', (e: any) => {
                 this.secret_access_key = e.target.value;
             });
         }
 
-        const sessionTokenInput = this.shadowRoot?.querySelector('#session-token') as SlInput;
+        const sessionTokenInput = this.querySelector('#session-token') as SlInput;
         if (sessionTokenInput) {
             sessionTokenInput.addEventListener('sl-change', (e: any) => {
                 this.session_token = e.target.value;
@@ -107,18 +182,23 @@ export class BSS3Config extends LitElement {
         return url;
     }
 
-
     render() {
-        const templateData = {
-            bucket: this.bucket,
-            region: this.region,
-            use_env_credentials: this.use_env_credentials,
-            access_key_id: this.access_key_id,
-            secret_access_key: this.secret_access_key,
-            session_token: this.session_token,
-            regions: this.regions
-        };
+        try {
+            const templateData = {
+                bucket: this.bucket || '',
+                region: this.region || 'us-east-1',
+                use_env_credentials: this.use_env_credentials,
+                access_key_id: this.access_key_id || '',
+                secret_access_key: this.secret_access_key || '',
+                session_token: this.session_token || '',
+                regions: this.regions
+            };
 
-        return html`${unsafeHTML(this.template_compiled(templateData))}`;
+            const rendered = this.template_compiled(templateData);
+            return html`<div>${unsafeHTML(rendered)}</div>`;
+        } catch (error) {
+            console.error('Render failed:', error);
+            return html`<div>Error rendering component: ${error.message}</div>`;
+        }
     }
 } 

@@ -14,23 +14,28 @@
 
   .target-config {
     margin-top: 1rem;
+    min-height: 200px;
   }
 
-  .hidden {
-    display: none;
+  .target-config.hidden {
+    display: none !important;
+  }
+
+  .form-group {
+    margin-bottom: 1rem;
   }
 </style>
 
 <div class="config-backup-dialog">
   <div class="form-group">
     <label>Select Backup Target Type</label>
-    <sl-select id="target-type" value="local">
+    <sl-select id="target-type" value="s3">
       <sl-option value="local">Local Folder</sl-option>
       <sl-option value="s3">Amazon S3</sl-option>
     </sl-select>
   </div>
 
-  <div id="local-config" class="target-config">
+  <div id="local-config" class="target-config hidden">
     <sl-input 
       label="Input Will Backup Folder Path"
       placeholder="Input full path of the folder you will backup to"
@@ -38,7 +43,7 @@
     </sl-input>
   </div>
 
-  <div id="s3-config" class="target-config hidden">
+  <div id="s3-config" class="target-config">
     <bs-s3-config id="s3-target-config"></bs-s3-config>
   </div>
 

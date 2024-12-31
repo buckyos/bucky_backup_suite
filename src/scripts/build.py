@@ -5,7 +5,7 @@ import platform
 
 import build_web_apps
 import build_rust
-import perpare_rootfs
+import prepare_rootfs
 import install
 
 def build(skip_web_app, skip_install, target):
@@ -16,7 +16,7 @@ def build(skip_web_app, skip_install, target):
     if not skip_web_app:
         build_web_apps.build_web_apps()
     build_rust.build_rust(target_dir, target)
-    perpare_rootfs.copy_files(os.path.join(target_dir, target))
+    prepare_rootfs.copy_files(os.path.join(target_dir, target))
     if not skip_install:
         install.install()
 

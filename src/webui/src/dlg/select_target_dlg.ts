@@ -18,7 +18,7 @@ enum TargetType {
 export class SelectTargetDlg extends LitElement {
     template_compiled: HandlebarsTemplateDelegate<any>;
     ownerWizzard: BuckyWizzardDlg | null;
-    currentTargetType: TargetType = TargetType.Local;
+    currentTargetType: TargetType = TargetType.S3;
 
     setOwnerWizzard(wizzard: BuckyWizzardDlg) {
         this.ownerWizzard = wizzard;
@@ -30,9 +30,13 @@ export class SelectTargetDlg extends LitElement {
         this.template_compiled = Handlebars.compile(templateContent);
     }
 
+    createRenderRoot() {
+        return this;
+    }
+
     async readDataFromUI() {
         if (this.currentTargetType === TargetType.Local) {
-            let backup_target_path = this.shadowRoot?.querySelector("#backup-target-path") as SlInput;
+            let backup_target_path = this.querySelector("#backup-target-path") as SlInput;
             if (backup_target_path) {
                 if (backup_target_path.value.length < 5) {
                     alert("Backup target path must be at least 5 characters long");
@@ -53,7 +57,7 @@ export class SelectTargetDlg extends LitElement {
                 }
             }
         } else if (this.currentTargetType === TargetType.S3) {
-            const s3Config = this.shadowRoot?.querySelector("#s3-target-config") as BSS3Config;
+            const s3Config = this.querySelector("#s3-target-config") as BSS3Config;
             if (s3Config) {
                 if (this.ownerWizzard) {
                     this.ownerWizzard.wizzard_data.backup_target_type = "s3_chunk";
@@ -65,41 +69,50 @@ export class SelectTargetDlg extends LitElement {
     }
 
     firstUpdated() {
-        const targetTypeSelect = this.shadowRoot?.querySelector("#target-type") as SlSelect;
-        if (targetTypeSelect) {
-            targetTypeSelect.addEventListener("sl-change", (e: any) => {
-                this.currentTargetType = e.target.value as TargetType;
-                this.updateTargetConfigVisibility();
-            });
-        }
+        setTimeout(() => {
+            const targetTypeSelect = this.querySelector("#target-type") as SlSelect;
+            if (targetTypeSelect) {
+                targetTypeSelect.addEventListener("sl-change", (e: any) => {
+                    this.currentTargetType = e.target.value as TargetType;
+                    this.updateTargetConfigVisibility();
+                });
+            }
 
-        const nextButton = this.shadowRoot?.querySelector("#next-button");
-        if (nextButton) {
-            nextButton.addEventListener("click", async () => {
-                if (await this.readDataFromUI()) {      
-                    let set_backup_timer_dlg = document.createElement("set-backup-timer-dlg") as SetBackupTimerDlg;
-                    if (this.ownerWizzard) {
-                        set_backup_timer_dlg.setOwnerWizzard(this.ownerWizzard);
-                        this.ownerWizzard.pushDlg(set_backup_timer_dlg,"When to run backups?");
+            const nextButton = this.querySelector("#next-button");
+            if (nextButton) {
+                nextButton.addEventListener("click", async () => {
+                    if (await this.readDataFromUI()) {      
+                        let set_backup_timer_dlg = document.createElement("set-backup-timer-dlg") as SetBackupTimerDlg;
+                        if (this.ownerWizzard) {
+                            set_backup_timer_dlg.setOwnerWizzard(this.ownerWizzard);
+                            this.ownerWizzard.pushDlg(set_backup_timer_dlg,"When to run backups?");
+                        }
                     }
-                }
-            });
-        }
+                });
+            }
+        }, 0);
     }
 
     private updateTargetConfigVisibility() {
-        const localConfig = this.shadowRoot?.querySelector("#local-config");
-        const s3Config = this.shadowRoot?.querySelector("#s3-config");
-        
-        if (localConfig && s3Config) {
-            if (this.currentTargetType === TargetType.Local) {
-                localConfig.classList.remove("hidden");
-                s3Config.classList.add("hidden");
-            } else {
-                localConfig.classList.add("hidden");
-                s3Config.classList.remove("hidden");
+        requestAnimationFrame(() => {
+            const localConfig = this.querySelector("#local-config");
+            const s3Config = this.querySelector("#s3-config");
+            
+            if (localConfig && s3Config) {
+                if (this.currentTargetType === TargetType.Local) {
+                    localConfig.classList.remove("hidden");
+                    s3Config.classList.add("hidden");
+                } else {
+                    localConfig.classList.add("hidden");
+                    s3Config.classList.remove("hidden");
+                    
+                    const s3ConfigComponent = s3Config.querySelector('bs-s3-config');
+                    if (s3ConfigComponent) {
+                        (s3ConfigComponent as BSS3Config).requestUpdate();
+                    }
+                }
             }
-        }
+        });
     }
 
     render() {

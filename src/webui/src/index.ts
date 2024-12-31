@@ -10,6 +10,7 @@ import "./dlg/select_target_dlg";
 import "./dlg/set_backup_timer_dlg";
 import "./dlg/restore_checkpoint_dlg";
 import "./dlg/restore_select_target_dlg";
+import './components/bs_s3_config';
 
 import { PanelList } from "./components/panel_list";
 import { BSTaskList } from "./components/bs_tasklist";
