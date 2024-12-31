@@ -64,13 +64,14 @@ export class RestoreSelectTargetDlg extends LitElement {
             //     description: this.ownerWizzard.wizzard_data.description,
             // }
             
-            let restore_task_id = await taskManager.createRestoreTask(
+            let restore_task = await taskManager.createRestoreTask(
                 this.ownerWizzard!.wizzard_data.plan_id,
                 this.ownerWizzard!.wizzard_data.checkpoint_id,
                 this.ownerWizzard!.wizzard_data.restore_target_url,
                 this.ownerWizzard!!.wizzard_data.is_clean_folder
             );
-            console.log("restore_task_id: ", restore_task_id);
+            console.log("restore_task: ", restore_task);
+            taskManager.resumeBackupTask(restore_task.taskid);
             this.ownerWizzard!.closeDlg();
         });
     }
