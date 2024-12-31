@@ -98,13 +98,13 @@ class CreatePlanDlg extends LitElement {
         let load_checkpoint_list = async (plan_id: string) => {
             try {
                 checkpointCombo.innerHTML = '';
-                let task_ids = await taskManager.listBackupTasks('all') as string[];
+                let task_ids = await taskManager.listBackupTasks('done') as string[];
                 let tasks = await Promise.all(task_ids.map(task_id => taskManager.getTaskInfo(task_id)));
                 tasks.filter(task => task.state == "DONE" && task.owner_plan_id == plan_id).forEach(task => {
                     console.log("checkpoint_id:", task.checkpoint_id, "task:", task);
                     const option = document.createElement('sl-option');
                     option.value = task.checkpoint_id;
-                    option.textContent = new Date(task.update_time * 1000).toLocaleString();
+                    option.textContent = new Date(task.update_time).toLocaleString();
                     checkpointCombo.appendChild(option);
                 });
             } catch (error) {

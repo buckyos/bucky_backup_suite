@@ -1,9 +1,7 @@
-import { taskManager } from '@/utils/task_mgr';
+import { TaskFilter, taskManager } from '@/utils/task_mgr';
 import {LitElement, html} from 'lit';
 import {customElement, property} from 'lit/decorators.js';
 import { BSTaskPanel } from './bs_task_panel';
-
-export type TaskFilter = "all" | "running" | "paused";
 
 @customElement('bs-tasklist')
 export class BSTaskList extends LitElement {

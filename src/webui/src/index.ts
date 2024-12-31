@@ -12,9 +12,9 @@ import "./dlg/restore_checkpoint_dlg";
 import "./dlg/restore_select_target_dlg";
 
 import { PanelList } from "./components/panel_list";
-import { BSTaskList, TaskFilter } from "./components/bs_tasklist";
+import { BSTaskList } from "./components/bs_tasklist";
 import { BSPlanPanel } from "./components/bs_plan_panel";
-import { taskManager, BackupPlanInfo,TaskInfo } from "./utils/task_mgr";
+import { taskManager, BackupPlanInfo,TaskInfo, TaskFilter } from "./utils/task_mgr";
 import { BSTaskPanel } from "./components/bs_task_panel";
 
 enum TaskPanelType {
@@ -22,6 +22,7 @@ enum TaskPanelType {
     AllTask = "alltasks",
     Running = "running",
     Success = "success",
+    Paused = "paused",
     Failed = "failed"
 }
 
@@ -76,12 +77,17 @@ window.onload = async () => {
                 break;
             case TaskPanelType.Success:
                 console.log("Switching to Success Tasks panel");
-                taskFilter = "all";
+                taskFilter = "done";
                 button.textContent = "Success Tasks";
+                break;
+            case TaskPanelType.Paused:
+                console.log("Switching to Paused Tasks panel");
+                taskFilter = "paused";
+                button.textContent = "Paused Tasks";
                 break;
             case TaskPanelType.Failed:
                 console.log("Switching to Failed Tasks panel");
-                taskFilter = "paused";
+                taskFilter = "failed";
                 button.textContent = "Failed Tasks";
                 break;
         }

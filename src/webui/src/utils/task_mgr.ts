@@ -26,6 +26,8 @@ export interface BackupPlanInfo {
     target: string;
 }
 
+export type TaskFilter = "all" | "running" | "paused" | "failed" | "done";
+
 export class BackupTaskManager {
     private rpc_client: any;
     //可以关注task事件(全部task)
@@ -107,7 +109,7 @@ export class BackupTaskManager {
         return result;
     }
 
-    async listBackupTasks(filter: "all" | "running" | "paused" = "all") {
+    async listBackupTasks(filter: TaskFilter = "all") {
         const result = await this.rpc_client.call("list_backup_task", {
             filter: filter
         });
