@@ -1,0 +1,61 @@
+name: Build Bucky-backup-suite Windows Installer Package
+on:
+    workflow_dispatch:
+        inputs:
+            version:
+                description: "Version of the package"
+                required: true
+                type: string
+
+jobs:
+    build:
+        name: build
+        runs-on: windows-latest
+        steps:
+            - name: Checkout backup-suite
+              uses: actions/checkout@v4
+            - name: Checkout buckyos
+              uses: actions/checkout@v4
+              with:
+                  repository: buckyos/buckyos.git
+                  path: buckyos
+            - name: Setup pnpm
+              uses: pnpm/action-setup@v4
+              with:
+                  version: "latest"
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22.x"
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+              with:
+                  toolchain: stable
+                  targets: x86_64-pc-windows-msvc
+            - name: Setup MSVC
+              uses: ilammy/msvc-dev-cmd@v1
+            - name: build buckyos web apps
+              working-directory: ./buckyos/src
+              run: python3 scripts/build_web_apps.py
+            - name: build buckyos x64 bin
+              working-directory: ./buckyos/src
+              run: python3 scripts/build.py --no-build-web-apps --no-install
+            - name: build backup-suite web apps
+              working-directory: ./src
+              run: python3 scripts/build_web_apps.py
+            - name: build backup-suite x64 bin
+              working-directory: ./src
+              run: python3 scripts/build.py --no-build-web-apps --no-install
+            - name: Copy backup-suite to buckyos
+              run: cp -r ./src/rootfs/bin/backup_suite ./buckyos/src/rootfs/bin
+            - name: make installer
+              working-directory: ./buckyos/src
+              run: python3 scripts/make_win_installer.py ${{inputs.version}}
+            - name: Rename installer
+              run: mv ./buckyos/src/buckyos-installer-${{ inputs.version }}.exe ./buckyos/src/buckyos-backup-suite-installer-${{inputs.version}}.exe
+            - name: Upload installer
+              uses: actions/upload-artifact@v4
+              with:
+                  name: buckyos-backup-suite-x86_64-${{inputs.version}}.exe
+                  path: ./buckyos/src/buckyos-backup-suite-installer-${{inputs.version}}.exe
+                  if-no-files-found: error
