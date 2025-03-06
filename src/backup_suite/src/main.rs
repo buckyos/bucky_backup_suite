@@ -19,7 +19,6 @@ async fn main() {
     start_web_control_service().await;
 
     loop {
-        debug!("wait loop");
         tokio::time::sleep(std::time::Duration::from_millis(1)).await
     }
 }
