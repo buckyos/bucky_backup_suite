@@ -1441,6 +1441,10 @@ impl BackupEngine {
         drop(all_tasks);
 
         let mut real_restore_task = restore_task.lock().await;
+        if real_restore_task.task_type != TaskType::Restore {
+            error!("try resume a BackupTask as Restore.");
+            return Err(anyhow::anyhow!("try resume a BackupTask as Restore"));
+        }
         if real_restore_task.state != TaskState::Paused {
             warn!("restore task is not paused, ignore resume");
             return Err(anyhow::anyhow!("restore task is not paused"));
@@ -1516,7 +1520,7 @@ impl BackupEngine {
         Ok(())
     }
 
-    pub async fn resume_work_task(&self, taskid: &str) -> Result<()> {
+    pub async fn resume_backup_task(&self, taskid: &str) -> Result<()> {
         // load task from db
         let mut all_tasks = self.all_tasks.lock().await;
         let mut backup_task = all_tasks.get(taskid);
@@ -1530,6 +1534,10 @@ impl BackupEngine {
         drop(all_tasks);
 
         let mut real_backup_task = backup_task.lock().await;
+        if real_backup_task.task_type != TaskType::Backup {
+            error!("try resume a RestoreTask as Backup.");
+            return Err(anyhow::anyhow!("try resume a RestoreTask as Backup"));
+        }
         if real_backup_task.state != TaskState::Paused {
             warn!("task is not paused, ignore resume");
             return Err(anyhow::anyhow!("task is not paused"));
@@ -1607,6 +1615,28 @@ impl BackupEngine {
         Ok(())
     }
 
+    pub async fn resume_work_task(&self, taskid: &str) -> Result<()> {
+        let mut all_tasks = self.all_tasks.lock().await;
+        let mut backup_task = all_tasks.get(taskid);
+        if backup_task.is_none() {
+            info!("task not found: {} at memory,try load from db", taskid);
+            let _backup_task = self.task_db.load_task_by_id(taskid)?;
+            all_tasks.insert(taskid.to_string(), Arc::new(Mutex::new(_backup_task)));
+            backup_task = all_tasks.get(taskid);
+        }
+        let backup_task = backup_task.unwrap().clone();
+        drop(all_tasks);
+
+        let mut real_backup_task = backup_task.lock().await;
+        let task_type = real_backup_task.task_type.clone();
+        drop(real_backup_task);
+
+        match task_type {
+            TaskType::Backup => self.resume_backup_task(taskid).await,
+            TaskType::Restore => self.resume_restore_task(taskid).await,
+        }
+    }
+
     pub async fn pause_work_task(&self, taskid: &str) -> Result<()> {
         let all_tasks = self.all_tasks.lock().await;
         let backup_task = all_tasks.get(taskid);
@@ -1620,7 +1650,7 @@ impl BackupEngine {
             return Err(anyhow::anyhow!("task is not running"));
         }
         backup_task.state = TaskState::Paused;
-        //self.task_db.pause_task(taskid)?;
+        self.task_db.update_task(&backup_task)?;
         Ok(())
     }
 
