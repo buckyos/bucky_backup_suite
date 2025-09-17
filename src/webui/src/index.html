@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bucky Backup Suite</title>
+    <link rel="stylesheet" href="/shoelace/dist/themes/light.css" />
+    <script type="module" src="/shoelace/dist/shoelace.js"></script>
+    
+</head>
+<body>
+    <script src="./index.ts" type="module"></script>
+    <div id="background">
+        <div id="main_frame">
+            <div id="toolbar" style="display: flex; justify-content: space-between; align-items: center;padding: 10px;">
+                <div style="display: flex; align-items: center; gap: 8px; position: relative;">
+                    <sl-dropdown id = "create-dropdown" style="position: relative;">
+                        <sl-button slot="trigger" variant="primary">New Task</sl-button>
+                        <sl-menu>
+                            <sl-menu-item id="newbackup-menuitem">New Backup
+                                <sl-icon slot="prefix" name="plus-circle"></sl-icon>
+                                <sl-icon slot="suffix" name="chevron-right"></sl-icon>
+                            </sl-menu-item>
+                            <sl-menu-item value="newplan" id="newplan-menuitem">New Plan<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
+                            <sl-menu-item value="restore" id="restore-menuitem">Restore<sl-icon slot="prefix" name="plus-circle"></sl-icon></sl-menu-item>
+                        </sl-menu>
+                    </sl-dropdown>
+                    <sl-dropdown id="plan-list-dropdown" style="position: absolute; left: 100%; top: 100%; background-color: white; border: 1px solid #ccc; z-index: 1000;">
+                        <sl-menu id="create-backup"></sl-menu>
+                    </sl-dropdown>
+                    <sl-button-group label="Control">
+                        <sl-icon-button style="font-size: 1.5rem;" name="play" id="resume-button"></sl-icon-button>
+                        <sl-icon-button style="font-size: 1.5rem;" name="pause" id="pause-all-button"></sl-icon-button>
+                        <sl-icon-button style="font-size: 1.5rem;" name="gear"></sl-icon-button>
+                    </sl-button-group>
+                </div>
+                <sl-dropdown id = "panel-type-dropdown">
+                    <sl-button slot="trigger" caret>Home</sl-button>
+                    <sl-menu>
+                        <sl-menu-item value="home">Home<sl-icon slot="prefix" name="house"></sl-icon></sl-menu-item>
+                        <sl-menu-item value="alltasks">All Tasks<sl-icon slot="prefix" name="list"></sl-icon></sl-menu-item>
+                        <sl-menu-item value="running">Running Tasks<sl-icon slot="prefix" name="box-arrow-right"></sl-icon></sl-menu-item>
+                        <sl-menu-item value="success">Success Tasks<sl-icon slot="prefix" name="check2-all"></sl-icon></sl-menu-item>
+                        <sl-menu-item value="paused">Paused Tasks<sl-icon slot="prefix" name="pause-circle"></sl-icon></sl-menu-item>
+                        <sl-menu-item value="failed">Failed Tasks<sl-icon slot="prefix" name="x-circle"></sl-icon></sl-menu-item>
+                    </sl-menu>
+                </sl-dropdown>
+            </div>
+            
+            <bs-tasklist id="tasklist"></bs-tasklist>
+            <panel-list id="panel-list" title="My Backup Plans"></panel-list>
+        </div>
+    </div>    
+</body>
+</html>

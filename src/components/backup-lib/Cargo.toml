@@ -1,0 +1,29 @@
+[package]
+name = "buckyos-backup-lib"
+version = "0.2.0"
+edition = "2021"
+authors = ["BuckyOS DAO","@waterflier"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+thiserror = "*"
+anyhow = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+time = { version = "*"}
+tokio = { version = "*", features = ["full"] }
+log = "*"
+simplelog = "*"
+rusqlite = { version = "*", features = ["bundled"] }
+ignore = "*"
+sha2 = "*"
+memmap2 = "*"
+async-trait = "*"
+hex = "*"
+ndn-lib = { git = "https://github.com/buckyos/buckyos.git",branch = "alpha2" }
+url = "*"
+
+
+[dev-dependencies]
+tempfile = "*"

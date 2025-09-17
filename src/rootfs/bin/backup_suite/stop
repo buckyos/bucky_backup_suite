@@ -1,0 +1,14 @@
+#!/bin/python3
+
+import os
+import platform
+
+# 考虑上一个进程可能是卡死的，因此需要先kill掉
+print("try to kill backup_suite")
+
+os_name = platform.system()
+
+if os_name == "Windows":
+    os.system("taskkill /f /im backup_suite.exe")
+else:
+    os.system("killall backup_suite")

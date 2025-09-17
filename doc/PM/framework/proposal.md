@@ -13,20 +13,18 @@
 
 ## Basic Architecture
 
-The entire process can be divided into 4 steps:
+The entire process can be divided into 3 steps:
 
-1. **Prepare Data Source**: Ensure that the data source is read-only during the backup process. If any write operations are performed during this period, the original state should be restored upon completion or abnormal termination of the backup. Some exceptions may not be automatically recoverable, so users should be provided with the ability to trigger a state recovery.
+1. **Lock Data Source**: Ensure that the data source is as stable as possible during the backup process. If any write operations are performed during this period, the original state should be restored upon completion or abnormal termination of the backup. Some exceptions might not be automatically recoverable, so users should be given the option to trigger a state recovery.
 
-    ![preserve](./draft-preserve-state.drawio.png)
+![lock](./draft-lock-state.drawio.png)
 
-2. **Construct Metadata**: During this phase, construct all the metadata for the data to be backed up according to the user's requirements. The output structure at this stage should clearly inform the user of what information will be backed up and the approximate space required.
+2. **Package Data Source**: During this period, package the data source into the target format as per the user's requirements (e.g., splitting/packaging into data blocks or restoring data blocks into directories). The output structure at this stage should clearly indicate to the user which information will be backed up and the approximate space it will occupy.
 
-    ![prepare](./draft-prepare-meta.drawio.png)
+![package](./folder2chunk.drawio.png)
 
-3. **Populate Metadata for Specific Backup `Target`**: Some `Targets` may need to record specific information in the metadata, such as the exact storage locations of files. This part of the metadata is parsed by the specific `Target`.
+3. **Transfer**: Complete the data transfer based on the metadata constructed in the previous steps. This step can be performed in parallel with Step 2 or sequentially.
 
-4. **Transfer**: Complete the data transfer based on the metadata constructed in the previous steps.
-
-    ![transfer](./draft-transfer.drawio.png)
+![transfer](./draft-transfer.drawio.png)
 
 \*\* Modules communicate with each other using HTTP protocol calls to decouple dependencies between extension modules, thereby enhancing scalability and stability.

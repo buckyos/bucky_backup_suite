@@ -1,0 +1,21 @@
+[package]
+name = "chunk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "*"
+thiserror = "*" 
+anyhow = "*"
+sha2 = "*"
+base58 = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*" 
+async-trait = "*"
+tokio = { version = "*", features = ["full"] }
+surf = "*"  
+tide = "*" 
+http-types = "*"
+sqlx = { version = "*", features = ["runtime-tokio-rustls", "sqlite"]}
+futures = "*"  
+hex = "*"

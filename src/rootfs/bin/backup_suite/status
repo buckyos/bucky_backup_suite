@@ -1,0 +1,34 @@
+#!/bin/python3
+
+import subprocess
+import platform
+
+os_name = platform.system()
+
+def check_process_exists(process_name):
+    try:
+        if os_name == "Windows":
+            output = subprocess.check_output(["tasklist"], shell=True).decode()
+            if process_name.lower() in output.lower():
+                return True
+            else:
+                return False
+        else:
+            output = subprocess.check_output(["ps", "-A"]).decode()
+            if process_name in output:
+                return True
+            else:
+                return False
+    except subprocess.CalledProcessError:
+        return False
+
+
+if __name__ == "__main__":
+    process_name = "backup_suite"
+    if check_process_exists(process_name):
+        print(f"{process_name} is running")
+        exit(0)
+            
+    print(f"{process_name} is not running")
+    exit(1)
+

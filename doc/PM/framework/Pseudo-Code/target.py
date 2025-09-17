@@ -1,3 +1,5 @@
+import threading
+
 # a simple backup target service, DMC
 class Target:
     def __init__(self, private_key: str):
@@ -13,60 +15,48 @@ class TargetTask:
     def __init__(self, target: Target):
         self.target = target
 
-    def fill_target_meta(self, meta: 'CheckpointMeta') -> [str]:
-        # todo, maybe we can do something prepare for transfer:
-        # 1. create tx to buy sectors, attention: the tx should be stored in engine before it's executed to avoid reentrancy.
-        # 2. allocate the sectors for each item(dir, file, link...)
-        # 3. return the target address for each item will be transferred to sectors:
-
-        #     sector[0]: {file1: {offset: 0, length: 1024}, file2: {offset: 1024, length: 1024}...}
-        #     sector[1]: {file3: {offset: 0, length: 1024}, file4: {offset: 1024, length: 1024}...}
-        #     ...
-        sectors = [];
-        sector_id = 20240921
-        sector_meta = {'file1': {'offset': 0, 'length': 1024, 'pos': 0}, 'file2-splited': {'offset': 0, 'length': 1024, 'pos': 1024}}
-        sectors[0] = {'sector_id': sector_id, 'sector_meta': sector_meta}
-        sector_meta = {'file2-splited': {'offset': 1024, 'length': 4096, 'pos': 0}, 'file3': {'offset': 1024, 'length': 1024, 'pos': 4096}} # attention: 'file2-splited' is splited into two sectors
-        sectors[1] = {'sector_id': sector_id, 'sector_meta': sector_meta}
-        
-        return sectors
-    
-
-    def target_checkpoint_from_filled_meta(self, meta: 'CheckpointMeta', target_meta: [str]) -> 'TargetCheckPoint':
-        sectors = []
-        for sector_json in target_meta:
-            sector = json.loads(sector_json)
-            sector_id = sector['sector_id']
-            sector_meta = sector['sector_meta']
-            sectors.append({sector_id, sector_meta})
-
-        return TargetCheckPoint(self, meta, sectors)
-
+    def target_checkpoint(self, version: int) -> 'TargetCheckPoint':
+        return TargetCheckPoint(self, version)
 
 class TargetCheckPoint(StorageReader):
 
-    def __init__(self, target_task: 'TargetTask', meta: 'CheckpointMeta', sectors: []):
+    def __init__(self, target_task: 'TargetTask', version: int):
         self.target_task = target_task
-        self.meta = meta
-        self.sectors = sectors
+        self.version = version
 
     def transfer(self):
-        checkpoint_engine = CheckpointEngine('${engine_url}', self.meta)
+        chunk_thread = threading.Thread(target = upload_chunk, args={chunks_db})
 
-        for sector in self.sectors:
-            sector_buffer = []
-            sector_id = sector['sector_id']
+def upload_chunk(chunks_db):
+    checkpoint_engine = CheckpointEngine('${engine_url}', self.version)
 
-            sector_meta = sector['sector_meta']
-            for file_path, file_meta in sector_meta.items():
-                offset = file_meta['offset']
-                length = file_meta['length']
-                pos = file_meta['pos']
+    sector = None
 
-                file_content = checkpoint_engine.read_file(file_path, offset, length)
-                sector_buffer.write(file_content, pos)
+    loop:
+        chunk = checkpoint_engine.next_chunk()
+        if not chunk:
+            checkpoint_engine.on_all_chunks_upload_success()
+            break
+        
+        if not sector:
+            sector = DMC.generate_sector()
+            sector.set_sector_header('something')
+            sector_db.add_sector(sector)
 
-            DMC.upload_sector(sector_id, sector_buffer)
+        sector_db.add_chunk_in_sector(sector, chunk)
+
+        dmc_chunk = sector.add_chunk(chunk)
+
+        pos = 0
+        loop:
+            data_block = chunk.read(pos, 1M)
+            if data_block:
+                dmc_chunk.upload_block(data_block)
+            else:
+                dmc_chunk.close()
+                break
+            
+
 def rpc_call(url: str, method: str, params: dict) -> dict:
     pass
 
@@ -75,9 +65,8 @@ class CheckpointEngine:
         self.engine_url = engine_url
         self.meta = meta
 
-    def read_file(self, file_path: str, offset: int, length: int):
-        params = {'file_path': file_path, 'offset': offset, 'length': length, 'task_uuid': self.meta.task_uuid, 'version': self.meta.version}
-        return rpc_call(self.engine_url, 'read_file', params)
+    def next_chunk(self):
+        return rpc_call(self.engine_url, 'next_chunk', params)
 
 
 

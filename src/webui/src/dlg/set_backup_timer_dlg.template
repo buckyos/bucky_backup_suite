@@ -1,0 +1,51 @@
+<div class="dialog-content">
+  <div class="backup-settings">
+    <p class="backup-description">Running a backup manually</p>
+
+    <div class="backup-options">
+      <sl-checkbox id="is-run-now">Back up immediately after creation</sl-checkbox>
+    </div>
+
+    <sl-button variant="primary" id="create-btn">Create Backup Plan</sl-button>
+  </div>
+</div>
+
+<style>
+  .dialog-content {
+    padding: 2rem;
+    text-align: center;
+  }
+
+  .dialog-title {
+    font-size: 1.5rem;
+    margin-bottom: 2rem;
+  }
+
+  .backup-settings {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  h2 {
+    font-size: 1.2rem;
+    margin: 0;
+  }
+
+  sl-select {
+    width: 100%;
+  }
+
+  .backup-description {
+    color: var(--sl-color-neutral-600);
+  }
+
+  .backup-options {
+    text-align: left;
+    margin: 1rem 0;
+  }
+
+  .create-btn {
+    width: 100%;
+  }
+</style>

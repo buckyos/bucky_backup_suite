@@ -8,9 +8,9 @@ target_id = engine.register_target(target_url)
 
 task = engine.create_task(source_id, '/photos/', target_id, '')
 
-source_preserved_state_id = task.preserve_source()
+source_locked_state_id = task.lock_source()
 
-checkpoint = task.prepare_checkpoint(source_preserved_state_id, false)
+checkpoint = task.create_checkpoint(source_locked_state_id, false)
 
 checkpoint.transfer()
 

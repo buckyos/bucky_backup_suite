@@ -2,5 +2,13 @@
 resolver = "2"
 
 members = [
-    "./framework",
+    #"./components/gateway-lib",
+    "./components/dir-source",
+    "./components/backup-lib",
+    "./components/chunk",
+    "./components/sector",
+    "./backup_suite",
+    "./plugins/dmcx/common",
+    "./plugins/dmcx/user", 
+    "./plugins/s3",
 ]

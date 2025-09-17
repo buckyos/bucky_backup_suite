@@ -1,0 +1,53 @@
+[package]
+name = "backup_suite"
+version = "0.4.0"
+edition = "2021"
+authors = ["BuckyOS DAO","@waterflier"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# 3rd party dependencies
+toml = "*"
+clap = "*"
+chrono = "*"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+log = "*"
+simplelog = "*"
+thiserror = "*"
+tokio = { version = "*", features = ["full"] }
+async-trait = "*"
+futures = "*"
+lazy_static = "*"
+num_cpus = "*"
+time = { version = "^0.3", features = ["formatting"] }
+sysinfo = "*"
+anyhow = "*"
+base64 = "*"
+sha2 = "*"
+rusqlite = { version = "*", features = ["bundled"] }
+url = "2.5.0"
+dyn-clone = "*"
+crossbeam = "*"
+
+buckyos-backup-lib = { path = "../components/backup-lib" }
+ndn-lib = { git = "https://github.com/buckyos/buckyos.git",branch = "alpha2" }
+cyfs-warp = { git = "https://github.com/buckyos/buckyos.git",branch = "alpha2" }
+cyfs-gateway-lib = { git = "https://github.com/buckyos/buckyos.git",branch = "alpha2" }
+buckyos-kit = { git = "https://github.com/buckyos/buckyos.git",branch = "alpha2" }
+kRPC = { git = "https://github.com/buckyos/buckyos.git",branch = "alpha2" }
+s3-chunk-target = { path = "../plugins/s3" }
+
+[dependencies.uuid]
+version = "*"
+features = [
+    "v4",                # Lets you generate random UUIDs
+    "fast-rng",          # Use a faster (but still sufficiently random) RNG
+    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
+]
+
+
+[dev-dependencies]
+tempfile = "*"
+

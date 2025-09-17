@@ -28,7 +28,7 @@ struct CheckPointVersion {
     seq: u64,
 }
 
-struct StorageItemAttributes {
+struct Attributes {
     create_time: SystemTime,
     last_update_time: SystemTime,
     owner: String,
@@ -40,7 +40,7 @@ struct StorageItemAttributes {
 macro_rules! storage_item_common_meta {
     ($service_common_meta_type: ty) => {
         name: String,
-        attributes: StorageItemAttributes,
+        attributes: Attributes,
         parent: Option<Week<DirectoryMeta>>,
         service_meta: $service_common_meta_type, // any service can add meta here.
     }
