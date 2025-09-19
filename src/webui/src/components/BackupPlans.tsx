@@ -78,6 +78,9 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
     }
   ]);
 
+  // Read services count to decide empty-state guidance
+  const servicesCount = 0;
+
   // 检查是否有未完成的任务
   const hasRunningTasks = () => {
     // 模拟检查运行中的任务
@@ -141,7 +144,41 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
 
       {/* 计划列表 */}
       <div className="grid gap-4">
-        {plans.map((plan) => (
+        {plans.length === 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>{servicesCount === 0 ? '还没有可用的备份服务' : '还没有备份计划'}</CardTitle>
+              <CardDescription>
+                {servicesCount === 0
+                  ? '创建备份计划前，请先配置一个备份服务'
+                  : '创建你的第一个备份计划以保护重要数据'}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className={`flex ${isMobile ? 'flex-col gap-2' : 'items-center gap-3'}`}>
+                {servicesCount === 0 ? (
+                  <>
+                    <Button onClick={() => onNavigate?.('services')} className="gap-2">
+                      <Server className="w-4 h-4" />
+                      去配置备份服务
+                    </Button>
+                    {!isMobile && <span className="text-muted-foreground">或</span>}
+                    <Button variant="outline" onClick={() => onNavigate?.('create-plan')} className="gap-2" disabled>
+                      <Plus className="w-4 h-4" />
+                      新建备份计划
+                    </Button>
+                  </>
+                ) : (
+                  <Button onClick={() => onNavigate?.('create-plan')} className="gap-2">
+                    <Plus className="w-4 h-4" />
+                    新建备份计划
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+        plans.map((plan) => (
           <Card key={plan.id} className={`transition-all ${!plan.enabled ? 'opacity-60' : ''}`}>
             <CardHeader>
               <div className="flex items-start justify-between">
@@ -332,7 +369,8 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
               </div>
             </CardContent>
           </Card>
-        ))}
+        ))
+        )}
       </div>
 
       {/* 统计信息 */}
