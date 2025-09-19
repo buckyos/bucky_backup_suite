@@ -43,7 +43,18 @@ function SidebarContent({ currentPage, onPageChange, onNavigate }: SidebarConten
     <div className="h-full bg-sidebar border-r border-sidebar-border flex flex-col">
       {/* Header */}
       <div className="p-6 border-b border-sidebar-border">
-        <h1 className="text-sidebar-foreground">Bucky Backup Suite</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-sidebar-foreground">Bucky Backup Suite</h1>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleTheme}
+            aria-label="Toggle theme"
+            className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          >
+            {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+          </Button>
+        </div>
         <p className="text-sm text-sidebar-accent-foreground mt-1">专业备份解决方案</p>
       </div>
 
@@ -69,18 +80,7 @@ function SidebarContent({ currentPage, onPageChange, onNavigate }: SidebarConten
         </div>
       </nav>
 
-      {/* Theme toggle */}
-      <div className="p-4 border-t border-sidebar-border">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={toggleTheme}
-          className="w-full justify-start gap-3 h-11 px-3 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-        >
-          {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
-          {theme === 'light' ? t.settings.darkMode : t.settings.lightMode}
-        </Button>
-      </div>
+      {/* Theme toggle moved to header */}
     </div>
   );
 }
