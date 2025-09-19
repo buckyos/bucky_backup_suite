@@ -55,26 +55,52 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     const isMobile = useMobile();
     const [selectedPlan, setSelectedPlan] = useState("");
 
+    // Read persisted counts to decide whether to show guidance panel
+    const plansCount =
+        0 &&
+        (() => {
+            try {
+                const raw = localStorage.getItem("plans");
+                if (!raw) return 0;
+                const arr = JSON.parse(raw);
+                return Array.isArray(arr) ? arr.length : 0;
+            } catch {
+                return 0;
+            }
+        })();
+    const servicesCount =
+        0 &&
+        (() => {
+            try {
+                const raw = localStorage.getItem("services");
+                if (!raw) return 0;
+                const arr = JSON.parse(raw);
+                return Array.isArray(arr) ? arr.length : 0;
+            } catch {
+                return 0;
+            }
+        })();
+
     // 模拟数据
     const currentTasks = [
-        {
-            id: 1,
-            name: "系统文件夜间备份",
-            plan: "系统备份",
-            progress: 65,
-            speed: "12.5 MB/s",
-            remaining: "约 15 分钟",
-            status: "running",
-        },
-        {
-            id: 2,
-            name: "项目文件增量备份",
-            plan: "项目备份",
-            progress: 100,
-            speed: "",
-            remaining: "",
-            status: "completed",
-        },
+        // {
+        //     id: 1,
+        //     name: "系统文件夜间备份",
+        //     plan: "系统备份",
+        //     progress: 65,
+        //     speed: "12.5 MB/s",
+        //     remaining: "约 15 分钟",
+        //     status: "running",
+        // },
+        // {
+        //     id: 2,
+        //     name: "项目文件增量备份",
+        //     plan: "项目备份",
+        //     progress: 100,
+        //     speed: "",
+        //     remaining: "",
+        //     status: "completed",
+        // },
     ];
 
     const recentActivities = [
@@ -521,14 +547,102 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                         {currentTasks.filter(
                                             (task) => task.status === "running"
                                         ).length === 0 && (
-                                            <div className="text-sm text-muted-foreground text-center py-4">
-                                                暂无执行中的任务
+                                            <div className="text-center py-4">
+                                                {plansCount === 0 ? (
+                                                    <div
+                                                        className={`flex ${
+                                                            isMobile
+                                                                ? "flex-col gap-2"
+                                                                : "items-center gap-3"
+                                                        } justify-center`}
+                                                    >
+                                                        {servicesCount === 0 ? (
+                                                            <>
+                                                                <Button
+                                                                    onClick={() =>
+                                                                        onNavigate?.(
+                                                                            "add-service"
+                                                                        )
+                                                                    }
+                                                                    size="sm"
+                                                                    className="gap-2"
+                                                                >
+                                                                    去配置备份服务
+                                                                </Button>
+                                                                {!isMobile && (
+                                                                    <span className="text-muted-foreground text-sm">
+                                                                        或
+                                                                    </span>
+                                                                )}
+                                                                <Button
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="gap-2"
+                                                                    disabled
+                                                                >
+                                                                    新建备份计划
+                                                                </Button>
+                                                            </>
+                                                        ) : (
+                                                            <Button
+                                                                onClick={() =>
+                                                                    onNavigate?.(
+                                                                        "create-plan"
+                                                                    )
+                                                                }
+                                                                size="sm"
+                                                                className="gap-2"
+                                                            >
+                                                                新建备份计划
+                                                            </Button>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <Button
+                                                        onClick={() =>
+                                                            onNavigate?.(
+                                                                "plans"
+                                                            )
+                                                        }
+                                                        size="sm"
+                                                        className="gap-2"
+                                                    >
+                                                        前往计划列表执行一次备份
+                                                    </Button>
+                                                )}
                                             </div>
                                         )}
                                     </div>
                                 </ScrollArea>
                             ) : (
                                 <div className="space-y-3">
+                                    {currentTasks.filter((t) => t.status === 'running').length === 0 && (
+                                        <div className="text-center py-2">
+                                            {plansCount === 0 ? (
+                                                <div className={`flex ${isMobile ? 'flex-col gap-2' : 'items-center gap-3'} justify-center`}>
+                                                    {servicesCount === 0 ? (
+                                                        <>
+                                                            <Button onClick={() => onNavigate?.('add-service')} size="sm" className="gap-2">
+                                                                去配置备份服务
+                                                            </Button>
+                                                            {!isMobile && <span className="text-muted-foreground text-sm">或</span>}
+                                                            <Button variant="outline" size="sm" className="gap-2" disabled>
+                                                                新建备份计划
+                                                            </Button>
+                                                        </>
+                                                    ) : (
+                                                        <Button onClick={() => onNavigate?.('create-plan')} size="sm" className="gap-2">
+                                                            新建备份计划
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            ) : (
+                                                <Button onClick={() => onNavigate?.('plans')} size="sm" className="gap-2">
+                                                    前往计划列表执行一次备份
+                                                </Button>
+                                            )}
+                                        </div>
+                                    )}
                                     {currentTasks.slice(0, 3).map((task) => (
                                         <div
                                             key={task.id}
@@ -609,7 +723,25 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             </div>
                         </CardHeader>
                         <CardContent>
-                            {isMobile ? (
+                            {servicesCount === 0 ? (
+                                <div
+                                    className={`flex ${
+                                        isMobile
+                                            ? "flex-col gap-2"
+                                            : "items-center gap-3"
+                                    }`}
+                                >
+                                    <Button
+                                        onClick={() =>
+                                            onNavigate?.("add-service")
+                                        }
+                                        className="gap-2"
+                                    >
+                                        <Plus className="w-4 h-4" />
+                                        去配置备份服务
+                                    </Button>
+                                </div>
+                            ) : isMobile ? (
                                 <ScrollArea className="h-20">
                                     <div className="space-y-2">
                                         {backupServices
@@ -674,6 +806,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                                 {
                                                                                     service.usagePercent
                                                                                 }
+
                                                                                 %
                                                                             </span>
                                                                         </div>
@@ -789,7 +922,55 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             </div>
                         </CardHeader>
                         <CardContent>
-                            {isMobile ? (
+                            {plansCount === 0 ? (
+                                <div
+                                    className={`flex ${
+                                        isMobile
+                                            ? "flex-col gap-2"
+                                            : "items-center gap-3"
+                                    }`}
+                                >
+                                    {servicesCount === 0 ? (
+                                        <>
+                                            <Button
+                                                onClick={() =>
+                                                    onNavigate?.("services")
+                                                }
+                                                className="gap-2"
+                                            >
+                                                <Server className="w-4 h-4" />
+                                                去配置备份服务
+                                            </Button>
+                                            {!isMobile && (
+                                                <span className="text-muted-foreground">
+                                                    或
+                                                </span>
+                                            )}
+                                            <Button
+                                                variant="outline"
+                                                onClick={() =>
+                                                    onNavigate?.("create-plan")
+                                                }
+                                                className="gap-2"
+                                                disabled
+                                            >
+                                                <Plus className="w-4 h-4" />
+                                                新建备份计划
+                                            </Button>
+                                        </>
+                                    ) : (
+                                        <Button
+                                            onClick={() =>
+                                                onNavigate?.("create-plan")
+                                            }
+                                            className="gap-2"
+                                        >
+                                            <Plus className="w-4 h-4" />
+                                            新建备份计划
+                                        </Button>
+                                    )}
+                                </div>
+                            ) : isMobile ? (
                                 <ScrollArea className="h-24">
                                     <div className="space-y-2">
                                         {backupPlans.slice(0, 4).map((plan) => (

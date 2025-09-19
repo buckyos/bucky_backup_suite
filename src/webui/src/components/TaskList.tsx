@@ -64,76 +64,102 @@ export function TaskList({ onNavigate }: TaskListProps) {
     const [showFilters, setShowFilters] = useState(false);
     const [selectedTask, setSelectedTask] = useState<any>(null);
 
+    // Read counts to guide empty states
+    const plansCount =
+        0 &&
+        (() => {
+            try {
+                const raw = localStorage.getItem("plans");
+                if (!raw) return 0;
+                const arr = JSON.parse(raw);
+                return Array.isArray(arr) ? arr.length : 0;
+            } catch {
+                return 0;
+            }
+        })();
+    const servicesCount =
+        0 &&
+        (() => {
+            try {
+                const raw = localStorage.getItem("services");
+                if (!raw) return 0;
+                const arr = JSON.parse(raw);
+                return Array.isArray(arr) ? arr.length : 0;
+            } catch {
+                return 0;
+            }
+        })();
+
     const tasks = [
-        {
-            id: 1,
-            name: "系统文件夜间备份",
-            type: "backup",
-            status: "running",
-            progress: 65,
-            speed: "12.5 MB/s",
-            remaining: "约 15 分钟",
-            plan: "系统文件备份",
-            startTime: "2024-01-15 23:00:00",
-            estimatedEnd: "2024-01-15 23:30:00",
-            totalSize: "2.1 GB",
-            processedSize: "1.4 GB",
-        },
-        {
-            id: 2,
-            name: "项目文件增量备份",
-            type: "backup",
-            status: "completed",
-            progress: 100,
-            speed: "",
-            remaining: "",
-            plan: "项目文件备份",
-            startTime: "2024-01-15 02:00:00",
-            completedTime: "2024-01-15 02:45:00",
-            totalSize: "856 MB",
-            processedSize: "856 MB",
-        },
-        {
-            id: 3,
-            name: "恢复用户文档",
-            type: "restore",
-            status: "paused",
-            progress: 35,
-            speed: "",
-            remaining: "已暂停",
-            plan: "手动恢复",
-            startTime: "2024-01-15 14:30:00",
-            totalSize: "1.5 GB",
-            processedSize: "525 MB",
-        },
-        {
-            id: 4,
-            name: "媒体文件备份",
-            type: "backup",
-            status: "failed",
-            progress: 23,
-            speed: "",
-            remaining: "已失败",
-            plan: "媒体文件备份",
-            startTime: "2024-01-14 20:00:00",
-            errorTime: "2024-01-14 20:15:00",
-            totalSize: "8.3 GB",
-            processedSize: "1.9 GB",
-            error: "目标磁盘空间不足",
-        },
-        {
-            id: 5,
-            name: "配置文件备份",
-            type: "backup",
-            status: "queued",
-            progress: 0,
-            speed: "",
-            remaining: "等待中",
-            plan: "系统配置备份",
-            scheduledTime: "2024-01-16 01:00:00",
-            totalSize: "125 MB",
-            processedSize: "0 MB",
-        },
+        // {
+        //     id: 1,
+        //     name: "系统文件夜间备份",
+        //     type: "backup",
+        //     status: "running",
+        //     progress: 65,
+        //     speed: "12.5 MB/s",
+        //     remaining: "约 15 分钟",
+        //     plan: "系统文件备份",
+        //     startTime: "2024-01-15 23:00:00",
+        //     estimatedEnd: "2024-01-15 23:30:00",
+        //     totalSize: "2.1 GB",
+        //     processedSize: "1.4 GB",
+        // },
+        // {
+        //     id: 2,
+        //     name: "项目文件增量备份",
+        //     type: "backup",
+        //     status: "completed",
+        //     progress: 100,
+        //     speed: "",
+        //     remaining: "",
+        //     plan: "项目文件备份",
+        //     startTime: "2024-01-15 02:00:00",
+        //     completedTime: "2024-01-15 02:45:00",
+        //     totalSize: "856 MB",
+        //     processedSize: "856 MB",
+        // },
+        // {
+        //     id: 3,
+        //     name: "恢复用户文档",
+        //     type: "restore",
+        //     status: "paused",
+        //     progress: 35,
+        //     speed: "",
+        //     remaining: "已暂停",
+        //     plan: "手动恢复",
+        //     startTime: "2024-01-15 14:30:00",
+        //     totalSize: "1.5 GB",
+        //     processedSize: "525 MB",
+        // },
+        // {
+        //     id: 4,
+        //     name: "媒体文件备份",
+        //     type: "backup",
+        //     status: "failed",
+        //     progress: 23,
+        //     speed: "",
+        //     remaining: "已失败",
+        //     plan: "媒体文件备份",
+        //     startTime: "2024-01-14 20:00:00",
+        //     errorTime: "2024-01-14 20:15:00",
+        //     totalSize: "8.3 GB",
+        //     processedSize: "1.9 GB",
+        //     error: "目标磁盘空间不足",
+        // },
+        // {
+        //     id: 5,
+        //     name: "配置文件备份",
+        //     type: "backup",
+        //     status: "queued",
+        //     progress: 0,
+        //     speed: "",
+        //     remaining: "等待中",
+        //     plan: "系统配置备份",
+        //     scheduledTime: "2024-01-16 01:00:00",
+        //     totalSize: "125 MB",
+        //     processedSize: "0 MB",
+        // },
     ];
 
     const getStatusBadge = (status: string) => {
@@ -292,6 +318,82 @@ export function TaskList({ onNavigate }: TaskListProps) {
 
         return actions;
     };
+
+    // Empty-state for no tasks at all
+    if (tasks.length === 0) {
+        return (
+            <div
+                className={`${
+                    isMobile ? "p-4 pt-16" : "p-6"
+                } flex items-center justify-center`}
+            >
+                <Card
+                    className={`w-full ${
+                        isMobile ? "" : "max-w-2xl"
+                    } text-center`}
+                >
+                    <CardHeader>
+                        <CardTitle>暂无任务</CardTitle>
+                        <CardDescription>
+                            {servicesCount === 0
+                                ? "开始前，请先配置一个备份服务"
+                                : plansCount === 0
+                                ? "配置好服务后，创建你的第一个备份计划"
+                                : "你可以立即执行一次备份任务"}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div
+                            className={`flex ${
+                                isMobile
+                                    ? "flex-col gap-2"
+                                    : "items-center justify-center gap-3"
+                            }`}
+                        >
+                            {servicesCount === 0 ? (
+                                <>
+                                    <Button
+                                        onClick={() =>
+                                            onNavigate?.("add-service")
+                                        }
+                                        className="gap-2"
+                                    >
+                                        去配置备份服务
+                                    </Button>
+                                    {!isMobile && (
+                                        <span className="text-muted-foreground">
+                                            或
+                                        </span>
+                                    )}
+                                    <Button
+                                        variant="outline"
+                                        disabled
+                                        className="gap-2"
+                                    >
+                                        新建备份计划
+                                    </Button>
+                                </>
+                            ) : plansCount === 0 ? (
+                                <Button
+                                    onClick={() => onNavigate?.("create-plan")}
+                                    className="gap-2"
+                                >
+                                    新建备份计划
+                                </Button>
+                            ) : (
+                                <Button
+                                    onClick={() => onNavigate?.("plans")}
+                                    className="gap-2"
+                                >
+                                    前往计划列表执行一次备份
+                                </Button>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
 
     return (
         <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-4`}>
