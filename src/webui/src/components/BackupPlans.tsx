@@ -1,0 +1,369 @@
+import React, { useState } from 'react';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { Button } from './ui/button';
+import { Badge } from './ui/badge';
+import { Switch } from './ui/switch';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from './ui/alert-dialog';
+import { useLanguage } from './i18n/LanguageProvider';
+import { useMobile } from './hooks/use-mobile';
+import { toast } from 'sonner@2.0.3';
+import { 
+  Plus, 
+  Play, 
+  Edit, 
+  Eye, 
+  Trash2,
+  Calendar,
+  Folder,
+  Server,
+  ArrowLeft,
+  Undo2
+} from 'lucide-react';
+
+interface BackupPlansProps {
+  onNavigate?: (page: string, data?: any) => void;
+}
+
+export function BackupPlans({ onNavigate }: BackupPlansProps) {
+  const { t } = useLanguage();
+  const isMobile = useMobile();
+  const [plans, setPlans] = useState([
+    {
+      id: 1,
+      name: "系统文件备份",
+      description: "每日自动备份系统关键文件",
+      enabled: true,
+      source: "C:\\Windows\\System32",
+      destination: "本地D盘",
+      nextRun: "今天 23:00",
+      schedule: "每天 23:00",
+      lastRun: "昨天 23:00",
+      status: "healthy"
+    },
+    {
+      id: 2,
+      name: "项目文件备份",
+      description: "工作项目的增量备份",
+      enabled: true,
+      source: "D:\\Projects",
+      destination: "NDN网络",
+      nextRun: "明天 02:00",
+      schedule: "每周一、三、五 02:00",
+      lastRun: "2天前",
+      status: "healthy"
+    },
+    {
+      id: 3,
+      name: "文档备份",
+      description: "个人文档和配置文件",
+      enabled: false,
+      source: "C:\\Users\\Documents",
+      destination: "本地D盘",
+      nextRun: "已禁用",
+      schedule: "每天 01:00",
+      lastRun: "1周前",
+      status: "disabled"
+    },
+    {
+      id: 4,
+      name: "媒体文件备份",
+      description: "照片和视频文件备份",
+      enabled: true,
+      source: "D:\\Media",
+      destination: "NDN网络",
+      nextRun: "今天 20:00",
+      schedule: "每天 20:00",
+      lastRun: "昨天 20:00",
+      status: "warning"
+    }
+  ]);
+
+  // 检查是否有未完成的任务
+  const hasRunningTasks = () => {
+    // 模拟检查运行中的任务
+    return false; // 为了演示，设为false
+  };
+
+  const togglePlan = (planId: number) => {
+    setPlans(plans.map(plan => 
+      plan.id === planId 
+        ? { ...plan, enabled: !plan.enabled, status: !plan.enabled ? 'healthy' : 'disabled' }
+        : plan
+    ));
+  };
+
+  const deletePlan = (planId: number) => {
+    setPlans(plans.filter(plan => plan.id !== planId));
+    toast.success('备份计划已删除');
+  };
+
+  const runPlan = (plan: any) => {
+    if (hasRunningTasks()) {
+      toast.error('当前有任务正在执行，请等待完成或删除现有任务');
+      return;
+    }
+    toast.success(`正在启动备份计划: ${plan.name}`);
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'healthy':
+        return <Badge className="bg-green-100 text-green-800">正常</Badge>;
+      case 'warning':
+        return <Badge className="bg-yellow-100 text-yellow-800">警告</Badge>;
+      case 'disabled':
+        return <Badge variant="secondary">已禁用</Badge>;
+      default:
+        return <Badge variant="outline">未知</Badge>;
+    }
+  };
+
+  return (
+    <div className={`${isMobile ? 'p-4 pt-16' : 'p-6'} space-y-6`}>
+      {/* 头部 */}
+      <div className="flex items-center justify-between">
+        <div>
+          {!isMobile && (
+            <>
+              <h1 className="mb-2">{t.plans.title}</h1>
+              <p className="text-muted-foreground">{t.plans.subtitle}</p>
+            </>
+          )}
+        </div>
+        <Button 
+          className={`gap-2 ${isMobile ? 'px-3' : ''}`} 
+          onClick={() => onNavigate?.('create-plan')}
+        >
+          <Plus className="w-4 h-4" />
+          {isMobile ? '' : t.plans.createNew}
+        </Button>
+      </div>
+
+      {/* 计划列表 */}
+      <div className="grid gap-4">
+        {plans.map((plan) => (
+          <Card key={plan.id} className={`transition-all ${!plan.enabled ? 'opacity-60' : ''}`}>
+            <CardHeader>
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-2">
+                    <CardTitle className={`${isMobile ? 'text-base' : 'text-lg'}`}>{plan.name}</CardTitle>
+                    {getStatusBadge(plan.status)}
+                  </div>
+                  {!isMobile && <CardDescription>{plan.description}</CardDescription>}
+                </div>
+                <div className="flex items-center gap-3">
+                  <Switch
+                    checked={plan.enabled}
+                    onCheckedChange={() => togglePlan(plan.id)}
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className={`grid ${isMobile ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-4'} gap-4 mb-4`}>
+                <div className="flex items-center gap-2">
+                  <Folder className="w-4 h-4 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.plans.source}</p>
+                    <p className={`font-medium truncate ${isMobile ? 'text-sm' : ''}`}>{plan.source}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Server className="w-4 h-4 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.plans.destination}</p>
+                    <p className={`font-medium ${isMobile ? 'text-sm' : ''}`}>{plan.destination}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm text-muted-foreground">{t.plans.schedule}</p>
+                    <p className={`font-medium ${isMobile ? 'text-sm' : ''}`}>{plan.schedule}</p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">{t.plans.nextRun}</p>
+                  <p className={`font-medium ${isMobile ? 'text-sm' : ''}`}>{plan.nextRun}</p>
+                </div>
+              </div>
+              
+              <div className="flex items-center justify-between pt-4 border-t">
+                <div className={`text-muted-foreground ${isMobile ? 'text-xs' : 'text-sm'}`}>
+                  {t.plans.lastRun}: {plan.lastRun}
+                </div>
+                <div className="flex items-center gap-2">
+                  {isMobile ? (
+                    <>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="p-2" 
+                        disabled={!plan.enabled}
+                        onClick={() => runPlan(plan)}
+                      >
+                        <Play className="w-3 h-3" />
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="p-2"
+                        onClick={() => onNavigate?.('restore', { planId: plan.id })}
+                      >
+                        <Undo2 className="w-3 h-3" />
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="p-2"
+                        onClick={() => onNavigate?.('edit-plan', plan)}
+                      >
+                        <Edit className="w-3 h-3" />
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="p-2" 
+                        onClick={() => onNavigate?.('plan-details', plan)}
+                      >
+                        <Eye className="w-3 h-3" />
+                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="p-2 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>删除备份计划</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              确定要删除备份计划 "{plan.name}" 吗？此操作不可撤销。
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>取消</AlertDialogCancel>
+                            <AlertDialogAction 
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={() => deletePlan(plan.id)}
+                            >
+                              删除
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </>
+                  ) : (
+                    <>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="gap-1" 
+                        disabled={!plan.enabled}
+                        onClick={() => runPlan(plan)}
+                      >
+                        <Play className="w-3 h-3" />
+                        {t.plans.runNow}
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="gap-1"
+                        onClick={() => onNavigate?.('restore', { planId: plan.id })}
+                      >
+                        <Undo2 className="w-3 h-3" />
+                        {t.common.restore}
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="gap-1"
+                        onClick={() => onNavigate?.('edit-plan', plan)}
+                      >
+                        <Edit className="w-3 h-3" />
+                        {t.common.edit}
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="gap-1" 
+                        onClick={() => onNavigate?.('plan-details', plan)}
+                      >
+                        <Eye className="w-3 h-3" />
+                        详情
+                      </Button>
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            {t.common.delete}
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>删除备份计划</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              确定要删除备份计划 "{plan.name}" 吗？此操作不可撤销。
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>取消</AlertDialogCancel>
+                            <AlertDialogAction 
+                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              onClick={() => deletePlan(plan.id)}
+                            >
+                              删除
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                    </>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* 统计信息 */}
+      {!isMobile && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">总计划数</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl">{plans.length}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">启用计划</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl">{plans.filter(p => p.enabled).length}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">需要关注</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-2xl">{plans.filter(p => p.status === 'warning').length}</p>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </div>
+  );
+}
