@@ -1263,7 +1263,7 @@ impl BackupEngine {
                         warn!("invalid progress info:{}", item.progress.as_str());
                     } else {
                         let hash_state = hash_state.unwrap();
-                        offset = hash_state.pos;
+                        offset = hash_state.hash_length;
                         real_hash_state = Some(hash_state);
                         info!("load progress sucess!,pos:{}", offset);
                     }
@@ -1309,7 +1309,7 @@ impl BackupEngine {
                         let this_chunk_id = chunk_id.clone();
                         let mut json_progress_str = String::new();
                         if let Some(hasher) = hasher {
-                            let state = hasher.save_state();
+                            let state = hasher.save_state().unwrap();
                             json_progress_str = serde_json::to_string(&state).unwrap();
                         }
                         let counter = counter.clone();
@@ -1335,7 +1335,7 @@ impl BackupEngine {
                 &mut chunk_reader,
                 &mut chunk_writer,
                 real_hash_state,
-                progress_callback,
+                None,
             )
             .await?;
 

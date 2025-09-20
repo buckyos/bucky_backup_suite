@@ -78,7 +78,7 @@ impl WebControlServer {
         let result = json!({
             "plan_id": plan_id
         });
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn list_backup_plan(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -91,7 +91,7 @@ impl WebControlServer {
         let result = json!({
             "backup_plans": plans
         });
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn get_backup_plan(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -110,7 +110,7 @@ impl WebControlServer {
         let mut result = plan.to_json_value();
         let is_running = engine.is_plan_have_running_backup_task(plan_id).await;
         result["is_running"] = json!(is_running);
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     //return the new task info
@@ -140,7 +140,7 @@ impl WebControlServer {
             .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
 
         let result = task_info.to_json_value();
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn create_restore_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -177,7 +177,7 @@ impl WebControlServer {
             .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
 
         let result = task_info.to_json_value();
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn list_backup_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -199,7 +199,7 @@ impl WebControlServer {
         let result = json!({
             "task_list": result_task_list
         });
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn get_task_info(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -216,7 +216,7 @@ impl WebControlServer {
             .await
             .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
         let result = task_info.to_json_value();
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn resume_backup_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -235,7 +235,7 @@ impl WebControlServer {
         let result = json!({
             "result": "success"
         });
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn pause_backup_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -254,7 +254,7 @@ impl WebControlServer {
         let result = json!({
             "result": "success"
         });
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn validate_path(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -269,7 +269,7 @@ impl WebControlServer {
             "path_exist": path_exist
         });
         info!("validate_path: {} -> {}", path, path_exist);
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn is_plan_running(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -285,12 +285,12 @@ impl WebControlServer {
         let result = json!({
             "is_running": is_running
         });
-        Ok(RPCResponse::new(RPCResult::Success(result), req.seq))
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 }
 
 #[async_trait]
-impl kRPCHandler for WebControlServer {
+impl InnerServiceHandler for WebControlServer {
     async fn handle_rpc_call(
         &self,
         req: RPCRequest,
@@ -311,6 +311,11 @@ impl kRPCHandler for WebControlServer {
             _ => Err(RPCErrors::UnknownMethod(req.method)),
         }
     }
+
+    async fn handle_http_get(&self, req_path:&str,ip_from:IpAddr) -> Result<String,RPCErrors> {
+        unimplemented!()
+    }
+
 }
 
 pub async fn start_web_control_service() {

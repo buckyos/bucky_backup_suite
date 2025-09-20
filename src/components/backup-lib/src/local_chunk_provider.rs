@@ -411,8 +411,9 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
     ) -> BackupResult<ChunkReader> {
         let reader = self
             .chunk_store
-            .open_chunk_reader(chunk_id, SeekFrom::Start(offset))
+            .open_chunk_reader(chunk_id, 0)
             .await;
+        
         if reader.is_ok() {
             let (reader, content_length) = reader.unwrap();
             return Ok(reader);

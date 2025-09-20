@@ -10,7 +10,7 @@ use web_control::*;
 
 #[tokio::main]
 async fn main() {
-    init_logging("backup_suite");
+    init_logging("backup_suite", true);
     info!("backup suite start");
     let engine = DEFAULT_ENGINE.lock().await;
     engine.start().await.unwrap();
