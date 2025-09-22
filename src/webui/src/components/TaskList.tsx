@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
     Card,
     CardContent,
@@ -35,6 +35,7 @@ import {
 import { TaskDetail } from "./TaskDetail";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
+import { LoadingPage } from "./LoadingPage";
 import {
     Search,
     Filter,
@@ -57,12 +58,34 @@ interface TaskListProps {
 export function TaskList({ onNavigate }: TaskListProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
+    const [loading, setLoading] = useState(true);
+    const [loadingText, setLoadingText] = useState<string>(`${t.common.loading} ${t.nav.tasks}...`);
+    // Ensure hooks order is stable on every render
     const [selectedTasks, setSelectedTasks] = useState<number[]>([]);
     const [searchQuery, setSearchQuery] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [typeFilter, setTypeFilter] = useState("all");
     const [showFilters, setShowFilters] = useState(false);
     const [selectedTask, setSelectedTask] = useState<any>(null);
+
+    useEffect(() => {
+        setLoading(true);
+        setLoadingText(`${t.common.loading} ${t.nav.tasks}...`);
+        const id = window.setTimeout(() => setLoading(false), 650);
+        return () => window.clearTimeout(id);
+    }, [t]);
+
+    if (loading) {
+        return (
+            <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-4`}>
+                <div>
+                    <h1 className="mb-2">{t.tasks.title}</h1>
+                    <p className="text-muted-foreground">{t.tasks.subtitle}</p>
+                </div>
+                <LoadingPage status={loadingText} />
+            </div>
+        );
+    }
 
     // Read counts to guide empty states
     const plansCount =

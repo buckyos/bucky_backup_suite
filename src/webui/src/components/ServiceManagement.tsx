@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
     Card,
     CardContent,
@@ -22,6 +22,7 @@ import {
 } from "./ui/alert-dialog";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
+import { LoadingPage } from "./LoadingPage";
 import { toast } from "sonner@2.0.3";
 import {
     Plus,
@@ -43,10 +44,31 @@ interface ServiceManagementProps {
 export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
+    const [loading, setLoading] = useState(true);
+    const [loadingText, setLoadingText] = useState<string>(`${t.common.loading} ${t.nav.services}...`);
+    // Move all hooks before any conditional returns to keep stable order
     const [services, setServices] = useState([]);
-
     const [editingService, setEditingService] = useState<number | null>(null);
     const [editingName, setEditingName] = useState("");
+
+    useEffect(() => {
+        setLoading(true);
+        setLoadingText(`${t.common.loading} ${t.nav.services}...`);
+        const id = window.setTimeout(() => setLoading(false), 600);
+        return () => window.clearTimeout(id);
+    }, [t]);
+
+    if (loading) {
+        return (
+            <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-6`}>
+                <div>
+                    <h1 className="mb-2">{t.services.title}</h1>
+                    <p className="text-muted-foreground">{t.services.subtitle}</p>
+                </div>
+                <LoadingPage status={loadingText} />
+            </div>
+        );
+    }
 
     const getStatusBadge = (status: string) => {
         switch (status) {

@@ -13,6 +13,7 @@ import { RestoreWizard } from "./components/RestoreWizard";
 import { EditPlanWizard } from "./components/EditPlanWizard";
 import { PlanDetails } from "./components/PlanDetails";
 import { useMobile } from "./components/hooks/use_mobile";
+// Page-level loading is handled inside each page now
 
 interface NavigationState {
     page: string;

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
     Card,
     CardContent,
@@ -45,6 +45,8 @@ import {
     ArrowRight,
     MoreVertical,
 } from "lucide-react";
+import { taskManager } from "./utils/task_mgr";
+import { LoadingPage } from "./LoadingPage";
 
 interface DashboardProps {
     onNavigate?: (page: string, data?: any) => void;
@@ -54,6 +56,21 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
     const [selectedPlan, setSelectedPlan] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [loadingText, setLoadingText] = useState<string>(`${t.common.loading} ${t.nav.dashboard}...`);
+
+    useEffect(() => {
+        // 示例：按阶段更新加载文案，真实项目中可替换为实际数据加载步骤
+        setLoading(true);
+        setLoadingText(`${t.common.loading} ${t.nav.dashboard}...`);
+        const timers: number[] = [];
+        timers.push(window.setTimeout(() => setLoadingText(t.dashboard.currentTasks), 200));
+        timers.push(window.setTimeout(() => setLoadingText(t.dashboard.recentActivities), 450));
+        timers.push(window.setTimeout(() => setLoading(false), 700));
+        return () => {
+            timers.forEach((id) => window.clearTimeout(id));
+        };
+    }, [t]);
 
     // Read persisted counts to decide whether to show guidance panel
     const plansCount =
@@ -286,6 +303,22 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         }
         setSelectedPlan("");
     };
+
+    if (loading) {
+        return (
+            <div className={`${isMobile ? "p-4 pt-20" : "p-6"} space-y-4`}>
+                {!isMobile && (
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <h1 className="mb-2">{t.dashboard.title}</h1>
+                            <p className="text-muted-foreground">{t.dashboard.subtitle}</p>
+                        </div>
+                    </div>
+                )}
+                <LoadingPage status={loadingText} />
+            </div>
+        );
+    }
 
     return (
         <>
@@ -616,28 +649,67 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 </ScrollArea>
                             ) : (
                                 <div className="space-y-3">
-                                    {currentTasks.filter((t) => t.status === 'running').length === 0 && (
+                                    {currentTasks.filter(
+                                        (t) => t.status === "running"
+                                    ).length === 0 && (
                                         <div className="text-center py-2">
                                             {plansCount === 0 ? (
-                                                <div className={`flex ${isMobile ? 'flex-col gap-2' : 'items-center gap-3'} justify-center`}>
+                                                <div
+                                                    className={`flex ${
+                                                        isMobile
+                                                            ? "flex-col gap-2"
+                                                            : "items-center gap-3"
+                                                    } justify-center`}
+                                                >
                                                     {servicesCount === 0 ? (
                                                         <>
-                                                            <Button onClick={() => onNavigate?.('add-service')} size="sm" className="gap-2">
+                                                            <Button
+                                                                onClick={() =>
+                                                                    onNavigate?.(
+                                                                        "add-service"
+                                                                    )
+                                                                }
+                                                                size="sm"
+                                                                className="gap-2"
+                                                            >
                                                                 去配置备份服务
                                                             </Button>
-                                                            {!isMobile && <span className="text-muted-foreground text-sm">或</span>}
-                                                            <Button variant="outline" size="sm" className="gap-2" disabled>
+                                                            {!isMobile && (
+                                                                <span className="text-muted-foreground text-sm">
+                                                                    或
+                                                                </span>
+                                                            )}
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                className="gap-2"
+                                                                disabled
+                                                            >
                                                                 新建备份计划
                                                             </Button>
                                                         </>
                                                     ) : (
-                                                        <Button onClick={() => onNavigate?.('create-plan')} size="sm" className="gap-2">
+                                                        <Button
+                                                            onClick={() =>
+                                                                onNavigate?.(
+                                                                    "create-plan"
+                                                                )
+                                                            }
+                                                            size="sm"
+                                                            className="gap-2"
+                                                        >
                                                             新建备份计划
                                                         </Button>
                                                     )}
                                                 </div>
                                             ) : (
-                                                <Button onClick={() => onNavigate?.('plans')} size="sm" className="gap-2">
+                                                <Button
+                                                    onClick={() =>
+                                                        onNavigate?.("plans")
+                                                    }
+                                                    size="sm"
+                                                    className="gap-2"
+                                                >
                                                     前往计划列表执行一次备份
                                                 </Button>
                                             )}

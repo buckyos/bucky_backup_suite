@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
     Card,
     CardContent,
@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Separator } from "./ui/separator";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
+import { LoadingPage } from "./LoadingPage";
 import {
     Settings as SettingsIcon,
     Bell,
@@ -35,6 +36,23 @@ import {
 export function Settings() {
     const { t, language, setLanguage } = useLanguage();
     const isMobile = useMobile();
+    const [loading, setLoading] = useState(true);
+    useEffect(() => {
+        const id = window.setTimeout(() => setLoading(false), 500);
+        return () => window.clearTimeout(id);
+    }, []);
+
+    if (loading) {
+        return (
+            <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-6`}>
+                <div>
+                    <h1 className="mb-2">{t.settings.title}</h1>
+                    <p className="text-muted-foreground">{t.settings.subtitle}</p>
+                </div>
+                <LoadingPage status={`${t.common.loading} ${t.nav.settings}...`} />
+            </div>
+        );
+    }
 
     return (
         <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-6`}>
