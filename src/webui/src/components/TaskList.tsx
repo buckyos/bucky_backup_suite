@@ -320,7 +320,7 @@ export function TaskList({ onNavigate }: TaskListProps) {
     };
 
     // Empty-state for no tasks at all
-    if (tasks.length === 0) {
+    if (false && tasks.length === 0) {
         return (
             <div
                 className={`${
@@ -404,8 +404,38 @@ export function TaskList({ onNavigate }: TaskListProps) {
                 </div>
             </div>
 
+            {tasks.length === 0 && (
+                <Card className={`w-full ${isMobile ? "" : "max-w-2xl mx-auto"} text-center`}>
+                    <CardHeader>
+                        <CardTitle>暂无任务</CardTitle>
+                        <CardDescription>
+                            {servicesCount === 0
+                                ? "开始前，请先配置一个备份服务"
+                                : plansCount === 0
+                                ? "配置好服务后，创建你的第一个备份计划"
+                                : "你可以立即执行一次备份任务"}
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className={`flex ${isMobile ? "flex-col gap-2" : "items-center justify-center gap-3"}`}>
+                            {servicesCount === 0 ? (
+                                <>
+                                    <Button onClick={() => onNavigate?.("add-service")} className="gap-2">去配置备份服务</Button>
+                                    {!isMobile && <span className="text-muted-foreground">或</span>}
+                                    <Button variant="outline" disabled className="gap-2">新建备份计划</Button>
+                                </>
+                            ) : plansCount === 0 ? (
+                                <Button onClick={() => onNavigate?.("create-plan")} className="gap-2">新建备份计划</Button>
+                            ) : (
+                                <Button onClick={() => onNavigate?.("plans")} className="gap-2">前往计划列表执行一次备份</Button>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
             {/* 筛选器和搜索 */}
-            {!isMobile && (
+            {!isMobile && tasks.length > 0 && (
                 <Card>
                     <CardHeader>
                         <CardTitle className="text-lg">筛选和搜索</CardTitle>
@@ -512,6 +542,7 @@ export function TaskList({ onNavigate }: TaskListProps) {
             )}
 
             {/* 任务列表 */}
+            {tasks.length > 0 && (
             <Tabs defaultValue="running" className="space-y-4">
                 <div className="flex items-center justify-between">
                     <TabsList>
@@ -1123,6 +1154,7 @@ export function TaskList({ onNavigate }: TaskListProps) {
                     )}
                 </TabsContent>
             </Tabs>
+            )}
 
             {/* 任务详情对话框 */}
             {selectedTask && (
