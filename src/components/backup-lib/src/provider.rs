@@ -2,7 +2,7 @@
 use rusqlite::types::{ToSql, FromSql, ValueRef};
 use async_trait::async_trait;
 use serde_json::Value;
-use ndn_lib::{ChunkReader,ChunkWriter,ChunkReadSeek,ChunkId};
+use ndn_lib::{ChunkId, ChunkReadSeek, ChunkReader, ChunkWriter, ObjId};
 use std::pin::Pin;
 use serde::{Serialize, Deserialize};
 use thiserror::Error;
@@ -30,6 +30,10 @@ pub struct RestoreConfig {
     pub is_clean_restore: bool, // 为true时,恢复后只包含恢复的文件,不包含其他文件
     #[serde(skip_serializing_if = "Option::is_none")]
     pub params:Option<serde_json::Value>,
+}
+
+pub struct BackupConfig {
+    pub crypto_config:String
 }
 
 impl ToSql for RestoreConfig {
@@ -183,18 +187,32 @@ pub trait IBackupChunkTargetProvider {
     
 }
 
+//不需要定义dir source/target ? 完全基于named data mgr来管理？
 #[async_trait]
 pub trait IBackupDirSourceProvider {
     async fn get_source_info(&self) -> Result<Value>;
+    async fn list_dirs(&self)->Result<Vec<String>>;
+    //return url for backup target
+    async fn prepare_dir_for_backup(&self, dir_id: &str,backup_config:&BackupConfig)->Result<()>;
+    async fn start_restore_dir(&self, dir_id: &str,dir_obj_id:&ObjId,restore_config:&RestoreConfig)->Result<()>;
+    async fn query_restore_task_info(&self, dir_obj_id: &ObjId)->Result<String>;
 }
 #[async_trait]
 pub trait IBackupDirTargetProvider {
     async fn get_target_info(&self) -> Result<Value>;
+    async fn list_dirs(&self)->Result<Vec<String>>;
+    async fn prepare_dir_for_restore(&self, dir_id: &str,restore_config:&RestoreConfig)->Result<()>;
+
+    async fn start_backup_dir(&self, dir_id: &str,dir_obj_id:&ObjId)->Result<()>;
+    async fn query_backup_task_info(&self, dir_obj_id: &ObjId)->Result<String>;
 }
 
 pub type BackupChunkSourceProvider = Box<dyn IBackupChunkSourceProvider + Send + Sync>;
 pub type BackupChunkTargetProvider = Box<dyn IBackupChunkTargetProvider + Send + Sync>;
 pub type BackupDirSourceProvider = Box<dyn IBackupDirSourceProvider + Send + Sync>;
 pub type BackupDirTargetProvider = Box<dyn IBackupDirTargetProvider + Send + Sync>;
+
+
+
 
 

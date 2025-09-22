@@ -1667,8 +1667,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_c2c_backup_task() {
-        std::env::set_var("BUCKY_LOG", "debug");
-        buckyos_kit::init_logging("bucky_backup_test");
+        //std::env::set_var("BUCKY_LOG", "debug");
+        buckyos_kit::init_logging("bucky_backup_test",false);
         let tempdb = "/opt/buckyos/data/backup_suite/bucky_backup.db";
         //delete db file if exists
         if std::path::Path::new(tempdb).exists() {
@@ -1678,7 +1678,7 @@ mod tests {
         let engine = BackupEngine::new();
         engine.start().await.unwrap();
         let new_plan = BackupPlanConfig::chunk2chunk(
-            "file:///tmp/test",
+            "file:///Users/liuzhicong/Downloads",
             "file:///tmp/bucky_backup_result",
             "testc2c",
             "testc2c desc",
@@ -1708,7 +1708,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_c2c_restore_task() {
         std::env::set_var("BUCKY_LOG", "debug");
-        buckyos_kit::init_logging("bucky_backup_test");
+        buckyos_kit::init_logging("bucky_backup_test",false);
 
         let engine = BackupEngine::new();
         engine.start().await.unwrap();
