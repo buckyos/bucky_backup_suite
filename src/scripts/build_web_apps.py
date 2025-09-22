@@ -10,7 +10,7 @@ def build(dir):
 
 def build_web_apps():
     print(f'will build web apps')
-    build("webui/src")
+    build("webui")
 
 print(f'build web apps success')
 
