@@ -1,5 +1,13 @@
 import buckyos from "buckyos";
 
+export enum TaskState {
+    RUNNING = "RUNNING",
+    PENDING = "PENDING",
+    PAUSED = "PAUSED",
+    DONE = "DONE",
+    FAILED = "FAILED",
+}
+
 export interface TaskInfo {
     taskid: string;
     task_type: string;
@@ -7,13 +15,15 @@ export interface TaskInfo {
     checkpoint_id: string;
     total_size: number;
     completed_size: number;
-    state: "RUNNING" | "PENDING" | "PAUSED" | "DONE" | "FAILED";
+    state: TaskState;
     create_time: number; //unix timestamp
     update_time: number; //unix timestamp
     item_count: number;
     completed_item_count: number;
     wait_transfer_item_count: number;
     last_log_content: string | null;
+    name: string; // todo
+    speed: number; // B/s todo
 }
 
 export interface BackupPlanInfo {
@@ -24,15 +34,65 @@ export interface BackupPlanInfo {
     last_checkpoint_index: number;
     source: string;
     target: string;
+    last_run_time?: number; //unix timestamp (UTC)
+    policy?: any; // todo
 }
 
-export type TaskFilter = "all" | "running" | "paused" | "failed" | "done";
+export interface BackupTargetInfo {
+    target_id: string;
+    target_type: string;
+    name: string;
+    url: string;
+    description: string;
+    state: string;
+    used: number;
+    total: number;
+    last_error: string;
+}
+
+export enum TaskFilter {
+    ALL = "all",
+    RUNNING = "running",
+    PAUSED = "paused",
+    FAILED = "failed",
+    DONE = "done",
+}
+
+export enum ListTaskOrderBy {
+    CREATE_TIME = "create_time",
+    UPDATE_TIME = "update_time",
+    COMPLETE_TIME = "complete_time",
+}
+
+export enum ListOrder {
+    ASC = "asc",
+    DESC = "desc",
+}
+
+export enum TaskEventType {
+    CREATE_PLAN = "create_plan",
+    REMOVE_PLAN = "remove_plan",
+    UPDATE_PLAN = "update_plan",
+
+    CREATE_TARGET = "create_target",
+    UPDATE_TARGET = "update_target",
+    REMOVE_TARGET = "remove_target",
+    CHANGE_TARGET_STATE = "change_target_state",
+
+    CREATE_TASK = "create_task",
+    UPDATE_TASK = "update_task",
+    COMPLETE_TASK = "complete_task",
+    FAIL_TASK = "fail_task",
+    PAUSE_TASK = "pause_task",
+    RESUME_TASK = "resume_task",
+    REMOVE_TASK = "remove_task",
+}
 
 export class BackupTaskManager {
     private rpc_client: any;
     //可以关注task事件(全部task)
     private task_event_listeners: ((
-        event: string,
+        event: TaskEventType,
         data: any
     ) => void | Promise<void>)[] = [];
 
@@ -43,12 +103,20 @@ export class BackupTaskManager {
     }
 
     addTaskEventListener(
-        listener: (event: string, data: any) => void | Promise<void>
+        listener: (event: TaskEventType, data: any) => void | Promise<void>
     ) {
         this.task_event_listeners.push(listener);
     }
 
-    async emitTaskEvent(event: string, data: any) {
+    removeTaskEventListener(
+        listener: (event: TaskEventType, data: any) => void | Promise<void>
+    ) {
+        this.task_event_listeners = this.task_event_listeners.filter(
+            (l) => l !== listener
+        );
+    }
+
+    async emitTaskEvent(event: TaskEventType, data: any) {
         // 使用 Promise.all 等待所有监听器执行完成
         await Promise.all(
             this.task_event_listeners.map((listener) => {
@@ -77,11 +145,11 @@ export class BackupTaskManager {
         result.target = params.target;
         result.title = params.title;
         result.description = params.description;
-        await this.emitTaskEvent("create_plan", result);
+        await this.emitTaskEvent(TaskEventType.CREATE_PLAN, result);
         return result.plan_id;
     }
 
-    async listBackupPlans() {
+    async listBackupPlans(): Promise<string[]> {
         const result = await this.rpc_client.call("list_backup_plan", {});
         return result.backup_plans;
     }
@@ -125,9 +193,17 @@ export class BackupTaskManager {
         return result;
     }
 
-    async listBackupTasks(filter: TaskFilter = "all") {
+    async listBackupTasks(
+        filter: TaskFilter[] = [TaskFilter.ALL],
+        offset: number = 0,
+        limit: number | null = null,
+        orderBy: Map<ListTaskOrderBy, ListOrder> | null = null
+    ): Promise<string[]> {
         const result = await this.rpc_client.call("list_backup_task", {
             filter: filter,
+            offset: offset,
+            limit: limit,
+            order_by: orderBy ? Object.fromEntries(orderBy) : undefined,
         });
         return result.task_list;
     }
@@ -143,7 +219,7 @@ export class BackupTaskManager {
         const result = await this.rpc_client.call("resume_backup_task", {
             taskid: taskId,
         });
-        await this.emitTaskEvent("resume_task", taskId);
+        await this.emitTaskEvent(TaskEventType.RESUME_TASK, taskId);
         return result.result === "success";
     }
 
@@ -163,21 +239,68 @@ export class BackupTaskManager {
     }
 
     async resume_last_working_task() {
-        let taskid_list = await this.listBackupTasks("paused");
+        let taskid_list = await this.listBackupTasks([TaskFilter.PAUSED]);
         if (taskid_list.length > 0) {
             let last_task = taskid_list[0];
             console.log("resume last task:", last_task);
             this.resumeBackupTask(last_task);
-            await this.emitTaskEvent("resume_task", last_task);
+            await this.emitTaskEvent(TaskEventType.RESUME_TASK, last_task);
         }
     }
 
     async pause_all_tasks() {
-        let taskid_list = await this.listBackupTasks("running");
+        let taskid_list = await this.listBackupTasks([TaskFilter.RUNNING]);
         for (let taskid of taskid_list) {
             this.pauseBackupTask(taskid);
-            await this.emitTaskEvent("pause_task", taskid);
+            await this.emitTaskEvent(TaskEventType.PAUSE_TASK, taskid);
         }
+    }
+
+    async listBackupTargets(): Promise<string[]> {
+        const result = await this.rpc_client.call("list_backup_target", {});
+        return result.targets;
+    }
+
+    async getBackupTarget(targetId: string): Promise<BackupTargetInfo> {
+        const result = await this.rpc_client.call("get_backup_target", {
+            target_id: targetId,
+        });
+        result.target_id = targetId;
+        return result;
+    }
+
+    async consumeSizeSummary(): Promise<{ total: number; today: number }> {
+        const result = await this.rpc_client.call("consume_size_summary", {});
+        return result;
+    }
+
+    async statisticsSummary(
+        from: number,
+        to: number
+    ): Promise<{ complete: number; failed: number }> {
+        const result = await this.rpc_client.call("statistics_summary", {
+            from: from,
+            to: to,
+        });
+        return result;
+    }
+
+    startRefreshUncompleteTaskStateTimer(): number {
+        // todo:
+        return 0;
+    }
+
+    stopRefreshUncompleteTaskStateTimer(timerId: number) {
+        // todo:
+    }
+
+    startRefreshTargetStateTimer(): number {
+        // todo:
+        return 0;
+    }
+
+    stopRefreshTargetStateTimer(timerId: number) {
+        // todo:
     }
 }
 

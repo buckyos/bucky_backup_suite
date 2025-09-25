@@ -45,8 +45,19 @@ import {
     ArrowRight,
     MoreVertical,
 } from "lucide-react";
-import { taskManager } from "./utils/task_mgr";
-import { LoadingPage } from "./LoadingPage";
+import {
+    taskManager,
+    TaskFilter,
+    TaskInfo,
+    BackupPlanInfo,
+    BackupTargetInfo,
+    ListOrder,
+    ListTaskOrderBy,
+    TaskEventType,
+    TaskState,
+} from "./utils/task_mgr";
+import { LoadingData, LoadingPage } from "./LoadingPage";
+import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
 
 interface DashboardProps {
     onNavigate?: (page: string, data?: any) => void;
@@ -55,148 +66,285 @@ interface DashboardProps {
 export function Dashboard({ onNavigate }: DashboardProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
+    const [loadingText, setLoadingText] = useState<string>(
+        `${t.common.loading} ${t.nav.dashboard}...`
+    );
+    const [uncompleteTask, setUncompleteTask] = useState(
+        new LoadingData<TaskInfo[]>(null)
+    );
+    const [lastCompletedTasks, setLastCompletedTasks] = useState(
+        new LoadingData<TaskInfo[]>(null)
+    );
+    const [consumeSize, setConsumeSize] = useState(
+        new LoadingData<{ total: number; today: number }>(null)
+    );
+    const [statistics, setStatistics] = useState(
+        new LoadingData<{ complete: number; failed: number }>(null)
+    );
+    const [plans, setPlans] = useState(new LoadingData<BackupPlanInfo[]>(null));
+    const [services, setServices] = useState(
+        new LoadingData<BackupTargetInfo[]>(null)
+    );
     const [selectedPlan, setSelectedPlan] = useState("");
-    const [loading, setLoading] = useState(true);
-    const [loadingText, setLoadingText] = useState<string>(`${t.common.loading} ${t.nav.dashboard}...`);
+
+    const loading =
+        uncompleteTask === null ||
+        lastCompletedTasks === null ||
+        plans === null ||
+        services === null;
+
+    const refreshUncompleteTasks = () => {
+        taskManager
+            .listBackupTasks([
+                TaskFilter.RUNNING,
+                TaskFilter.PAUSED,
+                TaskFilter.FAILED,
+            ])
+            .then(async (taskIds) => {
+                const taskInfos = await Promise.all(
+                    taskIds.map((taskid) => taskManager.getTaskInfo(taskid))
+                );
+                setUncompleteTask(new LoadingData(taskInfos));
+            });
+    };
+
+    const refreshCompleteTasks = () => {
+        taskManager
+            .listBackupTasks(
+                [TaskFilter.DONE],
+                0,
+                null,
+                new Map([[ListTaskOrderBy.COMPLETE_TIME, ListOrder.DESC]])
+            )
+            .then(async (taskIds) => {
+                const taskInfos = await Promise.all(
+                    taskIds
+                        .slice(0, 3)
+                        .map((taskid) => taskManager.getTaskInfo(taskid))
+                );
+                setLastCompletedTasks(new LoadingData(taskInfos));
+            });
+    };
+
+    const refreshConsumeSize = () => {
+        taskManager.consumeSizeSummary().then((data) => {
+            setConsumeSize(new LoadingData(data));
+        });
+    };
+
+    const refreshBackupPlans = () => {
+        taskManager.listBackupPlans().then(async (planIds) => {
+            const planInfos = await Promise.all(
+                planIds.map((planid) => taskManager.getBackupPlan(planid))
+            );
+            setPlans(new LoadingData(planInfos));
+        });
+    };
+
+    const refreshTaskTargets = () => {
+        taskManager.listBackupTargets().then(async (targetIds) => {
+            const targetInfos = await Promise.all(
+                targetIds.map((targetid) =>
+                    taskManager.getBackupTarget(targetid)
+                )
+            );
+            setServices(new LoadingData(targetInfos));
+        });
+    };
+
+    const refreshStatistics = () => {
+        // 过去30天的统计数据
+        const now = Date.now();
+        const last30DaysStart = new Date(now);
+        last30DaysStart.setDate(last30DaysStart.getDate() - 30);
+        taskManager
+            .statisticsSummary(last30DaysStart.getTime(), now)
+            .then((data) => {
+                setStatistics(new LoadingData(data));
+            });
+    };
+
+    const completePercent = () => {
+        if (!statistics.isLoaded()) return "--";
+        const stat = statistics.check();
+        return TaskMgrHelper.percent(
+            stat.complete,
+            stat.complete + stat.failed
+        ).toFixed(1);
+    };
 
     useEffect(() => {
-        // 示例：按阶段更新加载文案，真实项目中可替换为实际数据加载步骤
-        setLoading(true);
-        setLoadingText(`${t.common.loading} ${t.nav.dashboard}...`);
-        const timers: number[] = [];
-        timers.push(window.setTimeout(() => setLoadingText(t.dashboard.currentTasks), 200));
-        timers.push(window.setTimeout(() => setLoadingText(t.dashboard.recentActivities), 450));
-        timers.push(window.setTimeout(() => setLoading(false), 700));
-        return () => {
-            timers.forEach((id) => window.clearTimeout(id));
+        refreshUncompleteTasks();
+        refreshCompleteTasks();
+        refreshConsumeSize();
+        refreshBackupPlans();
+        refreshTaskTargets();
+
+        const taskEventHandler = async (event: TaskEventType, data: any) => {
+            console.log("task event:", event, data);
+            switch (event) {
+                case TaskEventType.CREATE_TASK:
+                case TaskEventType.FAIL_TASK:
+                case TaskEventType.PAUSE_TASK:
+                case TaskEventType.RESUME_TASK:
+                    refreshUncompleteTasks();
+                    refreshStatistics();
+                    break;
+                case TaskEventType.UPDATE_TASK:
+                case TaskEventType.COMPLETE_TASK:
+                case TaskEventType.REMOVE_TASK:
+                    refreshUncompleteTasks();
+                    refreshCompleteTasks();
+                    refreshConsumeSize();
+                    refreshStatistics();
+                    break;
+                case TaskEventType.CREATE_PLAN:
+                case TaskEventType.UPDATE_PLAN:
+                case TaskEventType.REMOVE_PLAN:
+                    refreshBackupPlans();
+                    break;
+                case TaskEventType.CREATE_TARGET:
+                case TaskEventType.UPDATE_TARGET:
+                case TaskEventType.REMOVE_TARGET:
+                case TaskEventType.CHANGE_TARGET_STATE:
+                    refreshTaskTargets();
+                    break;
+            }
         };
-    }, [t]);
 
-    // Read persisted counts to decide whether to show guidance panel
-    const plansCount =
-        0 &&
-        (() => {
-            try {
-                const raw = localStorage.getItem("plans");
-                if (!raw) return 0;
-                const arr = JSON.parse(raw);
-                return Array.isArray(arr) ? arr.length : 0;
-            } catch {
-                return 0;
-            }
-        })();
-    const servicesCount =
-        0 &&
-        (() => {
-            try {
-                const raw = localStorage.getItem("services");
-                if (!raw) return 0;
-                const arr = JSON.parse(raw);
-                return Array.isArray(arr) ? arr.length : 0;
-            } catch {
-                return 0;
-            }
-        })();
+        taskManager.addTaskEventListener(taskEventHandler);
+        const timerId = taskManager.startRefreshUncompleteTaskStateTimer();
+        return () => {
+            taskManager.removeTaskEventListener(taskEventHandler);
+            taskManager.stopRefreshUncompleteTaskStateTimer(timerId);
+        };
+    }, []);
 
-    // 模拟数据
-    const currentTasks = [
-        // {
-        //     id: 1,
-        //     name: "系统文件夜间备份",
-        //     plan: "系统备份",
-        //     progress: 65,
-        //     speed: "12.5 MB/s",
-        //     remaining: "约 15 分钟",
-        //     status: "running",
-        // },
-        // {
-        //     id: 2,
-        //     name: "项目文件增量备份",
-        //     plan: "项目备份",
-        //     progress: 100,
-        //     speed: "",
-        //     remaining: "",
-        //     status: "completed",
-        // },
-    ];
+    // // Read persisted counts to decide whether to show guidance panel
+    // const plansCount =
+    //     0 &&
+    //     (() => {
+    //         try {
+    //             const raw = localStorage.getItem("plans");
+    //             if (!raw) return 0;
+    //             const arr = JSON.parse(raw);
+    //             return Array.isArray(arr) ? arr.length : 0;
+    //         } catch {
+    //             return 0;
+    //         }
+    //     })();
+    // const servicesCount =
+    //     0 &&
+    //     (() => {
+    //         try {
+    //             const raw = localStorage.getItem("services");
+    //             if (!raw) return 0;
+    //             const arr = JSON.parse(raw);
+    //             return Array.isArray(arr) ? arr.length : 0;
+    //         } catch {
+    //             return 0;
+    //         }
+    //     })();
 
-    const recentActivities = [
-        {
-            id: 1,
-            name: "文档备份计划",
-            status: "success",
-            time: "2h",
-            size: "2.1 GB",
-        },
-        {
-            id: 2,
-            name: "系统备份计划",
-            status: "warning",
-            time: "4h",
-            size: "15.6 GB",
-        },
-        {
-            id: 3,
-            name: "媒体文件备份",
-            status: "error",
-            time: "6h",
-            size: "8.3 GB",
-        },
-    ];
+    // // 模拟数据
+    // const currentTasks = [
+    //     // {
+    //     //     id: 1,
+    //     //     name: "系统文件夜间备份",
+    //     //     plan: "系统备份",
+    //     //     progress: 65,
+    //     //     speed: "12.5 MB/s",
+    //     //     remaining: "约 15 分钟",
+    //     //     status: "running",
+    //     // },
+    //     // {
+    //     //     id: 2,
+    //     //     name: "项目文件增量备份",
+    //     //     plan: "项目备份",
+    //     //     progress: 100,
+    //     //     speed: "",
+    //     //     remaining: "",
+    //     //     status: "completed",
+    //     // },
+    // ];
 
-    const backupServices = [
-        {
-            id: 1,
-            name: "本地备份盘",
-            type: "local",
-            status: "healthy",
-            used: "450 GB",
-            total: "2 TB",
-            usagePercent: 22,
-        },
-        {
-            id: 2,
-            name: "NDN网络节点1",
-            type: "ndn",
-            status: "healthy",
-            used: "1.2 TB",
-            total: "无限制",
-            usagePercent: 0,
-        },
-        {
-            id: 3,
-            name: "外部硬盘",
-            type: "local",
-            status: "warning",
-            used: "1.8 TB",
-            total: "2 TB",
-            usagePercent: 90,
-        },
-    ];
+    // const recentActivities = [
+    //     {
+    //         id: 1,
+    //         name: "文档备份计划",
+    //         status: "success",
+    //         time: "2h",
+    //         size: "2.1 GB",
+    //     },
+    //     {
+    //         id: 2,
+    //         name: "系统备份计划",
+    //         status: "warning",
+    //         time: "4h",
+    //         size: "15.6 GB",
+    //     },
+    //     {
+    //         id: 3,
+    //         name: "媒体文件备份",
+    //         status: "error",
+    //         time: "6h",
+    //         size: "8.3 GB",
+    //     },
+    // ];
 
-    const backupPlans = [
-        {
-            id: 1,
-            name: "系统文件备份",
-            enabled: true,
-            nextRun: "今天 23:00",
-            status: "healthy",
-        },
-        {
-            id: 2,
-            name: "项目文件备份",
-            enabled: true,
-            nextRun: "明天 02:00",
-            status: "healthy",
-        },
-        {
-            id: 3,
-            name: "媒体文件备份",
-            enabled: false,
-            nextRun: "已禁用",
-            status: "disabled",
-        },
-    ];
+    // const backupServices = [
+    //     {
+    //         id: 1,
+    //         name: "本地备份盘",
+    //         type: "local",
+    //         status: "healthy",
+    //         used: "450 GB",
+    //         total: "2 TB",
+    //         usagePercent: 22,
+    //     },
+    //     {
+    //         id: 2,
+    //         name: "NDN网络节点1",
+    //         type: "ndn",
+    //         status: "healthy",
+    //         used: "1.2 TB",
+    //         total: "无限制",
+    //         usagePercent: 0,
+    //     },
+    //     {
+    //         id: 3,
+    //         name: "外部硬盘",
+    //         type: "local",
+    //         status: "warning",
+    //         used: "1.8 TB",
+    //         total: "2 TB",
+    //         usagePercent: 90,
+    //     },
+    // ];
+
+    // const backupPlans = [
+    //     {
+    //         id: 1,
+    //         name: "系统文件备份",
+    //         enabled: true,
+    //         nextRun: "今天 23:00",
+    //         status: "healthy",
+    //     },
+    //     {
+    //         id: 2,
+    //         name: "项目文件备份",
+    //         enabled: true,
+    //         nextRun: "明天 02:00",
+    //         status: "healthy",
+    //     },
+    //     {
+    //         id: 3,
+    //         name: "媒体文件备份",
+    //         enabled: false,
+    //         nextRun: "已禁用",
+    //         status: "disabled",
+    //     },
+    // ];
 
     const getStatusIcon = (status: string) => {
         switch (status) {
@@ -211,18 +359,36 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         }
     };
 
-    const getStatusBadge = (status: string) => {
+    const getStatusBadge = (status: TaskState) => {
         switch (status) {
-            case "running":
+            case TaskState.RUNNING:
                 return (
                     <Badge variant="default" className="bg-blue-500 text-xs">
                         执行中
                     </Badge>
                 );
-            case "completed":
+            case TaskState.DONE:
                 return (
                     <Badge variant="secondary" className="bg-green-500 text-xs">
                         已完成
+                    </Badge>
+                );
+            case TaskState.PAUSED:
+                return (
+                    <Badge variant="outline" className="text-xs">
+                        暂停
+                    </Badge>
+                );
+            case TaskState.FAILED:
+                return (
+                    <Badge variant="destructive" className="text-xs">
+                        失败
+                    </Badge>
+                );
+            case TaskState.PENDING:
+                return (
+                    <Badge variant="outline" className="text-xs">
+                        等待中
                     </Badge>
                 );
             default:
@@ -239,6 +405,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     };
 
     const getServiceStatusBadge = (status: string) => {
+        // todo: 检查服务状态
         switch (status) {
             case "healthy":
                 return (
@@ -267,24 +434,30 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         }
     };
 
-    const getPlanStatusBadge = (status: string) => {
+    const getPlanStatusBadge = (status: PlanState) => {
         switch (status) {
-            case "healthy":
+            case PlanState.ACTIVE:
                 return (
                     <Badge className="bg-green-100 text-green-800 text-xs">
                         正常
                     </Badge>
                 );
-            case "warning":
+            case PlanState.DISABLED:
+                return (
+                    <Badge variant="secondary" className="text-xs">
+                        已禁用
+                    </Badge>
+                );
+            case PlanState.WARNING:
                 return (
                     <Badge className="bg-yellow-100 text-yellow-800 text-xs">
                         警告
                     </Badge>
                 );
-            case "disabled":
+            case PlanState.ERROR:
                 return (
-                    <Badge variant="secondary" className="text-xs">
-                        已禁用
+                    <Badge variant="destructive" className="text-xs">
+                        失败
                     </Badge>
                 );
             default:
@@ -297,9 +470,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     };
 
     const handleBackupNow = () => {
-        const plan = backupPlans.find((p) => p.id.toString() === selectedPlan);
+        const plan = plans.check().find((p) => p.plan_id === selectedPlan);
         if (plan) {
-            toast.success(`已启动备份计划: ${plan.name}`);
+            toast.success(`已启动备份计划: ${plan.title}`);
         }
         setSelectedPlan("");
     };
@@ -311,7 +484,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                     <div className="flex items-center justify-between">
                         <div>
                             <h1 className="mb-2">{t.dashboard.title}</h1>
-                            <p className="text-muted-foreground">{t.dashboard.subtitle}</p>
+                            <p className="text-muted-foreground">
+                                {t.dashboard.subtitle}
+                            </p>
                         </div>
                     </div>
                 )}
@@ -365,16 +540,17 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 <SelectValue placeholder="选择备份计划" />
                                             </SelectTrigger>
                                             <SelectContent>
-                                                {backupPlans
+                                                {plans
+                                                    .check()
                                                     .filter(
-                                                        (plan) => plan.enabled
+                                                        (plan) => plan.policy
                                                     )
                                                     .map((plan) => (
                                                         <SelectItem
-                                                            key={plan.id}
-                                                            value={plan.id.toString()}
+                                                            key={plan.plan_id}
+                                                            value={plan.plan_id}
                                                         >
-                                                            {plan.name}
+                                                            {plan.title}
                                                         </SelectItem>
                                                     ))}
                                             </SelectContent>
@@ -420,10 +596,18 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     isMobile ? "text-xl" : "text-2xl"
                                 } font-bold`}
                             >
-                                2
+                                {uncompleteTask.check().length}
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                1个执行中
+                                {
+                                    uncompleteTask
+                                        .check()
+                                        .filter(
+                                            (task) =>
+                                                task.state === TaskState.RUNNING
+                                        ).length
+                                }
+                                个执行中
                             </p>
                         </CardContent>
                     </Card>
@@ -445,10 +629,20 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     isMobile ? "text-xl" : "text-2xl"
                                 } font-bold`}
                             >
-                                1.2TB
+                                {consumeSize.isLoaded()
+                                    ? TaskMgrHelper.formatSize(
+                                          consumeSize.check().total
+                                      )
+                                    : "--"}
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                +180GB 今日
+                                {consumeSize.isLoaded()
+                                    ? "+" +
+                                      TaskMgrHelper.formatSize(
+                                          consumeSize.check().today
+                                      ) +
+                                      " 今日"
+                                    : "--"}
                             </p>
                         </CardContent>
                     </Card>
@@ -470,10 +664,14 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     isMobile ? "text-xl" : "text-2xl"
                                 } font-bold`}
                             >
-                                8
+                                {plans.check().length}
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                6个已启用
+                                {
+                                    plans.check().filter((plan) => plan.policy)
+                                        .length
+                                }
+                                个已启用
                             </p>
                         </CardContent>
                     </Card>
@@ -495,7 +693,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     isMobile ? "text-xl" : "text-2xl"
                                 } font-bold`}
                             >
-                                98.5%
+                                {completePercent()}%
                             </div>
                             <p className="text-xs text-muted-foreground">
                                 过去30天
@@ -531,14 +729,16 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             {isMobile ? (
                                 <ScrollArea className="h-20">
                                     <div className="space-y-2">
-                                        {currentTasks
+                                        {uncompleteTask
+                                            .check()
                                             .filter(
                                                 (task) =>
-                                                    task.status === "running"
+                                                    task.state ===
+                                                    TaskState.RUNNING
                                             )
                                             .map((task) => (
                                                 <div
-                                                    key={task.id}
+                                                    key={task.taskid}
                                                     className="flex items-center gap-2 text-sm cursor-pointer"
                                                     onClick={() =>
                                                         onNavigate?.("tasks")
@@ -550,38 +750,37 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                 {task.name}
                                                             </span>
                                                             {getStatusBadge(
-                                                                task.status
+                                                                task.state
                                                             )}
                                                         </div>
                                                         <div className="space-y-1">
                                                             <Progress
-                                                                value={
-                                                                    task.progress
-                                                                }
+                                                                value={TaskMgrHelper.taskProgress(
+                                                                    task
+                                                                )}
                                                                 className="h-1"
                                                             />
                                                             <div className="flex justify-between text-xs text-muted-foreground">
                                                                 <span>
-                                                                    {
-                                                                        task.progress
-                                                                    }
+                                                                    {TaskMgrHelper.taskProgress(
+                                                                        task
+                                                                    )}
                                                                     %
                                                                 </span>
                                                                 <span>
-                                                                    {
-                                                                        task.remaining
-                                                                    }
+                                                                    {TaskMgrHelper.taskRemainingStr(
+                                                                        task
+                                                                    )}
                                                                 </span>
                                                             </div>
                                                         </div>
                                                     </div>
                                                 </div>
                                             ))}
-                                        {currentTasks.filter(
-                                            (task) => task.status === "running"
-                                        ).length === 0 && (
+                                        {uncompleteTask.check().length ===
+                                            0 && (
                                             <div className="text-center py-4">
-                                                {plansCount === 0 ? (
+                                                {plans.check().length === 0 ? (
                                                     <div
                                                         className={`flex ${
                                                             isMobile
@@ -589,7 +788,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                 : "items-center gap-3"
                                                         } justify-center`}
                                                     >
-                                                        {servicesCount === 0 ? (
+                                                        {services.check()
+                                                            .length === 0 ? (
                                                             <>
                                                                 <Button
                                                                     onClick={() =>
@@ -649,11 +849,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 </ScrollArea>
                             ) : (
                                 <div className="space-y-3">
-                                    {currentTasks.filter(
-                                        (t) => t.status === "running"
-                                    ).length === 0 && (
+                                    {uncompleteTask.check().length === 0 && (
                                         <div className="text-center py-2">
-                                            {plansCount === 0 ? (
+                                            {plans.check().length === 0 ? (
                                                 <div
                                                     className={`flex ${
                                                         isMobile
@@ -661,7 +859,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                             : "items-center gap-3"
                                                     } justify-center`}
                                                 >
-                                                    {servicesCount === 0 ? (
+                                                    {services.check().length ===
+                                                    0 ? (
                                                         <>
                                                             <Button
                                                                 onClick={() =>
@@ -715,9 +914,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                             )}
                                         </div>
                                     )}
-                                    {currentTasks.slice(0, 3).map((task) => (
+                                    {uncompleteTask.check().map((task) => (
                                         <div
-                                            key={task.id}
+                                            key={task.taskid}
                                             className="flex items-center gap-3"
                                         >
                                             <div className="flex-1 min-w-0">
@@ -725,35 +924,36 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                     <span className="font-medium truncate">
                                                         {task.name}
                                                     </span>
-                                                    {getStatusBadge(
-                                                        task.status
-                                                    )}
+                                                    {getStatusBadge(task.state)}
                                                 </div>
-                                                {task.status === "running" && (
-                                                    <div className="space-y-1">
-                                                        <Progress
-                                                            value={
-                                                                task.progress
-                                                            }
-                                                            className="h-1.5"
-                                                        />
-                                                        <div className="flex justify-between text-xs text-muted-foreground">
-                                                            <span>
-                                                                {task.progress}%
-                                                                • {task.speed}
-                                                            </span>
-                                                            <span>
-                                                                {task.remaining}
-                                                            </span>
-                                                        </div>
+                                                <div className="space-y-1">
+                                                    <Progress
+                                                        value={TaskMgrHelper.taskProgress(
+                                                            task
+                                                        )}
+                                                        className="h-1.5"
+                                                    />
+                                                    <div className="flex justify-between text-xs text-muted-foreground">
+                                                        <span>
+                                                            {TaskMgrHelper.taskCompletedStr(
+                                                                task
+                                                            )}
+                                                            % •{" "}
+                                                            {TaskMgrHelper.taskSpeedStr(
+                                                                task
+                                                            )}
+                                                        </span>
+                                                        <span>
+                                                            {TaskMgrHelper.taskRemainingStr(
+                                                                task
+                                                            )}{" "}
+                                                            • ETA{" "}
+                                                            {TaskMgrHelper.taskETA(
+                                                                task
+                                                            )}
+                                                        </span>
                                                     </div>
-                                                )}
-                                                {task.status ===
-                                                    "completed" && (
-                                                    <div className="text-xs text-muted-foreground">
-                                                        已完成 • {task.plan}
-                                                    </div>
-                                                )}
+                                                </div>
                                             </div>
                                         </div>
                                     ))}
@@ -795,7 +995,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             </div>
                         </CardHeader>
                         <CardContent>
-                            {servicesCount === 0 ? (
+                            {services.check().length === 0 ? (
                                 <div
                                     className={`flex ${
                                         isMobile
@@ -816,93 +1016,21 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             ) : isMobile ? (
                                 <ScrollArea className="h-20">
                                     <div className="space-y-2">
-                                        {backupServices
-                                            .slice(0, 3)
-                                            .map((service) => {
-                                                const ServiceIcon =
-                                                    getServiceIcon(
-                                                        service.type
-                                                    );
-                                                return (
-                                                    <div
-                                                        key={service.id}
-                                                        className="flex items-center gap-2 text-sm cursor-pointer"
-                                                        onClick={() =>
-                                                            onNavigate?.(
-                                                                "services"
-                                                            )
-                                                        }
-                                                    >
-                                                        <ServiceIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                                                        <div className="flex-1 min-w-0">
-                                                            <div className="flex items-center gap-2 mb-1">
-                                                                <span className="font-medium truncate">
-                                                                    {
-                                                                        service.name
-                                                                    }
-                                                                </span>
-                                                                {getServiceStatusBadge(
-                                                                    service.status
-                                                                )}
-                                                            </div>
-                                                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                                                <span>
-                                                                    {
-                                                                        service.used
-                                                                    }
-                                                                </span>
-                                                                {service.usagePercent >
-                                                                    0 && (
-                                                                    <>
-                                                                        <span>
-                                                                            •
-                                                                        </span>
-                                                                        <div className="flex items-center gap-1">
-                                                                            <div className="w-8 bg-secondary rounded-full h-1">
-                                                                                <div
-                                                                                    className={`h-1 rounded-full ${
-                                                                                        service.usagePercent >
-                                                                                        90
-                                                                                            ? "bg-red-500"
-                                                                                            : service.usagePercent >
-                                                                                              70
-                                                                                            ? "bg-yellow-500"
-                                                                                            : "bg-green-500"
-                                                                                    }`}
-                                                                                    style={{
-                                                                                        width: `${service.usagePercent}%`,
-                                                                                    }}
-                                                                                />
-                                                                            </div>
-                                                                            <span>
-                                                                                {
-                                                                                    service.usagePercent
-                                                                                }
-
-                                                                                %
-                                                                            </span>
-                                                                        </div>
-                                                                    </>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                    </div>
-                                </ScrollArea>
-                            ) : (
-                                <div className="space-y-3">
-                                    {backupServices
-                                        .slice(0, 4)
-                                        .map((service) => {
+                                        {services.check().map((service) => {
                                             const ServiceIcon = getServiceIcon(
-                                                service.type
+                                                service.target_type
                                             );
+                                            const usagePercent =
+                                                TaskMgrHelper.targetUsagePercent(
+                                                    service
+                                                );
                                             return (
                                                 <div
-                                                    key={service.id}
-                                                    className="flex items-center gap-3"
+                                                    key={service.target_id}
+                                                    className="flex items-center gap-2 text-sm cursor-pointer"
+                                                    onClick={() =>
+                                                        onNavigate?.("services")
+                                                    }
                                                 >
                                                     <ServiceIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                                                     <div className="flex-1 min-w-0">
@@ -911,40 +1039,39 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                 {service.name}
                                                             </span>
                                                             {getServiceStatusBadge(
-                                                                service.status
+                                                                service.state
                                                             )}
                                                         </div>
                                                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                                             <span>
-                                                                {service.used} /{" "}
-                                                                {service.total}
+                                                                {service.used}
                                                             </span>
-                                                            {service.usagePercent >
+                                                            {service.used >
                                                                 0 && (
                                                                 <>
                                                                     <span>
                                                                         •
                                                                     </span>
                                                                     <div className="flex items-center gap-1">
-                                                                        <div className="w-12 bg-secondary rounded-full h-1">
+                                                                        <div className="w-8 bg-secondary rounded-full h-1">
                                                                             <div
                                                                                 className={`h-1 rounded-full ${
-                                                                                    service.usagePercent >
+                                                                                    usagePercent >
                                                                                     90
                                                                                         ? "bg-red-500"
-                                                                                        : service.usagePercent >
+                                                                                        : usagePercent >
                                                                                           70
                                                                                         ? "bg-yellow-500"
                                                                                         : "bg-green-500"
                                                                                 }`}
                                                                                 style={{
-                                                                                    width: `${service.usagePercent}%`,
+                                                                                    width: `${usagePercent}%`,
                                                                                 }}
                                                                             />
                                                                         </div>
                                                                         <span>
                                                                             {
-                                                                                service.usagePercent
+                                                                                usagePercent
                                                                             }
                                                                             %
                                                                         </span>
@@ -956,6 +1083,72 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 </div>
                                             );
                                         })}
+                                    </div>
+                                </ScrollArea>
+                            ) : (
+                                <div className="space-y-3">
+                                    {services.check().map((service) => {
+                                        const ServiceIcon = getServiceIcon(
+                                            service.target_type
+                                        );
+                                        const usagePercent =
+                                            TaskMgrHelper.targetUsagePercent(
+                                                service
+                                            );
+                                        return (
+                                            <div
+                                                key={service.target_id}
+                                                className="flex items-center gap-3"
+                                            >
+                                                <ServiceIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <span className="font-medium truncate">
+                                                            {service.name}
+                                                        </span>
+                                                        {getServiceStatusBadge(
+                                                            service.state
+                                                        )}
+                                                    </div>
+                                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                                        <span>
+                                                            {service.used} /{" "}
+                                                            {service.total}
+                                                        </span>
+                                                        {usagePercent > 0 && (
+                                                            <>
+                                                                <span>•</span>
+                                                                <div className="flex items-center gap-1">
+                                                                    <div className="w-12 bg-secondary rounded-full h-1">
+                                                                        <div
+                                                                            className={`h-1 rounded-full ${
+                                                                                usagePercent >
+                                                                                90
+                                                                                    ? "bg-red-500"
+                                                                                    : usagePercent >
+                                                                                      70
+                                                                                    ? "bg-yellow-500"
+                                                                                    : "bg-green-500"
+                                                                            }`}
+                                                                            style={{
+                                                                                width: `${usagePercent}%`,
+                                                                            }}
+                                                                        />
+                                                                    </div>
+                                                                    <span>
+                                                                        {
+                                                                            usagePercent
+                                                                        }
+                                                                        %
+                                                                    </span>
+                                                                </div>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
                                 </div>
                             )}
                         </CardContent>
@@ -994,7 +1187,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             </div>
                         </CardHeader>
                         <CardContent>
-                            {plansCount === 0 ? (
+                            {plans.check().length === 0 ? (
                                 <div
                                     className={`flex ${
                                         isMobile
@@ -1002,7 +1195,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                             : "items-center gap-3"
                                     }`}
                                 >
-                                    {servicesCount === 0 ? (
+                                    {services.check().length === 0 ? (
                                         <>
                                             <Button
                                                 onClick={() =>
@@ -1045,66 +1238,81 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             ) : isMobile ? (
                                 <ScrollArea className="h-24">
                                     <div className="space-y-2">
-                                        {backupPlans.slice(0, 4).map((plan) => (
-                                            <div
-                                                key={plan.id}
-                                                className="flex items-center justify-between text-sm cursor-pointer"
-                                                onClick={() =>
-                                                    onNavigate?.("plans")
-                                                }
-                                            >
-                                                <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                    <div className="flex-1">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <span className="font-medium truncate">
-                                                                {plan.name}
-                                                            </span>
-                                                            {getPlanStatusBadge(
-                                                                plan.status
-                                                            )}
-                                                        </div>
-                                                        <div className="text-xs text-muted-foreground">
-                                                            {plan.nextRun}
+                                        {plans.check().map((plan) => {
+                                            const state =
+                                                TaskMgrHelper.planState(
+                                                    plan,
+                                                    uncompleteTask.check()
+                                                );
+                                            return (
+                                                <div
+                                                    key={plan.plan_id}
+                                                    className="flex items-center justify-between text-sm cursor-pointer"
+                                                    onClick={() =>
+                                                        onNavigate?.("plans")
+                                                    }
+                                                >
+                                                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                <span className="font-medium truncate">
+                                                                    {plan.title}
+                                                                </span>
+                                                                {getPlanStatusBadge(
+                                                                    state
+                                                                )}
+                                                            </div>
+                                                            <div className="text-xs text-muted-foreground">
+                                                                {TaskMgrHelper.planNextRunTime(
+                                                                    plan
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     </div>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="p-1 h-6 w-6 flex-shrink-0"
+                                                        disabled={!plan.policy}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            toast.success(
+                                                                `正在启动计划: ${plan.title}`
+                                                            );
+                                                        }}
+                                                    >
+                                                        <Play className="w-3 h-3" />
+                                                    </Button>
                                                 </div>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    className="p-1 h-6 w-6 flex-shrink-0"
-                                                    disabled={!plan.enabled}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        toast.success(
-                                                            `正在启动计划: ${plan.name}`
-                                                        );
-                                                    }}
-                                                >
-                                                    <Play className="w-3 h-3" />
-                                                </Button>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </ScrollArea>
                             ) : (
                                 <div className="space-y-3">
-                                    {backupPlans.slice(0, 4).map((plan) => (
+                                    {plans.check().map((plan) => (
                                         <div
-                                            key={plan.id}
+                                            key={plan.plan_id}
                                             className="flex items-center justify-between"
                                         >
                                             <div className="flex items-center gap-3 flex-1 min-w-0">
                                                 <div className="flex-1">
                                                     <div className="flex items-center gap-2 mb-1">
                                                         <span className="font-medium truncate">
-                                                            {plan.name}
+                                                            {plan.title}
                                                         </span>
                                                         {getPlanStatusBadge(
-                                                            plan.status
+                                                            TaskMgrHelper.planState(
+                                                                plan,
+                                                                uncompleteTask.check()
+                                                            )
                                                         )}
                                                     </div>
                                                     <div className="text-xs text-muted-foreground">
-                                                        下次执行: {plan.nextRun}
+                                                        下次执行:{" "}
+                                                        {TaskMgrHelper.planNextRunTime(
+                                                            plan
+                                                        )}
                                                     </div>
                                                 </div>
                                             </div>
@@ -1112,10 +1320,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 variant="ghost"
                                                 size="sm"
                                                 className="gap-1 text-xs flex-shrink-0"
-                                                disabled={!plan.enabled}
+                                                disabled={!plan.policy}
                                                 onClick={() =>
                                                     toast.success(
-                                                        `正在启动计划: ${plan.name}`
+                                                        `正在启动计划: ${plan.title}`
                                                     )
                                                 }
                                             >
@@ -1141,22 +1349,22 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                         </CardHeader>
                         <CardContent>
                             <div className="space-y-3">
-                                {recentActivities.map((activity) => (
+                                {lastCompletedTasks.check().map((task) => (
                                     <div
-                                        key={activity.id}
+                                        key={task.taskid}
                                         className={`flex items-center justify-between ${
                                             isMobile ? "text-sm" : ""
                                         }`}
                                     >
                                         <div className="flex items-center gap-3 flex-1 min-w-0">
-                                            {getStatusIcon(activity.status)}
+                                            {getStatusIcon(task.state)}
                                             <div className="flex-1 min-w-0">
                                                 <p className="font-medium truncate">
-                                                    {activity.name}
+                                                    {task.name}
                                                 </p>
                                                 <p className="text-xs text-muted-foreground">
-                                                    {activity.time} •{" "}
-                                                    {activity.size}
+                                                    {task.update_time} •{" "}
+                                                    {task.total_size}
                                                 </p>
                                             </div>
                                         </div>
@@ -1198,16 +1406,14 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                             <SelectValue placeholder="选择备份计划" />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            {backupPlans
-                                                .filter((plan) => plan.enabled)
-                                                .map((plan) => (
-                                                    <SelectItem
-                                                        key={plan.id}
-                                                        value={plan.id.toString()}
-                                                    >
-                                                        {plan.name}
-                                                    </SelectItem>
-                                                ))}
+                                            {plans.check().map((plan) => (
+                                                <SelectItem
+                                                    key={plan.plan_id}
+                                                    value={plan.plan_id}
+                                                >
+                                                    {plan.title}
+                                                </SelectItem>
+                                            ))}
                                         </SelectContent>
                                     </Select>
                                 </div>
