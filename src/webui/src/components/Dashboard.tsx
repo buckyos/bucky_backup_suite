@@ -389,70 +389,81 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 {t.dashboard.subtitle}
                             </p>
                         </div>
-                        <div className="flex gap-3">
-                            <Button
-                                variant="outline"
-                                className="gap-2"
-                                onClick={() => onNavigate?.("create-plan")}
-                            >
-                                <Plus className="w-4 h-4" />
-                                {t.dashboard.createNewPlan}
-                            </Button>
-                            <AlertDialog>
-                                <AlertDialogTrigger asChild>
-                                    <Button className="gap-2">
-                                        <Play className="w-4 h-4" />
-                                        {t.dashboard.backupNow}
-                                    </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                        <AlertDialogTitle>
-                                            {t.dashboard.backupNow}
-                                        </AlertDialogTitle>
-                                        <AlertDialogDescription>
-                                            选择要立即执行的备份计划
-                                        </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <div className="space-y-4">
-                                        <Select
-                                            value={selectedPlan}
-                                            onValueChange={setSelectedPlan}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="选择备份计划" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {plans
-                                                    .check()
-                                                    .filter(
-                                                        (plan) => plan.policy
-                                                    )
-                                                    .map((plan) => (
-                                                        <SelectItem
-                                                            key={plan.plan_id}
-                                                            value={plan.plan_id}
-                                                        >
-                                                            {plan.title}
-                                                        </SelectItem>
-                                                    ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    <AlertDialogFooter>
-                                        <AlertDialogCancel>
-                                            取消
-                                        </AlertDialogCancel>
-                                        <AlertDialogAction
-                                            disabled={!selectedPlan}
-                                            onClick={handleBackupNow}
-                                        >
-                                            立即执行
-                                        </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                </AlertDialogContent>
-                            </AlertDialog>
-                        </div>
+                        {services.check().length > 0 && (
+                            <div className="flex gap-3">
+                                <Button
+                                    variant="outline"
+                                    className="gap-2"
+                                    onClick={() => onNavigate?.("create-plan")}
+                                >
+                                    <Plus className="w-4 h-4" />
+                                    {t.dashboard.createNewPlan}
+                                </Button>
+                                {plans.check().length > 0 && (
+                                    <AlertDialog>
+                                        <AlertDialogTrigger asChild>
+                                            <Button className="gap-2">
+                                                <Play className="w-4 h-4" />
+                                                {t.dashboard.backupNow}
+                                            </Button>
+                                        </AlertDialogTrigger>
+                                        <AlertDialogContent>
+                                            <AlertDialogHeader>
+                                                <AlertDialogTitle>
+                                                    {t.dashboard.backupNow}
+                                                </AlertDialogTitle>
+                                                <AlertDialogDescription>
+                                                    选择要立即执行的备份计划
+                                                </AlertDialogDescription>
+                                            </AlertDialogHeader>
+                                            <div className="space-y-4">
+                                                <Select
+                                                    value={selectedPlan}
+                                                    onValueChange={
+                                                        setSelectedPlan
+                                                    }
+                                                >
+                                                    <SelectTrigger>
+                                                        <SelectValue placeholder="选择备份计划" />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {plans
+                                                            .check()
+                                                            .filter(
+                                                                (plan) =>
+                                                                    plan.policy
+                                                            )
+                                                            .map((plan) => (
+                                                                <SelectItem
+                                                                    key={
+                                                                        plan.plan_id
+                                                                    }
+                                                                    value={
+                                                                        plan.plan_id
+                                                                    }
+                                                                >
+                                                                    {plan.title}
+                                                                </SelectItem>
+                                                            ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                            <AlertDialogFooter>
+                                                <AlertDialogCancel>
+                                                    取消
+                                                </AlertDialogCancel>
+                                                <AlertDialogAction
+                                                    disabled={!selectedPlan}
+                                                    onClick={handleBackupNow}
+                                                >
+                                                    立即执行
+                                                </AlertDialogAction>
+                                            </AlertDialogFooter>
+                                        </AlertDialogContent>
+                                    </AlertDialog>
+                                )}
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -609,7 +620,25 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             </Button>
                         </CardHeader>
                         <CardContent>
-                            {isMobile ? (
+                            {uncompleteTask.check().length === 0 &&
+                            services.check().length > 0 &&
+                            plans.check().length > 0 ? (
+                                <div
+                                    className={`flex ${
+                                        isMobile
+                                            ? "flex-col gap-2"
+                                            : "items-center gap-3"
+                                    } justify-center`}
+                                >
+                                    <Button
+                                        onClick={() => onNavigate?.("plans")}
+                                        className="gap-2"
+                                    >
+                                        <Plus className="w-4 h-4" />
+                                        前往计划列表执行一次备份
+                                    </Button>
+                                </div>
+                            ) : isMobile ? (
                                 <ScrollArea className="h-20">
                                     <div className="space-y-2">
                                         {uncompleteTask.check().map((task) => (
@@ -653,7 +682,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 </div>
                                             </div>
                                         ))}
-                                        {uncompleteTask.check().length ===
+                                        {/* {uncompleteTask.check().length ===
                                             0 && (
                                             <div className="text-center py-4">
                                                 {plans.check().length === 0 ? (
@@ -720,12 +749,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                     </Button>
                                                 )}
                                             </div>
-                                        )}
+                                        )} */}
                                     </div>
                                 </ScrollArea>
                             ) : (
                                 <div className="space-y-3">
-                                    {uncompleteTask.check().length === 0 && (
+                                    {/* {uncompleteTask.check().length === 0 && (
                                         <div className="text-center py-2">
                                             {plans.check().length === 0 ? (
                                                 <div
@@ -789,7 +818,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 </Button>
                                             )}
                                         </div>
-                                    )}
+                                    )} */}
                                     {uncompleteTask.check().map((task) => (
                                         <div
                                             key={task.taskid}
