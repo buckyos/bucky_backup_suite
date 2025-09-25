@@ -1,0 +1,280 @@
+import {
+    BackupPlanInfo,
+    BackupTargetInfo,
+    BackupTaskManager,
+    ListOrder,
+    ListTaskOrderBy,
+    TargetState,
+    TaskEventType,
+    TaskFilter,
+    TaskInfo,
+    TaskState,
+    TaskType,
+} from "./task_mgr";
+
+export class FakeTaskManager extends BackupTaskManager {
+    private plan_list = {
+        next_plan_id: 1,
+        plans: new Array<BackupPlanInfo>(),
+    };
+    private task_list = {
+        next_task_id: 1,
+        tasks: new Array<TaskInfo>(),
+    };
+    private target_list = {
+        next_target_id: 1,
+        targets: new Array<BackupTargetInfo>(),
+    };
+
+    async createBackupPlan(params: {
+        type_str: string;
+        source_type: string;
+        source: string;
+        target_type: string;
+        target: string;
+        title: string;
+        description: string;
+    }): Promise<string> {
+        const result = {
+            plan_id: `plan_${this.plan_list.next_plan_id++}`,
+            ...params,
+            last_checkpoint_index: -1,
+            last_run_time: 0,
+            policy: undefined,
+        };
+        this.plan_list.plans.push(result);
+        await this.emitTaskEvent(TaskEventType.CREATE_PLAN, result);
+        return result.plan_id;
+    }
+
+    async listBackupPlans(): Promise<string[]> {
+        return this.plan_list.plans.map((p) => p.plan_id);
+    }
+
+    async getBackupPlan(planId: string): Promise<BackupPlanInfo> {
+        return this.plan_list.plans.find((p) => p.plan_id === planId)!;
+    }
+
+    async createBackupTask(planId: string, parentCheckpointId: string | null) {
+        let plan = this.plan_list.plans.find((p) => p.plan_id === planId)!;
+        plan.last_run_time = Date.now();
+        const checkpoint_id = plan.last_checkpoint_index++;
+        const result: TaskInfo = {
+            taskid: `task_${this.task_list.next_task_id++}`,
+            owner_plan_id: planId,
+            checkpoint_id: `checkpoint_${checkpoint_id}`,
+            state: TaskState.PENDING,
+            create_time: Date.now(),
+            task_type: TaskType.BACKUP,
+            total_size: 0,
+            completed_size: 0,
+            update_time: Date.now(),
+            item_count: 0,
+            completed_item_count: 0,
+            wait_transfer_item_count: 0,
+            last_log_content: null,
+            name: `${plan.title}-BACKUP-${checkpoint_id}`,
+            speed: 0,
+        };
+        this.task_list.tasks.push(result);
+        await this.emitTaskEvent(TaskEventType.CREATE_TASK, result);
+        return result.taskid;
+    }
+
+    async createRestoreTask(
+        planId: string,
+        checkpointId: string,
+        targetLocationUrl: string,
+        is_clean_folder?: boolean
+    ) {
+        const plan = this.plan_list.plans.find((p) => p.plan_id === planId)!;
+        const backup_task = this.task_list.tasks
+            .filter((t) => t.owner_plan_id === planId)
+            .find((t) => t.checkpoint_id === checkpointId);
+        const result: TaskInfo = {
+            taskid: `task_${this.task_list.next_task_id++}`,
+            owner_plan_id: planId,
+            checkpoint_id: checkpointId,
+            state: TaskState.PENDING,
+            create_time: Date.now(),
+            task_type: TaskType.RESTORE,
+            total_size: backup_task!.total_size,
+            completed_size: 0,
+            update_time: 0,
+            item_count: backup_task!.item_count,
+            completed_item_count: 0,
+            wait_transfer_item_count: 0,
+            last_log_content: null,
+            name: `${plan.title}-RESTORE-${checkpointId}`,
+            speed: 0,
+        };
+        this.task_list.tasks.push(result);
+        await this.emitTaskEvent(TaskEventType.CREATE_TASK, result);
+        return result.taskid;
+    }
+
+    async listBackupTasks(
+        filter: TaskFilter[] = [TaskFilter.ALL],
+        offset: number = 0,
+        limit: number | null = null,
+        orderBy: Map<ListTaskOrderBy, ListOrder> | null = null
+    ): Promise<string[]> {
+        if (filter.includes(TaskFilter.ALL)) {
+            return this.task_list.tasks.map((t) => t.taskid);
+        } else {
+            let tasks = this.task_list.tasks.filter((t) => {
+                switch (t.state) {
+                    case TaskState.PENDING:
+                    case TaskState.RUNNING:
+                        return filter.includes(TaskFilter.RUNNING);
+                    case TaskState.FAILED:
+                        return filter.includes(TaskFilter.FAILED);
+                    case TaskState.DONE:
+                        return filter.includes(TaskFilter.DONE);
+                    case TaskState.PAUSED:
+                        return filter.includes(TaskFilter.PAUSED);
+                }
+            });
+            return tasks.map((t) => t.taskid);
+        }
+    }
+
+    async getTaskInfo(taskId: string): Promise<TaskInfo> {
+        const result = this.task_list.tasks.find((t) => t.taskid === taskId);
+        if (result) {
+            if (result.state === TaskState.DONE) {
+                if (this.uncomplete_tasks.has(taskId)) {
+                    this.uncomplete_tasks.delete(taskId);
+                    await this.emitTaskEvent(
+                        TaskEventType.COMPLETE_TASK,
+                        result
+                    );
+                }
+            } else {
+                const old_task = this.uncomplete_tasks.get(taskId);
+                if (result.state === TaskState.FAILED) {
+                    if (old_task && old_task.state !== TaskState.FAILED) {
+                        await this.emitTaskEvent(
+                            TaskEventType.FAIL_TASK,
+                            result
+                        );
+                    }
+                }
+                const now = Date.now();
+                let speed_im = old_task
+                    ? ((result.completed_size - old_task.completed_size) *
+                          1000) /
+                      (now - old_task.last_query_time)
+                    : 0;
+                if (speed_im < 0) speed_im = 0;
+                const speed_avg =
+                    (old_task ? old_task.speed * 0.7 : 0) + speed_im * 0.3;
+                result.speed = speed_avg;
+                this.uncomplete_tasks.set(taskId, {
+                    ...result,
+                    last_query_time: now,
+                });
+            }
+        }
+        return result!;
+    }
+
+    async resumeBackupTask(taskId: string) {
+        const task = this.task_list.tasks.find((t) => t.taskid === taskId)!;
+        if (
+            task.state === TaskState.PAUSED ||
+            task.state === TaskState.FAILED
+        ) {
+            task.state = TaskState.RUNNING;
+            task.update_time = Date.now();
+            await this.emitTaskEvent(TaskEventType.RESUME_TASK, task);
+        }
+        return true;
+    }
+
+    async pauseBackupTask(taskId: string) {
+        const task = this.task_list.tasks.find((t) => t.taskid === taskId)!;
+        if (
+            task.state === TaskState.RUNNING ||
+            task.state === TaskState.PENDING
+        ) {
+            task.state = TaskState.PAUSED;
+            task.update_time = Date.now();
+            await this.emitTaskEvent(TaskEventType.PAUSE_TASK, task);
+        }
+        return true;
+    }
+
+    async resume_last_working_task() {
+        let taskid_list = await this.listBackupTasks([TaskFilter.PAUSED]);
+        if (taskid_list.length > 0) {
+            let last_task = taskid_list[0];
+            console.log("resume last task:", last_task);
+            this.resumeBackupTask(last_task);
+            await this.emitTaskEvent(TaskEventType.RESUME_TASK, last_task);
+        }
+    }
+
+    async pause_all_tasks() {
+        let taskid_list = await this.listBackupTasks([TaskFilter.RUNNING]);
+        for (let taskid of taskid_list) {
+            this.pauseBackupTask(taskid);
+            await this.emitTaskEvent(TaskEventType.PAUSE_TASK, taskid);
+        }
+    }
+
+    async createBackupTarget(
+        target_type: string,
+        target_url: string,
+        name: string,
+        config: any
+    ): Promise<string> {
+        const result: BackupTargetInfo = {
+            target_id: `target_${this.target_list.next_target_id++}`,
+            target_type,
+            url: target_url,
+            name,
+            description: "",
+            state: TargetState.UNKNOWN,
+            used: 0,
+            total: 0,
+            last_error: "",
+        };
+        this.target_list.targets.push(result);
+        await this.emitTaskEvent(TaskEventType.CREATE_TARGET, result);
+        return result.target_id;
+    }
+
+    async listBackupTargets(): Promise<string[]> {
+        return this.target_list.targets.map((t) => t.target_id);
+    }
+
+    async getBackupTarget(targetId: string): Promise<BackupTargetInfo> {
+        const result = this.target_list.targets.find(
+            (t) => t.target_id === targetId
+        )!;
+        return result;
+    }
+
+    async consumeSizeSummary(): Promise<{ total: number; today: number }> {
+        const total = this.task_list.tasks
+            .map((t) => t.completed_size)
+            .reduce((a, b) => a + b, 0);
+        return { total, today: total };
+    }
+
+    async statisticsSummary(
+        from: number,
+        to: number
+    ): Promise<{ complete: number; failed: number }> {
+        const complete = this.task_list.tasks.filter(
+            (t) => t.state === TaskState.DONE
+        ).length;
+        const failed = this.task_list.tasks.filter(
+            (t) => t.state === TaskState.FAILED
+        ).length;
+        return { complete, failed };
+    }
+}
+
+export const taskManager = new FakeTaskManager();

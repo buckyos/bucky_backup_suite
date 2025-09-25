@@ -1,4 +1,4 @@
-import buckyos from "buckyos";
+import { buckyos } from "buckyos";
 
 export enum TaskState {
     RUNNING = "RUNNING",
@@ -8,9 +8,14 @@ export enum TaskState {
     FAILED = "FAILED",
 }
 
+export enum TaskType {
+    BACKUP = "BACKUP",
+    RESTORE = "RESTORE",
+}
+
 export interface TaskInfo {
     taskid: string;
-    task_type: string;
+    task_type: TaskType;
     owner_plan_id: string;
     checkpoint_id: string;
     total_size: number;
@@ -38,13 +43,20 @@ export interface BackupPlanInfo {
     policy?: any; // todo
 }
 
+export enum TargetState {
+    ONLINE = "ONLINE",
+    OFFLINE = "OFFLINE",
+    ERROR = "ERROR",
+    UNKNOWN = "UNKNOWN",
+}
+
 export interface BackupTargetInfo {
     target_id: string;
     target_type: string;
     name: string;
     url: string;
     description: string;
-    state: string;
+    state: TargetState;
     used: number;
     total: number;
     last_error: string;
@@ -96,8 +108,24 @@ export class BackupTaskManager {
         data: any
     ) => void | Promise<void>)[] = [];
 
+    private next_timer_id = 1;
+    protected uncomplete_tasks: Map<
+        string,
+        TaskInfo & { last_query_time: number }
+    > = new Map();
+    private uncomplete_task_timer = {
+        is_stop: true,
+        listener_timers: new Set<number>(),
+    };
+    private targets: Map<string, BackupTargetInfo> = new Map();
+    private target_timer = {
+        is_stop: true,
+        listener_timers: new Set<number>(),
+    };
+
     constructor() {
         // Initialize RPC client for backup control service
+        console.log("BackupTaskManager initialized");
         this.rpc_client = new buckyos.kRPCClient("/kapi/backup_control");
         this.task_event_listeners = [];
     }
@@ -168,6 +196,7 @@ export class BackupTaskManager {
             params.parent_checkpoint_id = parentCheckpointId;
         }
         const result = await this.rpc_client.call("create_backup_task", params);
+        await this.emitTaskEvent(TaskEventType.CREATE_TASK, result);
         return result;
     }
 
@@ -190,6 +219,7 @@ export class BackupTaskManager {
             "create_restore_task",
             params
         );
+        await this.emitTaskEvent(TaskEventType.CREATE_TASK, result);
         return result;
     }
 
@@ -212,6 +242,39 @@ export class BackupTaskManager {
         const result = await this.rpc_client.call("get_task_info", {
             taskid: taskId,
         });
+        if (result) {
+            if (result.state === TaskState.DONE) {
+                if (this.uncomplete_tasks.has(taskId)) {
+                    this.uncomplete_tasks.delete(taskId);
+                    await this.emitTaskEvent(
+                        TaskEventType.COMPLETE_TASK,
+                        result
+                    );
+                }
+            } else {
+                const old_task = this.uncomplete_tasks.get(taskId);
+                if (result.state === TaskState.FAILED) {
+                    if (old_task && old_task.state !== TaskState.FAILED) {
+                        await this.emitTaskEvent(
+                            TaskEventType.FAIL_TASK,
+                            result
+                        );
+                    }
+                }
+                const now = Date.now();
+                let speed_im = old_task
+                    ? ((result.completed_size - old_task.completed_size) *
+                          1000) /
+                      (now - old_task.last_query_time)
+                    : 0;
+                if (speed_im < 0) speed_im = 0;
+                const speed_avg =
+                    (old_task ? old_task.speed * 0.7 : 0) + speed_im * 0.3;
+                result.speed = speed_avg;
+                result.last_query_time = now;
+                this.uncomplete_tasks.set(taskId, result);
+            }
+        }
         return result;
     }
 
@@ -256,6 +319,22 @@ export class BackupTaskManager {
         }
     }
 
+    async createBackupTarget(
+        target_type: string,
+        target_url: string,
+        name: string,
+        config: any
+    ): Promise<string> {
+        const result = await this.rpc_client.call("create_backup_target", {
+            target_type,
+            url: target_url,
+            name,
+            config: config,
+        });
+        await this.emitTaskEvent(TaskEventType.CREATE_TARGET, result);
+        return result.target_id;
+    }
+
     async listBackupTargets(): Promise<string[]> {
         const result = await this.rpc_client.call("list_backup_target", {});
         return result.targets;
@@ -286,12 +365,44 @@ export class BackupTaskManager {
     }
 
     startRefreshUncompleteTaskStateTimer(): number {
-        // todo:
-        return 0;
+        let timer_id = this.next_timer_id++;
+        this.uncomplete_task_timer.listener_timers.add(timer_id);
+        if (this.uncomplete_task_timer.is_stop) {
+            this.uncomplete_task_timer.is_stop = false;
+            callInInterval(
+                async () => {
+                    try {
+                        let taskid_list = await this.listBackupTasks([
+                            TaskFilter.RUNNING,
+                            TaskFilter.PAUSED,
+                            TaskFilter.FAILED,
+                        ]);
+                        await Promise.all(
+                            taskid_list.map((taskid) =>
+                                this.getTaskInfo(taskid)
+                            )
+                        );
+                    } catch (error) {
+                        console.error(
+                            "Error refreshing uncomplete task state:",
+                            error
+                        );
+                    }
+                },
+                1000,
+                (_) => {
+                    return this.uncomplete_task_timer.is_stop;
+                }
+            );
+        }
+        return timer_id;
     }
 
     stopRefreshUncompleteTaskStateTimer(timerId: number) {
-        // todo:
+        this.uncomplete_task_timer.listener_timers.delete(timerId);
+        if (this.uncomplete_task_timer.listener_timers.size === 0) {
+            this.uncomplete_task_timer.is_stop = true;
+        }
     }
 
     startRefreshTargetStateTimer(): number {
@@ -302,6 +413,25 @@ export class BackupTaskManager {
     stopRefreshTargetStateTimer(timerId: number) {
         // todo:
     }
+}
+
+export function callInInterval(
+    callback: () => Promise<void>,
+    interval: number,
+    setIntervalHandle: (intervalHandle: number | null) => boolean
+) {
+    let isStop = false;
+    let intervalHandle: number | undefined;
+    const tick = async () => {
+        if (isStop) return;
+        await callback();
+        if (intervalHandle) {
+            clearInterval(intervalHandle);
+        }
+        intervalHandle = window.setInterval(tick, interval);
+        isStop = setIntervalHandle(intervalHandle);
+    };
+    tick();
 }
 
 // Export a singleton instance

@@ -30,7 +30,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "./ui/select";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 import {
     Activity,
     HardDrive,
@@ -46,7 +46,7 @@ import {
     MoreVertical,
 } from "lucide-react";
 import {
-    taskManager,
+    // taskManager,
     TaskFilter,
     TaskInfo,
     BackupPlanInfo,
@@ -56,6 +56,7 @@ import {
     TaskEventType,
     TaskState,
 } from "./utils/task_mgr";
+import { taskManager } from "./utils/fake_task_mgr";
 import { LoadingData, LoadingPage } from "./LoadingPage";
 import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
 
@@ -66,9 +67,6 @@ interface DashboardProps {
 export function Dashboard({ onNavigate }: DashboardProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
-    const [loadingText, setLoadingText] = useState<string>(
-        `${t.common.loading} ${t.nav.dashboard}...`
-    );
     const [uncompleteTask, setUncompleteTask] = useState(
         new LoadingData<TaskInfo[]>(null)
     );
@@ -87,11 +85,20 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     );
     const [selectedPlan, setSelectedPlan] = useState("");
 
-    const loading =
-        uncompleteTask === null ||
-        lastCompletedTasks === null ||
-        plans === null ||
-        services === null;
+    const loading = !(
+        uncompleteTask.isLoaded() &&
+        lastCompletedTasks.isLoaded() &&
+        plans.isLoaded() &&
+        services.isLoaded()
+    );
+
+    const loadingText = () => {
+        if (!uncompleteTask.isLoaded()) return `${t.common.loading} 任务...`;
+        if (!lastCompletedTasks.isLoaded())
+            return `${t.common.loading} 最近任务...`;
+        if (!plans.isLoaded()) return `${t.common.loading} 备份计划...`;
+        if (!services.isLoaded()) return `${t.common.loading} 备份服务...`;
+    };
 
     const refreshUncompleteTasks = () => {
         taskManager
@@ -173,6 +180,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         ).toFixed(1);
     };
 
+    console.log("Dashboard render", { loading });
+
     useEffect(() => {
         refreshUncompleteTasks();
         refreshCompleteTasks();
@@ -219,132 +228,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             taskManager.stopRefreshUncompleteTaskStateTimer(timerId);
         };
     }, []);
-
-    // // Read persisted counts to decide whether to show guidance panel
-    // const plansCount =
-    //     0 &&
-    //     (() => {
-    //         try {
-    //             const raw = localStorage.getItem("plans");
-    //             if (!raw) return 0;
-    //             const arr = JSON.parse(raw);
-    //             return Array.isArray(arr) ? arr.length : 0;
-    //         } catch {
-    //             return 0;
-    //         }
-    //     })();
-    // const servicesCount =
-    //     0 &&
-    //     (() => {
-    //         try {
-    //             const raw = localStorage.getItem("services");
-    //             if (!raw) return 0;
-    //             const arr = JSON.parse(raw);
-    //             return Array.isArray(arr) ? arr.length : 0;
-    //         } catch {
-    //             return 0;
-    //         }
-    //     })();
-
-    // // 模拟数据
-    // const currentTasks = [
-    //     // {
-    //     //     id: 1,
-    //     //     name: "系统文件夜间备份",
-    //     //     plan: "系统备份",
-    //     //     progress: 65,
-    //     //     speed: "12.5 MB/s",
-    //     //     remaining: "约 15 分钟",
-    //     //     status: "running",
-    //     // },
-    //     // {
-    //     //     id: 2,
-    //     //     name: "项目文件增量备份",
-    //     //     plan: "项目备份",
-    //     //     progress: 100,
-    //     //     speed: "",
-    //     //     remaining: "",
-    //     //     status: "completed",
-    //     // },
-    // ];
-
-    // const recentActivities = [
-    //     {
-    //         id: 1,
-    //         name: "文档备份计划",
-    //         status: "success",
-    //         time: "2h",
-    //         size: "2.1 GB",
-    //     },
-    //     {
-    //         id: 2,
-    //         name: "系统备份计划",
-    //         status: "warning",
-    //         time: "4h",
-    //         size: "15.6 GB",
-    //     },
-    //     {
-    //         id: 3,
-    //         name: "媒体文件备份",
-    //         status: "error",
-    //         time: "6h",
-    //         size: "8.3 GB",
-    //     },
-    // ];
-
-    // const backupServices = [
-    //     {
-    //         id: 1,
-    //         name: "本地备份盘",
-    //         type: "local",
-    //         status: "healthy",
-    //         used: "450 GB",
-    //         total: "2 TB",
-    //         usagePercent: 22,
-    //     },
-    //     {
-    //         id: 2,
-    //         name: "NDN网络节点1",
-    //         type: "ndn",
-    //         status: "healthy",
-    //         used: "1.2 TB",
-    //         total: "无限制",
-    //         usagePercent: 0,
-    //     },
-    //     {
-    //         id: 3,
-    //         name: "外部硬盘",
-    //         type: "local",
-    //         status: "warning",
-    //         used: "1.8 TB",
-    //         total: "2 TB",
-    //         usagePercent: 90,
-    //     },
-    // ];
-
-    // const backupPlans = [
-    //     {
-    //         id: 1,
-    //         name: "系统文件备份",
-    //         enabled: true,
-    //         nextRun: "今天 23:00",
-    //         status: "healthy",
-    //     },
-    //     {
-    //         id: 2,
-    //         name: "项目文件备份",
-    //         enabled: true,
-    //         nextRun: "明天 02:00",
-    //         status: "healthy",
-    //     },
-    //     {
-    //         id: 3,
-    //         name: "媒体文件备份",
-    //         enabled: false,
-    //         nextRun: "已禁用",
-    //         status: "disabled",
-    //     },
-    // ];
 
     const getStatusIcon = (status: string) => {
         switch (status) {
@@ -490,7 +373,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                         </div>
                     </div>
                 )}
-                <LoadingPage status={loadingText} />
+                <LoadingPage status={loadingText()} />
             </div>
         );
     }
@@ -729,54 +612,47 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             {isMobile ? (
                                 <ScrollArea className="h-20">
                                     <div className="space-y-2">
-                                        {uncompleteTask
-                                            .check()
-                                            .filter(
-                                                (task) =>
-                                                    task.state ===
-                                                    TaskState.RUNNING
-                                            )
-                                            .map((task) => (
-                                                <div
-                                                    key={task.taskid}
-                                                    className="flex items-center gap-2 text-sm cursor-pointer"
-                                                    onClick={() =>
-                                                        onNavigate?.("tasks")
-                                                    }
-                                                >
-                                                    <div className="flex-1 min-w-0">
-                                                        <div className="flex items-center gap-2 mb-1">
-                                                            <span className="font-medium truncate">
-                                                                {task.name}
-                                                            </span>
-                                                            {getStatusBadge(
-                                                                task.state
+                                        {uncompleteTask.check().map((task) => (
+                                            <div
+                                                key={task.taskid}
+                                                className="flex items-center gap-2 text-sm cursor-pointer"
+                                                onClick={() =>
+                                                    onNavigate?.("tasks")
+                                                }
+                                            >
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <span className="font-medium truncate">
+                                                            {task.name}
+                                                        </span>
+                                                        {getStatusBadge(
+                                                            task.state
+                                                        )}
+                                                    </div>
+                                                    <div className="space-y-1">
+                                                        <Progress
+                                                            value={TaskMgrHelper.taskProgress(
+                                                                task
                                                             )}
-                                                        </div>
-                                                        <div className="space-y-1">
-                                                            <Progress
-                                                                value={TaskMgrHelper.taskProgress(
+                                                            className="h-1"
+                                                        />
+                                                        <div className="flex justify-between text-xs text-muted-foreground">
+                                                            <span>
+                                                                {TaskMgrHelper.taskProgress(
                                                                     task
                                                                 )}
-                                                                className="h-1"
-                                                            />
-                                                            <div className="flex justify-between text-xs text-muted-foreground">
-                                                                <span>
-                                                                    {TaskMgrHelper.taskProgress(
-                                                                        task
-                                                                    )}
-                                                                    %
-                                                                </span>
-                                                                <span>
-                                                                    {TaskMgrHelper.taskRemainingStr(
-                                                                        task
-                                                                    )}
-                                                                </span>
-                                                            </div>
+                                                                %
+                                                            </span>
+                                                            <span>
+                                                                {TaskMgrHelper.taskRemainingStr(
+                                                                    task
+                                                                )}
+                                                            </span>
                                                         </div>
                                                     </div>
                                                 </div>
-                                            ))}
+                                            </div>
+                                        ))}
                                         {uncompleteTask.check().length ===
                                             0 && (
                                             <div className="text-center py-4">
@@ -1001,7 +877,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                         isMobile
                                             ? "flex-col gap-2"
                                             : "items-center gap-3"
-                                    }`}
+                                    } justify-center`}
                                 >
                                     <Button
                                         onClick={() =>
@@ -1193,37 +1069,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                         isMobile
                                             ? "flex-col gap-2"
                                             : "items-center gap-3"
-                                    }`}
+                                    } justify-center`}
                                 >
-                                    {services.check().length === 0 ? (
-                                        <>
-                                            <Button
-                                                onClick={() =>
-                                                    onNavigate?.("services")
-                                                }
-                                                className="gap-2"
-                                            >
-                                                <Server className="w-4 h-4" />
-                                                去配置备份服务
-                                            </Button>
-                                            {!isMobile && (
-                                                <span className="text-muted-foreground">
-                                                    或
-                                                </span>
-                                            )}
-                                            <Button
-                                                variant="outline"
-                                                onClick={() =>
-                                                    onNavigate?.("create-plan")
-                                                }
-                                                className="gap-2"
-                                                disabled
-                                            >
-                                                <Plus className="w-4 h-4" />
-                                                新建备份计划
-                                            </Button>
-                                        </>
-                                    ) : (
+                                    {services.check().length > 0 && (
                                         <Button
                                             onClick={() =>
                                                 onNavigate?.("create-plan")
