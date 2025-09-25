@@ -14,7 +14,7 @@ import { Switch } from "./ui/switch";
 import { DirectorySelector } from "./DirectorySelector";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 import {
     ArrowLeft,
     ChevronLeft,
@@ -23,6 +23,7 @@ import {
     HardDrive,
     Network,
 } from "lucide-react";
+import { TargetType } from "./utils/task_mgr";
 
 interface AddServiceWizardProps {
     onBack: () => void;
@@ -38,22 +39,19 @@ export function AddServiceWizard({
     const [currentStep, setCurrentStep] = useState(1);
 
     // 表单数据
-    const [serviceType, setServiceType] = useState("");
+    const [serviceType, setServiceType] = useState(TargetType.LOCAL);
     const [serviceName, setServiceName] = useState("");
     const [localPath, setLocalPath] = useState("");
     const [ndnUrl, setNdnUrl] = useState("");
-    const [compression, setCompression] = useState(true);
-    const [encryption, setEncryption] = useState(true);
 
     const steps = [
         { number: 1, title: "服务类型", description: "选择服务类型" },
         { number: 2, title: "基本配置", description: "配置服务信息" },
-        { number: 3, title: "高级选项", description: "设置高级选项" },
-        { number: 4, title: "确认添加", description: "确认服务配置" },
+        { number: 3, title: "确认添加", description: "确认服务配置" },
     ];
 
     const handleNext = () => {
-        if (currentStep < 4) {
+        if (currentStep < 3) {
             setCurrentStep(currentStep + 1);
         }
     };
@@ -72,17 +70,15 @@ export function AddServiceWizard({
     const canProceed = () => {
         switch (currentStep) {
             case 1:
-                return serviceType !== "";
+                return true;
             case 2:
-                if (serviceType === "local") {
+                if (serviceType === TargetType.LOCAL) {
                     return serviceName.trim() !== "" && localPath.trim() !== "";
-                } else if (serviceType === "ndn") {
+                } else if (serviceType === TargetType.NDN) {
                     return serviceName.trim() !== "" && ndnUrl.trim() !== "";
                 }
                 return false;
             case 3:
-                return true;
-            case 4:
                 return true;
             default:
                 return false;
@@ -104,11 +100,11 @@ export function AddServiceWizard({
                         <div className="grid gap-4">
                             <Card
                                 className={`cursor-pointer transition-all border-2 ${
-                                    serviceType === "local"
+                                    serviceType === TargetType.LOCAL
                                         ? "border-primary bg-primary/5"
                                         : "border-border hover:border-primary/50"
                                 }`}
-                                onClick={() => setServiceType("local")}
+                                onClick={() => setServiceType(TargetType.LOCAL)}
                             >
                                 <CardContent className="p-6">
                                     <div className="flex items-center gap-4">
@@ -129,11 +125,11 @@ export function AddServiceWizard({
 
                             <Card
                                 className={`cursor-pointer transition-all border-2 ${
-                                    serviceType === "ndn"
+                                    serviceType === TargetType.NDN
                                         ? "border-primary bg-primary/5"
                                         : "border-border hover:border-primary/50"
                                 }`}
-                                onClick={() => setServiceType("ndn")}
+                                onClick={() => setServiceType(TargetType.NDN)}
                             >
                                 <CardContent className="p-6">
                                     <div className="flex items-center gap-4">
@@ -178,7 +174,7 @@ export function AddServiceWizard({
                                 />
                             </div>
 
-                            {serviceType === "local" && (
+                            {serviceType === TargetType.LOCAL && (
                                 <div className="space-y-2">
                                     <Label>目标路径 *</Label>
                                     <DirectorySelector
@@ -189,7 +185,7 @@ export function AddServiceWizard({
                                 </div>
                             )}
 
-                            {serviceType === "ndn" && (
+                            {serviceType === TargetType.NDN && (
                                 <div className="space-y-2">
                                     <Label htmlFor="ndnUrl">节点地址 *</Label>
                                     <Input
@@ -205,60 +201,7 @@ export function AddServiceWizard({
                         </div>
                     </div>
                 );
-
             case 3:
-                return (
-                    <div className="space-y-6">
-                        <div>
-                            <Label className="text-base">高级选项</Label>
-                            <p className="text-sm text-muted-foreground mb-4">
-                                配置存储选项和安全设置
-                            </p>
-                        </div>
-
-                        <div className="space-y-6">
-                            <div className="flex items-center justify-between p-4 border rounded-lg">
-                                <div>
-                                    <Label
-                                        htmlFor="compression"
-                                        className="font-medium"
-                                    >
-                                        启用压缩
-                                    </Label>
-                                    <p className="text-sm text-muted-foreground">
-                                        压缩数据以节省存储空间
-                                    </p>
-                                </div>
-                                <Switch
-                                    id="compression"
-                                    checked={compression}
-                                    onCheckedChange={setCompression}
-                                />
-                            </div>
-
-                            <div className="flex items-center justify-between p-4 border rounded-lg">
-                                <div>
-                                    <Label
-                                        htmlFor="encryption"
-                                        className="font-medium"
-                                    >
-                                        启用加密
-                                    </Label>
-                                    <p className="text-sm text-muted-foreground">
-                                        加密备份数据以提高安全性
-                                    </p>
-                                </div>
-                                <Switch
-                                    id="encryption"
-                                    checked={encryption}
-                                    onCheckedChange={setEncryption}
-                                />
-                            </div>
-                        </div>
-                    </div>
-                );
-
-            case 4:
                 return (
                     <div className="space-y-6">
                         <div>
@@ -277,7 +220,8 @@ export function AddServiceWizard({
                                                 服务类型:
                                             </span>
                                             <span className="text-sm font-medium">
-                                                {serviceType === "local"
+                                                {serviceType ===
+                                                TargetType.LOCAL
                                                     ? "本地存储"
                                                     : "NDN存储"}
                                             </span>
@@ -292,34 +236,16 @@ export function AddServiceWizard({
                                         </div>
                                         <div className="flex justify-between">
                                             <span className="text-sm text-muted-foreground">
-                                                {serviceType === "local"
+                                                {serviceType ===
+                                                TargetType.LOCAL
                                                     ? "存储路径:"
                                                     : "节点地址:"}
                                             </span>
                                             <span className="text-sm font-medium">
-                                                {serviceType === "local"
+                                                {serviceType ===
+                                                TargetType.LOCAL
                                                     ? localPath
                                                     : ndnUrl}
-                                            </span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-sm text-muted-foreground">
-                                                压缩:
-                                            </span>
-                                            <span className="text-sm font-medium">
-                                                {compression
-                                                    ? "已启用"
-                                                    : "已禁用"}
-                                            </span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-sm text-muted-foreground">
-                                                加密:
-                                            </span>
-                                            <span className="text-sm font-medium">
-                                                {encryption
-                                                    ? "已启用"
-                                                    : "已禁用"}
                                             </span>
                                         </div>
                                     </div>
@@ -423,7 +349,7 @@ export function AddServiceWizard({
                     <Button variant="outline" onClick={onBack}>
                         取消
                     </Button>
-                    {currentStep < 4 ? (
+                    {currentStep < 3 ? (
                         <Button onClick={handleNext} disabled={!canProceed()}>
                             下一步
                             <ChevronRight className="w-4 h-4 ml-2" />

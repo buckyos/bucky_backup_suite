@@ -50,9 +50,14 @@ export enum TargetState {
     UNKNOWN = "UNKNOWN",
 }
 
+export enum TargetType {
+    LOCAL = "LOCAL",
+    NDN = "NDN",
+}
+
 export interface BackupTargetInfo {
     target_id: string;
-    target_type: string;
+    target_type: TargetType;
     name: string;
     url: string;
     description: string;
@@ -320,7 +325,7 @@ export class BackupTaskManager {
     }
 
     async createBackupTarget(
-        target_type: string,
+        target_type: TargetType,
         target_url: string,
         name: string,
         config: any

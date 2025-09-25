@@ -5,6 +5,7 @@ import {
     ListOrder,
     ListTaskOrderBy,
     TargetState,
+    TargetType,
     TaskEventType,
     TaskFilter,
     TaskInfo,
@@ -224,7 +225,7 @@ export class FakeTaskManager extends BackupTaskManager {
     }
 
     async createBackupTarget(
-        target_type: string,
+        target_type: TargetType,
         target_url: string,
         name: string,
         config: any
