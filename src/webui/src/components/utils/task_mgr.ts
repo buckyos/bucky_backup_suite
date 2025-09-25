@@ -105,6 +105,17 @@ export enum TaskEventType {
     REMOVE_TASK = "remove_task",
 }
 
+export interface DirectoryNode {
+    name: string;
+    isDirectory: boolean;
+}
+
+export enum DirectoryPurpose {
+    BACKUP_SOURCE = "backup_source",
+    RESTORE_TARGET = "restore_target",
+    BACKUP_TARGET = "backup_target",
+}
+
 export class BackupTaskManager {
     private rpc_client: any;
     //可以关注task事件(全部task)
@@ -417,6 +428,17 @@ export class BackupTaskManager {
 
     stopRefreshTargetStateTimer(timerId: number) {
         // todo:
+    }
+
+    async listDirChildren(
+        path?: string,
+        purpose?: DirectoryPurpose,
+        options?: {
+            only_dirs?: boolean;
+            only_files?: boolean;
+        }
+    ): Promise<DirectoryNode[]> {
+        return this.rpc_client.call("list_directory_children", { path: path });
     }
 }
 

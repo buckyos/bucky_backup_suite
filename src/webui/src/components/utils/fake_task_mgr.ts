@@ -2,6 +2,8 @@ import {
     BackupPlanInfo,
     BackupTargetInfo,
     BackupTaskManager,
+    DirectoryNode,
+    DirectoryPurpose,
     ListOrder,
     ListTaskOrderBy,
     TargetState,
@@ -276,6 +278,85 @@ export class FakeTaskManager extends BackupTaskManager {
         ).length;
         return { complete, failed };
     }
+
+    async listDirChildren(
+        purpose: DirectoryPurpose,
+        path?: string,
+        options?: {
+            only_dirs?: boolean;
+            only_files?: boolean;
+        }
+    ): Promise<DirectoryNode[]> {
+        return mockGetDirectories(path);
+    }
 }
 
 export const taskManager = new FakeTaskManager();
+
+// 模拟API调用获取目录结构
+const mockGetDirectories = async (path?: string): Promise<DirectoryNode[]> => {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    if (!path || path === "/") {
+        return [
+            { name: "C:", isDirectory: true },
+            { name: "D:", isDirectory: true },
+            { name: "E:", isDirectory: true },
+        ];
+    }
+
+    if (path === "C:") {
+        return [
+            { name: "Users", isDirectory: true },
+            {
+                name: "Program Files",
+                isDirectory: true,
+            },
+            { name: "Windows", isDirectory: true },
+            { name: "Temp", isDirectory: true },
+        ];
+    }
+
+    if (path === "C:\\Users") {
+        return [
+            {
+                name: "Administrator",
+                isDirectory: true,
+            },
+            { name: "Public", isDirectory: true },
+            { name: "Default", isDirectory: true },
+        ];
+    }
+
+    if (path === "C:\\Users\\Administrator") {
+        return [
+            {
+                name: "Desktop",
+                isDirectory: true,
+            },
+            {
+                name: "Documents",
+                isDirectory: true,
+            },
+            {
+                name: "Downloads",
+                isDirectory: true,
+            },
+            {
+                name: "Pictures",
+                isDirectory: true,
+            },
+        ];
+    }
+
+    if (path === "D:") {
+        return [
+            { name: "Projects", isDirectory: true },
+            { name: "Backups", isDirectory: true },
+            { name: "Media", isDirectory: true },
+            { name: "Data", isDirectory: true },
+        ];
+    }
+
+    return [];
+};

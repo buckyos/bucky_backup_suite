@@ -23,7 +23,8 @@ import {
     HardDrive,
     Network,
 } from "lucide-react";
-import { TargetType } from "./utils/task_mgr";
+import { DirectoryPurpose, TargetType } from "./utils/task_mgr";
+import { taskManager } from "./utils/fake_task_mgr";
 
 interface AddServiceWizardProps {
     onBack: () => void;
@@ -63,6 +64,15 @@ export function AddServiceWizard({
     };
 
     const handleComplete = () => {
+        let url = "";
+        switch (serviceType) {
+            case TargetType.LOCAL:
+                url = localPath;
+                break;
+            case TargetType.NDN:
+                url = ndnUrl;
+        }
+        taskManager.createBackupTarget(serviceType, url, serviceName, {});
         toast.success("服务已添加");
         onComplete();
     };
@@ -178,6 +188,7 @@ export function AddServiceWizard({
                                 <div className="space-y-2">
                                     <Label>目标路径 *</Label>
                                     <DirectorySelector
+                                        purpose={DirectoryPurpose.BACKUP_TARGET}
                                         value={localPath}
                                         onChange={setLocalPath}
                                         placeholder="选择本地存储路径"
