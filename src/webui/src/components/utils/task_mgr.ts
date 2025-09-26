@@ -31,6 +31,16 @@ export interface TaskInfo {
     speed: number; // B/s todo
 }
 
+export type PlanPolicyPeriod = {
+    minutes: number; // 0-60*24
+} & ({} | { week: number } | { day: number });
+
+export interface PlanPolicyEvent {
+    update_delay: number; // seconds
+}
+
+export type PlanPolicy = PlanPolicyPeriod | PlanPolicyEvent;
+
 export interface BackupPlanInfo {
     plan_id: string;
     title: string;
@@ -40,7 +50,7 @@ export interface BackupPlanInfo {
     source: string;
     target: string;
     last_run_time?: number; //unix timestamp (UTC)
-    policy?: any; // todo
+    policy: PlanPolicy[];
 }
 
 export enum TargetState {

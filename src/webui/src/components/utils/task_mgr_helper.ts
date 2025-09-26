@@ -1,3 +1,4 @@
+import { AlertDialogContent } from "../ui/alert-dialog";
 import { BackupPlanInfo, BackupTargetInfo, TaskInfo } from "./task_mgr";
 
 export enum PlanState {
@@ -85,11 +86,60 @@ export class TaskMgrHelper {
     }
 
     static planNextRunTime(plan: BackupPlanInfo): number | null {
-        if (!plan.policy) {
+        const period = plan.policy.find((p) => "minutes" in p);
+        if (!period) {
             return null;
         }
-        // todo: 计算下次运行时间
-        return null;
+
+        const now = new Date();
+        if ("week" in period) {
+            // 每周的某一天
+            const nowWeek =
+                now.getDay() * 86400 +
+                now.getHours() * 3600 +
+                now.getMinutes() * 60 +
+                now.getSeconds();
+            const secondsUntilNext =
+                ((period.week + 7) * 86400 +
+                    period.minutes * 60 -
+                    (nowWeek % (7 * 86400))) %
+                    (7 * 86400) || 7 * 86400; // 计算到下一个指定星期几的秒数
+            return (now.getTime() + secondsUntilNext) * 1000;
+        } else if ("day" in period) {
+            // 每月的某一天
+            let targetDate = new Date(now);
+            targetDate.setDate(period.day);
+            if (targetDate.getMonth() > now.getMonth()) {
+                targetDate.setMonth(targetDate.getMonth() + 1, 0);
+            }
+            targetDate.setHours(
+                Math.floor(period.minutes / 60),
+                period.minutes % 60,
+                0,
+                0
+            );
+            if (targetDate <= now) {
+                // 如果今天已经过了这个时间，就设置到下个月
+                targetDate.setMonth(now.getMonth() + 1, period.day);
+                if (targetDate.getMonth() > now.getMonth() + 1) {
+                    targetDate.setDate(0); // 设置为下个月的最后一天
+                }
+            }
+            return targetDate.getTime();
+        } else {
+            // 每天
+            let targetDate = new Date(now);
+            targetDate.setHours(
+                Math.floor(period.minutes / 60),
+                period.minutes % 60,
+                0,
+                0
+            );
+            if (targetDate <= now) {
+                return targetDate.getTime() + 86400000; // 明天
+            }
+            return targetDate.getTime();
+        }
     }
 
     static targetUsagePercent(target: BackupTargetInfo): number {
