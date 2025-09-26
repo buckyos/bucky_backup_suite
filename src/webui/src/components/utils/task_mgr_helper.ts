@@ -72,7 +72,9 @@ export class TaskMgrHelper {
             .filter((t) => t.owner_plan_id === plan.plan_id)
             .sort((a, b) => b.create_time - a.create_time);
         if (myUncompleteTasks.length === 0) {
-            return plan.policy ? PlanState.ACTIVE : PlanState.DISABLED;
+            return plan.policy_disabled || plan.policy.length === 0
+                ? PlanState.DISABLED
+                : PlanState.ACTIVE;
         } else {
             const latestTask = myUncompleteTasks[0];
             if (latestTask.state === "FAILED") {
@@ -80,7 +82,9 @@ export class TaskMgrHelper {
             } else if (myUncompleteTasks.find((t) => t.state === "FAILED")) {
                 return PlanState.WARNING;
             } else {
-                return plan.policy ? PlanState.ACTIVE : PlanState.DISABLED;
+                return plan.policy_disabled || plan.policy.length === 0
+                    ? PlanState.DISABLED
+                    : PlanState.ACTIVE;
             }
         }
     }
@@ -142,6 +146,44 @@ export class TaskMgrHelper {
         }
     }
 
+    static formatPlanPolicy(plan: BackupPlanInfo): string[] {
+        let result: string[] = ["手动"];
+        if (plan.policy.length === 0 || plan.policy_disabled) return result;
+        for (const p of plan.policy) {
+            if ("minutes" in p) {
+                if ("week" in p) {
+                    const weekDays = [
+                        "星期一",
+                        "星期二",
+                        "星期三",
+                        "星期四",
+                        "星期五",
+                        "星期六",
+                        "星期日",
+                    ];
+                    result.push(
+                        `每周: ${
+                            weekDays[p.week]
+                        } ${TaskMgrHelper.formatMinutesToHHMM(p.minutes)}`
+                    );
+                } else if ("date" in p) {
+                    result.push(
+                        `每月: ${p.date}日 ${TaskMgrHelper.formatMinutesToHHMM(
+                            p.minutes
+                        )}`
+                    );
+                } else {
+                    result.push(
+                        `每天: ${TaskMgrHelper.formatMinutesToHHMM(p.minutes)}`
+                    );
+                }
+            } else if ("update_delay" in p) {
+                result.push(`事件: 更新延迟${p.update_delay}秒`);
+            }
+        }
+        return result;
+    }
+
     static formatTime(timestamp?: number, never_str: string = "从不"): string {
         if (timestamp === undefined) return never_str;
         const date = new Date(timestamp);
@@ -150,5 +192,23 @@ export class TaskMgrHelper {
 
     static targetUsagePercent(target: BackupTargetInfo): number {
         return TaskMgrHelper.percent(target.used, target.total);
+    }
+
+    static formatMinutesToHHMM(minutes?: number): string {
+        if (minutes === undefined) return "";
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        return `${String(hours).padStart(2, "0")}:${String(mins).padStart(
+            2,
+            "0"
+        )}`;
+    }
+
+    static minutesFromHHMM(hhmm: string): number | null {
+        const match = hhmm.match(/^(\d{2}):(\d{2})$/);
+        if (!match) return null;
+        const hours = parseInt(match[1], 10);
+        const minutes = parseInt(match[2], 10);
+        return hours * 60 + minutes;
     }
 }

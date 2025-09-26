@@ -25,6 +25,7 @@ import {
     SourceType,
 } from "./utils/task_mgr";
 import { taskManager } from "./utils/fake_task_mgr";
+import { TaskMgrHelper } from "./utils/task_mgr_helper";
 
 interface CreatePlanWizardProps {
     onBack: () => void;
@@ -181,7 +182,9 @@ export function CreatePlanWizard({
                 console.log(
                     `planData.scheduleType: ${planData.scheduleType}, planData.scheduleTime: ${planData.scheduleTime}, planData.scheduleDay: ${planData.scheduleDay}, planData.scheduleDate: ${planData.scheduleDate}`
                 );
-                const minutes = minutesFromHHMM(planData.scheduleTime!)!;
+                const minutes = TaskMgrHelper.minutesFromHHMM(
+                    planData.scheduleTime!
+                )!;
                 if (planData.scheduleType === "daily") {
                     planInfo.policy.push({
                         minutes,
@@ -223,24 +226,6 @@ export function CreatePlanWizard({
             delete newErrors[key];
         });
         setErrors(newErrors);
-    };
-
-    const formatMinutesToHHMM = (minutes?: number) => {
-        if (minutes === undefined) return "";
-        const hours = Math.floor(minutes / 60);
-        const mins = minutes % 60;
-        return `${String(hours).padStart(2, "0")}:${String(mins).padStart(
-            2,
-            "0"
-        )}`;
-    };
-
-    const minutesFromHHMM = (hhmm: string): number | null => {
-        const match = hhmm.match(/^(\d{2}):(\d{2})$/);
-        if (!match) return null;
-        const hours = parseInt(match[1], 10);
-        const minutes = parseInt(match[2], 10);
-        return hours * 60 + minutes;
     };
 
     const renderStepContent = () => {
@@ -609,7 +594,7 @@ export function CreatePlanWizard({
                                             }
                                         />
                                         <span className="text-sm text-muted-foreground">
-                                            分钟
+                                            秒
                                         </span>
                                     </div>
                                     <p className="text-sm text-muted-foreground">

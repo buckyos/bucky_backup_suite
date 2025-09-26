@@ -63,7 +63,25 @@ export class FakeTaskManager extends BackupTaskManager {
         return this.plan_list.plans.find((p) => p.plan_id === planId)!;
     }
 
-    async createBackupTask(planId: string, parentCheckpointId: string | null) {
+    async updateBackupPlan(planInfo: BackupPlanInfo): Promise<boolean> {
+        const idx = this.plan_list.plans.findIndex(
+            (p) => p.plan_id === planInfo.plan_id
+        );
+        if (idx === -1) return false;
+        this.plan_list.plans[idx] = planInfo;
+        await this.emitTaskEvent(TaskEventType.UPDATE_PLAN, planInfo);
+        return true;
+    }
+
+    async removeBackupPlan(planId: string): Promise<boolean> {
+        const idx = this.plan_list.plans.findIndex((p) => p.plan_id === planId);
+        if (idx === -1) return false;
+        this.plan_list.plans.splice(idx, 1);
+        await this.emitTaskEvent(TaskEventType.REMOVE_PLAN, planId);
+        return true;
+    }
+
+    async createBackupTask(planId: string, parentCheckpointId?: string) {
         let plan = this.plan_list.plans.find((p) => p.plan_id === planId)!;
         plan.last_run_time = Date.now();
         const checkpoint_id = plan.last_checkpoint_index++;

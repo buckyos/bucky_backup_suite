@@ -23,7 +23,7 @@ import {
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
 import { LoadingPage } from "./LoadingPage";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 import {
     Plus,
     Play,
@@ -36,6 +36,14 @@ import {
     ArrowLeft,
     Undo2,
 } from "lucide-react";
+import {
+    BackupPlanInfo,
+    BackupTargetInfo,
+    TaskFilter,
+    TaskInfo,
+} from "./utils/task_mgr";
+import { taskManager } from "./utils/fake_task_mgr";
+import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
 
 interface BackupPlansProps {
     onNavigate?: (page: string, data?: any) => void;
@@ -44,14 +52,45 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
     const [loading, setLoading] = useState(true);
-    const [loadingText, setLoadingText] = useState<string>(`${t.common.loading} ${t.nav.plans}...`);
-    const [plans, setPlans] = useState([]);
+    const [loadingText, setLoadingText] = useState<string>(
+        `${t.common.loading} ${t.nav.plans}...`
+    );
+    const [plans, setPlans] = useState<BackupPlanInfo[]>([]);
+    const [services, setServices] = useState<BackupTargetInfo[]>([]);
+    const [uncompleteTasks, setUncompleteTasks] = useState<TaskInfo[]>([]);
 
     useEffect(() => {
-        setLoading(true);
-        setLoadingText(`${t.common.loading} ${t.nav.plans}...`);
-        const id = window.setTimeout(() => setLoading(false), 600);
-        return () => window.clearTimeout(id);
+        taskManager.listBackupPlans().then(async (planIds) => {
+            const planDetails = await Promise.all(
+                planIds.map((id) => taskManager.getBackupPlan(id))
+            );
+            setPlans(planDetails);
+
+            if (planDetails.length === 0) {
+                const targetIds = await taskManager.listBackupTargets();
+                const targetDetails = await Promise.all(
+                    targetIds.map((id) => taskManager.getBackupTarget(id))
+                );
+                setServices(targetDetails);
+            }
+            setLoading(false);
+        });
+        taskManager
+            .listBackupTasks([
+                TaskFilter.FAILED,
+                TaskFilter.PAUSED,
+                TaskFilter.RUNNING,
+            ])
+            .then(async (taskIds) => {
+                const uncompleteTasks = await Promise.all(
+                    taskIds.map((id) => taskManager.getTaskInfo(id))
+                );
+                setUncompleteTasks(uncompleteTasks);
+            });
+        const timerId = taskManager.startRefreshUncompleteTaskStateTimer();
+        return () => {
+            taskManager.stopRefreshUncompleteTaskStateTimer(timerId);
+        };
     }, [t]);
 
     if (loading) {
@@ -66,56 +105,66 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
         );
     }
 
-    // Read services count to decide empty-state guidance
-    const servicesCount = 0;
-
     // 检查是否有未完成的任务
-    const hasRunningTasks = () => {
-        // 模拟检查运行中的任务
-        return false; // 为了演示，设为false
-    };
-
-    const togglePlan = (planId: number) => {
-        setPlans(
-            plans.map((plan) =>
-                plan.id === planId
-                    ? {
-                          ...plan,
-                          enabled: !plan.enabled,
-                          status: !plan.enabled ? "healthy" : "disabled",
-                      }
-                    : plan
-            )
+    const hasRunningTasks = (planId: string) => {
+        return (
+            uncompleteTasks.find((t) => t.owner_plan_id === planId) !==
+            undefined
         );
     };
 
-    const deletePlan = (planId: number) => {
-        setPlans(plans.filter((plan) => plan.id !== planId));
-        toast.success("备份计划已删除");
+    const togglePlan = async (plan: BackupPlanInfo) => {
+        const success = await taskManager.updateBackupPlan({
+            ...plan,
+            policy_disabled: !plan.policy_disabled,
+        });
+
+        if (!success) {
+            toast.error("更新备份计划状态失败");
+            return;
+        } else {
+            plan.policy_disabled = !plan.policy_disabled;
+            setPlans([...plans]);
+        }
     };
 
-    const runPlan = (plan: any) => {
-        if (hasRunningTasks()) {
+    const deletePlan = async (planId: string) => {
+        const success = await taskManager.removeBackupPlan(planId);
+        if (!success) {
+            toast.error("删除备份计划失败");
+        } else {
+            // 删除成功
+            setPlans(plans.filter((plan) => plan.plan_id !== planId));
+            toast.success("备份计划已删除");
+        }
+    };
+
+    const runPlan = async (plan: BackupPlanInfo) => {
+        if (hasRunningTasks(plan.plan_id)) {
             toast.error("当前有任务正在执行，请等待完成或删除现有任务");
             return;
         }
-        toast.success(`正在启动备份计划: ${plan.name}`);
+        await taskManager.createBackupTask(plan.plan_id);
+        toast.success(`正在启动备份计划: ${plan.title}`);
     };
 
-    const getStatusBadge = (status: string) => {
+    const getStatusBadge = (plan: BackupPlanInfo) => {
+        const status = TaskMgrHelper.planState(plan, uncompleteTasks);
         switch (status) {
-            case "healthy":
+            case PlanState.ACTIVE:
                 return (
                     <Badge className="bg-green-100 text-green-800">正常</Badge>
                 );
-            case "warning":
+            case PlanState.WARNING:
                 return (
                     <Badge className="bg-yellow-100 text-yellow-800">
                         警告
                     </Badge>
                 );
-            case "disabled":
+            case PlanState.DISABLED:
                 return <Badge variant="secondary">已禁用</Badge>;
+            case PlanState.ERROR:
+                return <Badge className="bg-red-100 text-red-800">错误</Badge>;
             default:
                 return <Badge variant="outline">未知</Badge>;
         }
@@ -150,12 +199,12 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                     <Card>
                         <CardHeader>
                             <CardTitle>
-                                {servicesCount === 0
+                                {services.length === 0
                                     ? "还没有可用的备份服务"
                                     : "还没有备份计划"}
                             </CardTitle>
                             <CardDescription>
-                                {servicesCount === 0
+                                {services.length === 0
                                     ? "创建备份计划前，请先配置一个备份服务"
                                     : "创建你的第一个备份计划以保护重要数据"}
                             </CardDescription>
@@ -168,7 +217,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                         : "items-center gap-3"
                                 }`}
                             >
-                                {servicesCount === 0 ? (
+                                {services.length === 0 ? (
                                     <>
                                         <Button
                                             onClick={() =>
@@ -213,9 +262,11 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                 ) : (
                     plans.map((plan) => (
                         <Card
-                            key={plan.id}
+                            key={plan.plan_id}
                             className={`transition-all ${
-                                !plan.enabled ? "opacity-60" : ""
+                                plan.policy_disabled || plan.policy.length === 0
+                                    ? "opacity-60"
+                                    : ""
                             }`}
                         >
                             <CardHeader>
@@ -229,9 +280,9 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                         : "text-lg"
                                                 }`}
                                             >
-                                                {plan.name}
+                                                {plan.title}
                                             </CardTitle>
-                                            {getStatusBadge(plan.status)}
+                                            {getStatusBadge(plan)}
                                         </div>
                                         {!isMobile && (
                                             <CardDescription>
@@ -241,9 +292,15 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                     </div>
                                     <div className="flex items-center gap-3">
                                         <Switch
-                                            checked={plan.enabled}
+                                            disabled={plan.policy.length === 0}
+                                            checked={
+                                                !(
+                                                    plan.policy_disabled ||
+                                                    plan.policy.length === 0
+                                                )
+                                            }
                                             onCheckedChange={() =>
-                                                togglePlan(plan.id)
+                                                togglePlan(plan)
                                             }
                                         />
                                     </div>
@@ -283,7 +340,13 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                     isMobile ? "text-sm" : ""
                                                 }`}
                                             >
-                                                {plan.destination}
+                                                {
+                                                    services.find(
+                                                        (s) =>
+                                                            s.target_id ===
+                                                            plan.target
+                                                    )?.name
+                                                }
                                             </p>
                                         </div>
                                     </div>
@@ -298,7 +361,13 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                     isMobile ? "text-sm" : ""
                                                 }`}
                                             >
-                                                {plan.schedule}
+                                                {TaskMgrHelper.formatPlanPolicy(
+                                                    plan
+                                                ).map((s, idx) => (
+                                                    <span
+                                                        key={idx}
+                                                    >{`${s}|`}</span>
+                                                ))}
                                             </p>
                                         </div>
                                     </div>
@@ -311,7 +380,12 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                 isMobile ? "text-sm" : ""
                                             }`}
                                         >
-                                            {plan.nextRun}
+                                            {TaskMgrHelper.formatTime(
+                                                TaskMgrHelper.planNextRunTime(
+                                                    plan
+                                                ),
+                                                "--"
+                                            )}
                                         </p>
                                     </div>
                                 </div>
@@ -322,7 +396,11 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                             isMobile ? "text-xs" : "text-sm"
                                         }`}
                                     >
-                                        {t.plans.lastRun}: {plan.lastRun}
+                                        {t.plans.lastRun}:{" "}
+                                        {TaskMgrHelper.formatTime(
+                                            plan.last_run_time,
+                                            "--"
+                                        )}
                                     </div>
                                     <div className="flex items-center gap-2">
                                         {isMobile ? (
@@ -331,7 +409,6 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                     variant="outline"
                                                     size="sm"
                                                     className="p-2"
-                                                    disabled={!plan.enabled}
                                                     onClick={() =>
                                                         runPlan(plan)
                                                     }
@@ -345,7 +422,9 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                     onClick={() =>
                                                         onNavigate?.(
                                                             "restore",
-                                                            { planId: plan.id }
+                                                            {
+                                                                planId: plan.plan_id,
+                                                            }
                                                         )
                                                     }
                                                 >
@@ -394,7 +473,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                             </AlertDialogTitle>
                                                             <AlertDialogDescription>
                                                                 确定要删除备份计划
-                                                                "{plan.name}"
+                                                                "{plan.title}"
                                                                 吗？此操作不可撤销。
                                                             </AlertDialogDescription>
                                                         </AlertDialogHeader>
@@ -406,7 +485,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                                                 onClick={() =>
                                                                     deletePlan(
-                                                                        plan.id
+                                                                        plan.plan_id
                                                                     )
                                                                 }
                                                             >
@@ -422,7 +501,6 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                     variant="outline"
                                                     size="sm"
                                                     className="gap-1"
-                                                    disabled={!plan.enabled}
                                                     onClick={() =>
                                                         runPlan(plan)
                                                     }
@@ -437,7 +515,9 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                     onClick={() =>
                                                         onNavigate?.(
                                                             "restore",
-                                                            { planId: plan.id }
+                                                            {
+                                                                planId: plan.plan_id,
+                                                            }
                                                         )
                                                     }
                                                 >
@@ -490,7 +570,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                             </AlertDialogTitle>
                                                             <AlertDialogDescription>
                                                                 确定要删除备份计划
-                                                                "{plan.name}"
+                                                                "{plan.title}"
                                                                 吗？此操作不可撤销。
                                                             </AlertDialogDescription>
                                                         </AlertDialogHeader>
@@ -502,7 +582,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                                                 onClick={() =>
                                                                     deletePlan(
-                                                                        plan.id
+                                                                        plan.plan_id
                                                                     )
                                                                 }
                                                             >
@@ -542,7 +622,15 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                         </CardHeader>
                         <CardContent>
                             <p className="text-2xl">
-                                {plans.filter((p) => p.enabled).length}
+                                {
+                                    plans.filter(
+                                        (p) =>
+                                            !(
+                                                p.policy_disabled ||
+                                                p.policy.length === 0
+                                            )
+                                    ).length
+                                }
                             </p>
                         </CardContent>
                     </Card>
@@ -555,8 +643,16 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                         <CardContent>
                             <p className="text-2xl">
                                 {
-                                    plans.filter((p) => p.status === "warning")
-                                        .length
+                                    plans.filter((p) => {
+                                        const state = TaskMgrHelper.planState(
+                                            p,
+                                            uncompleteTasks
+                                        );
+                                        return (
+                                            state === PlanState.WARNING ||
+                                            state === PlanState.ERROR
+                                        );
+                                    }).length
                                 }
                             </p>
                         </CardContent>

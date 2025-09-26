@@ -56,6 +56,7 @@ export interface BackupPlanInfo {
     target: string;
     target_type: TargetType;
     last_run_time?: number; //unix timestamp (UTC)
+    policy_disabled?: boolean;
     policy: PlanPolicy[];
     priority: number; // 0-10
 }
@@ -225,7 +226,24 @@ export class BackupTaskManager {
         return result;
     }
 
-    async createBackupTask(planId: string, parentCheckpointId: string | null) {
+    async updateBackupPlan(planInfo: BackupPlanInfo): Promise<boolean> {
+        const result = await this.rpc_client.call(
+            "update_backup_plan",
+            planInfo
+        );
+        await this.emitTaskEvent(TaskEventType.UPDATE_PLAN, result);
+        return result.result === "success";
+    }
+
+    async removeBackupPlan(planId: string): Promise<boolean> {
+        const result = await this.rpc_client.call("remove_backup_plan", {
+            plan_id: planId,
+        });
+        await this.emitTaskEvent(TaskEventType.REMOVE_PLAN, result);
+        return result.result === "success";
+    }
+
+    async createBackupTask(planId: string, parentCheckpointId?: string) {
         const params: any = { plan_id: planId };
         if (parentCheckpointId) {
             params.parent_checkpoint_id = parentCheckpointId;
