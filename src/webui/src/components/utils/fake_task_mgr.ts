@@ -293,70 +293,92 @@ export class FakeTaskManager extends BackupTaskManager {
 
 export const taskManager = new FakeTaskManager();
 
-// 模拟API调用获取目录结构
-const mockGetDirectories = async (path?: string): Promise<DirectoryNode[]> => {
-    await new Promise((resolve) => setTimeout(resolve, 300));
-
-    if (!path || path === "/") {
-        return [
-            { name: "C:", isDirectory: true },
-            { name: "D:", isDirectory: true },
-            { name: "E:", isDirectory: true },
-        ];
-    }
-
-    if (path === "C:") {
-        return [
-            { name: "Users", isDirectory: true },
-            {
-                name: "Program Files",
-                isDirectory: true,
+// 模拟的目录树（JSON结构，直观易编辑）
+// 约定：键为文件夹名，值为其子目录对象；空对象表示该目录目前无子项
+const MOCK_DIR_TREE: Record<string, any> = {
+    "C:": {
+        Users: {
+            Administrator: {
+                Desktop: {},
+                Documents: {},
+                Downloads: {},
+                Pictures: {},
             },
-            { name: "Windows", isDirectory: true },
-            { name: "Temp", isDirectory: true },
-        ];
-    }
-
-    if (path === "C:\\Users") {
-        return [
-            {
-                name: "Administrator",
-                isDirectory: true,
-            },
-            { name: "Public", isDirectory: true },
-            { name: "Default", isDirectory: true },
-        ];
-    }
-
-    if (path === "C:\\Users\\Administrator") {
-        return [
-            {
-                name: "Desktop",
-                isDirectory: true,
-            },
-            {
-                name: "Documents",
-                isDirectory: true,
-            },
-            {
-                name: "Downloads",
-                isDirectory: true,
-            },
-            {
-                name: "Pictures",
-                isDirectory: true,
-            },
-        ];
-    }
-
-    if (path === "D:") {
-        return [
-            { name: "Projects", isDirectory: true },
-            { name: "Backups", isDirectory: true },
-            { name: "Media", isDirectory: true },
-            { name: "Data", isDirectory: true },
-        ];
-    }
-
-    return [];
+            Public: {},
+            Default: {},
+        },
+        "Program Files": {},
+        Windows: {},
+        Temp: {},
+    },
+    "D:": {
+        Projects: {},
+        Backups: {},
+        Media: {},
+        Data: {},
+    },
+    "E:": {},
 };
+
+function normalizePath(input?: string): string | undefined {
+    if (!input) return undefined;
+    // 将反斜杠统一为斜杠，便于分割
+    let p = input.replace(/\\/g, "/");
+    // 去掉路径末尾的斜杠（如 C:/ -> C:）
+    if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+    return p;
+}
+
+function splitSegments(path: string): string[] {
+    // 处理盘符路径与普通段
+    const driveMatch = path.match(/^[A-Za-z]:/);
+    if (driveMatch) {
+        const drive = driveMatch[0];
+        const rest = path.slice(drive.length);
+        const parts = rest.split("/").filter(Boolean);
+        return [drive, ...parts];
+    }
+    if (path === "/") return [];
+    return path.split("/").filter(Boolean);
+}
+
+function getChildrenFromTree(
+    tree: Record<string, any>,
+    path?: string
+): DirectoryNode[] {
+    const p = normalizePath(path);
+    // 根目录：返回所有盘符
+    if (!p || p === "/") {
+        return Object.keys(tree).map((name) => ({ name, isDirectory: true }));
+    }
+
+    const segs = splitSegments(p);
+    // 第一段应为盘符
+    if (segs.length === 0) {
+        return Object.keys(tree).map((name) => ({ name, isDirectory: true }));
+    }
+
+    // 自根逐级向下
+    let cursor: any = tree;
+    for (let i = 0; i < segs.length; i++) {
+        const key = segs[i];
+        if (cursor && typeof cursor === "object" && key in cursor) {
+            cursor = cursor[key];
+        } else {
+            return [];
+        }
+    }
+
+    // cursor 应是一个对象，列出其子目录
+    if (cursor && typeof cursor === "object") {
+        return Object.keys(cursor).map((name) => ({ name, isDirectory: true }));
+    }
+    return [];
+}
+
+// 模拟API调用获取目录结构
+async function mockGetDirectories(path?: string): Promise<DirectoryNode[]> {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // 基于 JSON 目录树直接生成结果
+    return getChildrenFromTree(MOCK_DIR_TREE, path);
+}
