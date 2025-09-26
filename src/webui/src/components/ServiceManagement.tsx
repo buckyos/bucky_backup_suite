@@ -63,6 +63,10 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
             setServices(targets);
             setLoading(false);
         });
+        const timerId = taskManager.startRefreshTargetStateTimer();
+        return () => {
+            taskManager.stopRefreshTargetStateTimer(timerId);
+        };
     }, []);
 
     if (loading) {

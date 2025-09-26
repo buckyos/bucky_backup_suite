@@ -33,7 +33,7 @@ export interface TaskInfo {
 
 export type PlanPolicyPeriod = {
     minutes: number; // 0-60*24
-} & ({} | { week: number } | { day: number });
+} & ({} | { week: number } | { date: number });
 
 export interface PlanPolicyEvent {
     update_delay: number; // seconds
@@ -41,16 +41,23 @@ export interface PlanPolicyEvent {
 
 export type PlanPolicy = PlanPolicyPeriod | PlanPolicyEvent;
 
+export enum SourceType {
+    DIRECTORY = "DIRECTORY",
+}
+
 export interface BackupPlanInfo {
     plan_id: string;
     title: string;
     description: string;
     type_str: string;
     last_checkpoint_index: number;
+    source_type: SourceType;
     source: string;
     target: string;
+    target_type: TargetType;
     last_run_time?: number; //unix timestamp (UTC)
     policy: PlanPolicy[];
+    priority: number; // 0-10
 }
 
 export enum TargetState {
@@ -186,12 +193,14 @@ export class BackupTaskManager {
 
     async createBackupPlan(params: {
         type_str: string;
-        source_type: string;
+        source_type: SourceType;
         source: string;
-        target_type: string;
+        target_type: TargetType;
         target: string;
         title: string;
         description: string;
+        policy: PlanPolicy[];
+        priority: number;
     }): Promise<string> {
         const result = await this.rpc_client.call("create_backup_plan", params);
         result.type_str = params.type_str;

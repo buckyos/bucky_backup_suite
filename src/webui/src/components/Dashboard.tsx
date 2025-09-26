@@ -1187,8 +1187,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                     </div>
                                                     <div className="text-xs text-muted-foreground">
                                                         下次执行:{" "}
-                                                        {TaskMgrHelper.planNextRunTime(
-                                                            plan
+                                                        {TaskMgrHelper.formatTime(
+                                                            TaskMgrHelper.planNextRunTime(
+                                                                plan
+                                                            ),
+                                                            "--"
                                                         )}
                                                     </div>
                                                 </div>

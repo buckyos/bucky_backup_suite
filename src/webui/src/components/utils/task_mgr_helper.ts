@@ -85,10 +85,10 @@ export class TaskMgrHelper {
         }
     }
 
-    static planNextRunTime(plan: BackupPlanInfo): number | null {
+    static planNextRunTime(plan: BackupPlanInfo): number | undefined {
         const period = plan.policy.find((p) => "minutes" in p);
         if (!period) {
-            return null;
+            return undefined;
         }
 
         const now = new Date();
@@ -105,10 +105,10 @@ export class TaskMgrHelper {
                     (nowWeek % (7 * 86400))) %
                     (7 * 86400) || 7 * 86400; // 计算到下一个指定星期几的秒数
             return (now.getTime() + secondsUntilNext) * 1000;
-        } else if ("day" in period) {
+        } else if ("date" in period) {
             // 每月的某一天
             let targetDate = new Date(now);
-            targetDate.setDate(period.day);
+            targetDate.setDate(period.date);
             if (targetDate.getMonth() > now.getMonth()) {
                 targetDate.setMonth(targetDate.getMonth() + 1, 0);
             }
@@ -120,7 +120,7 @@ export class TaskMgrHelper {
             );
             if (targetDate <= now) {
                 // 如果今天已经过了这个时间，就设置到下个月
-                targetDate.setMonth(now.getMonth() + 1, period.day);
+                targetDate.setMonth(now.getMonth() + 1, period.date);
                 if (targetDate.getMonth() > now.getMonth() + 1) {
                     targetDate.setDate(0); // 设置为下个月的最后一天
                 }
@@ -140,6 +140,12 @@ export class TaskMgrHelper {
             }
             return targetDate.getTime();
         }
+    }
+
+    static formatTime(timestamp?: number, never_str: string = "从不"): string {
+        if (timestamp === undefined) return never_str;
+        const date = new Date(timestamp);
+        return date.toLocaleString();
     }
 
     static targetUsagePercent(target: BackupTargetInfo): number {

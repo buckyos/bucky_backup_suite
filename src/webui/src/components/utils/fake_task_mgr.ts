@@ -6,6 +6,8 @@ import {
     DirectoryPurpose,
     ListOrder,
     ListTaskOrderBy,
+    PlanPolicy,
+    SourceType,
     TargetState,
     TargetType,
     TaskEventType,
@@ -31,20 +33,22 @@ export class FakeTaskManager extends BackupTaskManager {
 
     async createBackupPlan(params: {
         type_str: string;
-        source_type: string;
+        source_type: SourceType;
         source: string;
-        target_type: string;
+        target_type: TargetType;
         target: string;
         title: string;
         description: string;
+        policy: PlanPolicy[];
+        priority: number;
     }): Promise<string> {
         const result = {
             plan_id: `plan_${this.plan_list.next_plan_id++}`,
             ...params,
             last_checkpoint_index: -1,
             last_run_time: 0,
-            policy: undefined,
         };
+        console.log("Created plan:", result);
         this.plan_list.plans.push(result);
         await this.emitTaskEvent(TaskEventType.CREATE_PLAN, result);
         return result.plan_id;
@@ -55,6 +59,7 @@ export class FakeTaskManager extends BackupTaskManager {
     }
 
     async getBackupPlan(planId: string): Promise<BackupPlanInfo> {
+        console.log("Get plan:", planId);
         return this.plan_list.plans.find((p) => p.plan_id === planId)!;
     }
 

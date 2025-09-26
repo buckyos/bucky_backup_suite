@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -16,8 +16,15 @@ import { Checkbox } from "./ui/checkbox";
 import { DirectorySelector } from "./DirectorySelector";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 import { ArrowLeft, ChevronLeft, ChevronRight, Check } from "lucide-react";
+import {
+    BackupPlanInfo,
+    BackupTargetInfo,
+    DirectoryPurpose,
+    SourceType,
+} from "./utils/task_mgr";
+import { taskManager } from "./utils/fake_task_mgr";
 
 interface CreatePlanWizardProps {
     onBack: () => void;
@@ -32,7 +39,7 @@ interface PlanData {
     triggerTypes: ("scheduled" | "event")[];
     scheduleType?: "daily" | "weekly" | "monthly";
     scheduleTime?: string;
-    scheduleDays?: string[];
+    scheduleDay?: string;
     scheduleDate?: string;
     eventDelay?: string;
     backupType: "full" | "incremental";
@@ -70,6 +77,22 @@ export function CreatePlanWizard({
 
     const [errors, setErrors] = useState<Record<string, string>>({});
 
+    const [services, setServices] = useState<BackupTargetInfo[]>([]); // Mocked available services
+
+    useEffect(() => {
+        // load services from backend
+        taskManager.listBackupTargets().then(async (targetIds) => {
+            const targets = await Promise.all(
+                targetIds.map((id) => taskManager.getBackupTarget(id))
+            );
+            setServices(targets);
+        });
+        const timerId = taskManager.startRefreshTargetStateTimer();
+        return () => {
+            taskManager.stopRefreshTargetStateTimer(timerId);
+        };
+    }, []);
+
     const validateStep = (
         step: number,
         updateErrors: boolean = true
@@ -102,10 +125,9 @@ export function CreatePlanWizard({
                     }
                     if (
                         planData.scheduleType === "weekly" &&
-                        (!planData.scheduleDays ||
-                            planData.scheduleDays.length === 0)
+                        (!planData.scheduleDay || !planData.scheduleDay.length)
                     ) {
-                        newErrors.scheduleDays = "请选择执行日期";
+                        newErrors.scheduleDay = "请选择执行日期";
                     }
                     if (
                         planData.scheduleType === "monthly" &&
@@ -138,16 +160,59 @@ export function CreatePlanWizard({
         setCurrentStep((prev) => Math.max(prev - 1, 0));
     };
 
-    const handleFinish = () => {
+    const handleFinish = async () => {
         if (validateStep(currentStep, true)) {
-            toast.success("备份计划已创建");
-            onComplete();
-        }
-    };
+            let planInfo: BackupPlanInfo = {
+                plan_id: "", // to be assigned by backend
+                title: planData.name,
+                description: planData.description,
+                type_str: "",
+                last_checkpoint_index: -1,
+                source_type: SourceType.DIRECTORY,
+                source: planData.directories[0],
+                target_type: services.find(
+                    (s) => s.target_id === planData.service
+                )!.target_type,
+                target: planData.service,
+                policy: [],
+                priority: { high: 10, medium: 5, low: 1 }[planData.priority],
+            };
+            if (planData.triggerTypes.includes("scheduled")) {
+                console.log(
+                    `planData.scheduleType: ${planData.scheduleType}, planData.scheduleTime: ${planData.scheduleTime}, planData.scheduleDay: ${planData.scheduleDay}, planData.scheduleDate: ${planData.scheduleDate}`
+                );
+                const minutes = minutesFromHHMM(planData.scheduleTime!)!;
+                if (planData.scheduleType === "daily") {
+                    planInfo.policy.push({
+                        minutes,
+                    });
+                } else if (planData.scheduleType === "weekly") {
+                    planInfo.policy.push({
+                        minutes,
+                        week: parseInt(planData.scheduleDay!),
+                    });
+                } else if (planData.scheduleType === "monthly") {
+                    planInfo.policy.push({
+                        minutes,
+                        date: parseInt(planData.scheduleDate!),
+                    });
+                }
+            }
+            if (planData.triggerTypes.includes("event")) {
+                planInfo.policy.push({
+                    update_delay: parseInt(planData.eventDelay!),
+                });
+            }
 
-    // Check if current step is valid without updating errors
-    const isCurrentStepValid = () => {
-        return validateStep(currentStep, false);
+            try {
+                await taskManager.createBackupPlan(planInfo);
+                toast.success("备份计划已创建");
+                onComplete();
+            } catch (error) {
+                console.error("Error creating backup plan:", error);
+                toast.error("创建备份计划失败");
+            }
+        }
     };
 
     const updatePlanData = (updates: Partial<PlanData>) => {
@@ -158,6 +223,24 @@ export function CreatePlanWizard({
             delete newErrors[key];
         });
         setErrors(newErrors);
+    };
+
+    const formatMinutesToHHMM = (minutes?: number) => {
+        if (minutes === undefined) return "";
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        return `${String(hours).padStart(2, "0")}:${String(mins).padStart(
+            2,
+            "0"
+        )}`;
+    };
+
+    const minutesFromHHMM = (hhmm: string): number | null => {
+        const match = hhmm.match(/^(\d{2}):(\d{2})$/);
+        if (!match) return null;
+        const hours = parseInt(match[1], 10);
+        const minutes = parseInt(match[2], 10);
+        return hours * 60 + minutes;
     };
 
     const renderStepContent = () => {
@@ -176,9 +259,9 @@ export function CreatePlanWizard({
                                 placeholder="输入备份计划名称"
                                 className={errors.name ? "border-red-500" : ""}
                             />
-                            {errors.name && (
+                            {errors.title && (
                                 <p className="text-sm text-red-500">
-                                    {errors.name}
+                                    {errors.title}
                                 </p>
                             )}
                         </div>
@@ -205,13 +288,13 @@ export function CreatePlanWizard({
                         <div>
                             <Label>选择备份目录 *</Label>
                             <p className="text-sm text-muted-foreground mb-3">
-                                选择需要备份的文件夹，可以选择多个目录
+                                选择需要备份的文件夹
                             </p>
                             <DirectorySelector
-                                multiple
+                                purpose={DirectoryPurpose.BACKUP_SOURCE}
                                 value={planData.directories}
-                                onSelectionChange={(dirs) =>
-                                    updatePlanData({ directories: dirs })
+                                onChange={(dir) =>
+                                    updatePlanData({ directories: [dir] })
                                 }
                             />
                             {errors.directories && (
@@ -220,7 +303,7 @@ export function CreatePlanWizard({
                                 </p>
                             )}
                         </div>
-                        {planData.directories.length > 0 && (
+                        {planData.directories && (
                             <div className="bg-muted p-3 rounded-md">
                                 <p className="text-sm font-medium mb-2">
                                     已选择的目录:
@@ -259,15 +342,14 @@ export function CreatePlanWizard({
                                     <SelectValue placeholder="选择备份目标服务" />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="local-d">
-                                        本地备份盘 (D:\\Backups)
-                                    </SelectItem>
-                                    <SelectItem value="ndn-1">
-                                        NDN网络节点1
-                                    </SelectItem>
-                                    <SelectItem value="external">
-                                        外部硬盘 (E:\\Backups)
-                                    </SelectItem>
+                                    {services.map((service) => (
+                                        <SelectItem
+                                            key={service.target_id}
+                                            value={service.target_id}
+                                        >
+                                            {`${service.name} ${service.url}`}
+                                        </SelectItem>
+                                    ))}
                                 </SelectContent>
                             </Select>
                             {errors.service && (
@@ -432,40 +514,24 @@ export function CreatePlanWizard({
                                                     <Checkbox
                                                         id={`day-${index}`}
                                                         checked={
-                                                            planData.scheduleDays?.includes(
-                                                                String(
-                                                                    index + 1
-                                                                )
-                                                            ) || false
+                                                            planData.scheduleDay ===
+                                                            `${index + 1}`
                                                         }
                                                         onCheckedChange={(
                                                             checked
                                                         ) => {
-                                                            const days =
-                                                                planData.scheduleDays ||
-                                                                [];
-                                                            const dayValue =
-                                                                String(
-                                                                    index + 1
-                                                                );
+                                                            const dayValue = `${
+                                                                index + 1
+                                                            }`;
                                                             if (checked) {
                                                                 updatePlanData({
-                                                                    scheduleDays:
-                                                                        [
-                                                                            ...days,
-                                                                            dayValue,
-                                                                        ],
+                                                                    scheduleDay:
+                                                                        dayValue,
                                                                 });
                                                             } else {
                                                                 updatePlanData({
-                                                                    scheduleDays:
-                                                                        days.filter(
-                                                                            (
-                                                                                d
-                                                                            ) =>
-                                                                                d !==
-                                                                                dayValue
-                                                                        ),
+                                                                    scheduleDay:
+                                                                        "",
                                                                 });
                                                             }
                                                         }}
@@ -479,9 +545,9 @@ export function CreatePlanWizard({
                                                 </div>
                                             ))}
                                         </div>
-                                        {errors.scheduleDays && (
+                                        {errors.scheduleDay && (
                                             <p className="text-sm text-red-500">
-                                                {errors.scheduleDays}
+                                                {errors.scheduleDay}
                                             </p>
                                         )}
                                     </div>
@@ -584,7 +650,7 @@ export function CreatePlanWizard({
             case 4:
                 return (
                     <div className="space-y-4">
-                        <div className="space-y-3">
+                        {/* <div className="space-y-3">
                             <Label>备份方式</Label>
                             <RadioGroup
                                 value={planData.backupType}
@@ -606,7 +672,7 @@ export function CreatePlanWizard({
                                     </Label>
                                 </div>
                             </RadioGroup>
-                        </div>
+                        </div> */}
 
                         <div className="space-y-2">
                             <Label>版本保留数量</Label>
