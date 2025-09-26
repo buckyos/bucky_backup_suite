@@ -23,7 +23,7 @@ import {
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
 import { LoadingPage } from "./LoadingPage";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 import {
     Plus,
     Edit,
@@ -36,6 +36,9 @@ import {
     Check,
     X,
 } from "lucide-react";
+import { taskManager } from "./utils/fake_task_mgr";
+import { BackupTargetInfo, TargetState, TargetType } from "./utils/task_mgr";
+import { TaskMgrHelper } from "./utils/task_mgr_helper";
 
 interface ServiceManagementProps {
     onNavigate?: (page: string, data?: any) => void;
@@ -45,48 +48,56 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
     const [loading, setLoading] = useState(true);
-    const [loadingText, setLoadingText] = useState<string>(`${t.common.loading} ${t.nav.services}...`);
     // Move all hooks before any conditional returns to keep stable order
-    const [services, setServices] = useState([]);
-    const [editingService, setEditingService] = useState<number | null>(null);
+    const [services, setServices] = useState<BackupTargetInfo[]>([]);
+    const [editingService, setEditingService] =
+        useState<BackupTargetInfo | null>(null);
     const [editingName, setEditingName] = useState("");
 
     useEffect(() => {
-        setLoading(true);
-        setLoadingText(`${t.common.loading} ${t.nav.services}...`);
-        const id = window.setTimeout(() => setLoading(false), 600);
-        return () => window.clearTimeout(id);
-    }, [t]);
+        // load services from backend
+        taskManager.listBackupTargets().then(async (targetIds) => {
+            const targets = await Promise.all(
+                targetIds.map((id) => taskManager.getBackupTarget(id))
+            );
+            setServices(targets);
+            setLoading(false);
+        });
+    }, []);
 
     if (loading) {
         return (
             <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-6`}>
                 <div>
                     <h1 className="mb-2">{t.services.title}</h1>
-                    <p className="text-muted-foreground">{t.services.subtitle}</p>
+                    <p className="text-muted-foreground">
+                        {t.services.subtitle}
+                    </p>
                 </div>
-                <LoadingPage status={loadingText} />
+                <LoadingPage
+                    status={`${t.common.loading} ${t.nav.services}...`}
+                />
             </div>
         );
     }
 
-    const getStatusBadge = (status: string) => {
-        switch (status) {
-            case "healthy":
+    const getStatusBadge = (state: TargetState) => {
+        switch (state) {
+            case TargetState.ONLINE:
                 return (
                     <Badge className="bg-green-100 text-green-800 gap-1">
                         <CheckCircle className="w-3 h-3" />
                         正常
                     </Badge>
                 );
-            case "warning":
+            case TargetState.ERROR:
                 return (
                     <Badge className="bg-yellow-100 text-yellow-800 gap-1">
                         <AlertCircle className="w-3 h-3" />
                         警告
                     </Badge>
                 );
-            case "offline":
+            case TargetState.OFFLINE:
                 return (
                     <Badge variant="destructive" className="gap-1">
                         <AlertCircle className="w-3 h-3" />
@@ -98,33 +109,34 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
         }
     };
 
-    const getServiceIcon = (type: string) => {
-        return type === "local" ? HardDrive : Network;
+    const getServiceIcon = (type: TargetType) => {
+        return type === TargetType.LOCAL ? HardDrive : Network;
     };
 
-    const getUsagePercentage = (used: string, total: string) => {
-        if (total === "无限制") return 0;
-        const usedNum = parseFloat(used.replace(/[^\d.]/g, ""));
-        const totalNum = parseFloat(total.replace(/[^\d.]/g, ""));
-        return Math.round((usedNum / totalNum) * 100);
-    };
-
-    const handleEdit = (serviceId: number, currentName: string) => {
-        setEditingService(serviceId);
+    const handleEdit = (serviceInfo: BackupTargetInfo, currentName: string) => {
+        setEditingService(serviceInfo);
         setEditingName(currentName);
     };
 
-    const handleSaveEdit = (serviceId: number) => {
-        setServices(
-            services.map((service) =>
-                service.id === serviceId
-                    ? { ...service, name: editingName }
-                    : service
-            )
-        );
+    const handleSaveEdit = async (serviceInfo: BackupTargetInfo) => {
+        const oldName = serviceInfo.name;
+        serviceInfo.name = editingName;
+        const success = await taskManager.updateBackupTarget(serviceInfo);
+        if (success) {
+            setServices(
+                services.map((service) =>
+                    service.target_id === serviceInfo.target_id
+                        ? serviceInfo
+                        : service
+                )
+            );
+            toast.success("服务名称已更新");
+        } else {
+            serviceInfo.name = oldName; // revert
+            toast.error("更新服务名称失败");
+        }
         setEditingService(null);
         setEditingName("");
-        toast.success("服务名称已更新");
     };
 
     const handleCancelEdit = () => {
@@ -132,14 +144,21 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
         setEditingName("");
     };
 
-    const handleDelete = (serviceId: number) => {
-        setServices(services.filter((service) => service.id !== serviceId));
+    const handleDelete = async (serviceId: string) => {
+        const success = await taskManager.removeBackupTarget(serviceId);
+        if (!success) {
+            toast.error("删除服务失败");
+            return;
+        }
+        setServices(
+            services.filter((service) => service.target_id !== serviceId)
+        );
         toast.success("服务已删除");
     };
 
-    const handleTestConnection = (service: any) => {
-        toast.success(`正在测试 ${service.name} 的连接...`);
-    };
+    // const handleTestConnection = (service: any) => {
+    //     toast.success(`正在测试 ${service.name} 的连接...`);
+    // };
 
     return (
         <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-6`}>
@@ -197,21 +216,18 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                     </Card>
                 ) : (
                     services.map((service) => {
-                        const ServiceIcon = getServiceIcon(service.type);
-                        const usagePercent = getUsagePercentage(
-                            service.used,
-                            service.total
-                        );
+                        const ServiceIcon = getServiceIcon(service.target_type);
+                        const usagePercent =
+                            TaskMgrHelper.targetUsagePercent(service);
 
                         return (
-                            <Card key={service.id}>
+                            <Card key={service.target_id}>
                                 <CardHeader>
                                     <div className="flex items-start justify-between">
                                         <div className="flex items-center gap-3">
                                             <ServiceIcon className="w-5 h-5 text-muted-foreground" />
                                             <div className="flex-1">
-                                                {editingService ===
-                                                service.id ? (
+                                                {editingService === service ? (
                                                     <div className="flex items-center gap-2">
                                                         <Input
                                                             value={editingName}
@@ -228,7 +244,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                                     "Enter"
                                                                 ) {
                                                                     handleSaveEdit(
-                                                                        service.id
+                                                                        service
                                                                     );
                                                                 } else if (
                                                                     e.key ===
@@ -244,7 +260,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                             className="h-8 w-8 p-0"
                                                             onClick={() =>
                                                                 handleSaveEdit(
-                                                                    service.id
+                                                                    service
                                                                 )
                                                             }
                                                         >
@@ -278,7 +294,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                             className="h-6 w-6 p-0"
                                                             onClick={() =>
                                                                 handleEdit(
-                                                                    service.id,
+                                                                    service,
                                                                     service.name
                                                                 )
                                                             }
@@ -288,14 +304,12 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                     </div>
                                                 )}
                                                 <CardDescription>
-                                                    {service.type === "local"
-                                                        ? service.path
-                                                        : service.endpoint}
+                                                    {service.url}
                                                 </CardDescription>
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2">
-                                            {getStatusBadge(service.status)}
+                                            {getStatusBadge(service.state)}
                                         </div>
                                     </div>
                                 </CardHeader>
@@ -314,7 +328,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                             <p className="font-medium">
                                                 {service.used} / {service.total}
                                             </p>
-                                            {service.total !== "无限制" && (
+                                            {service.total >= 0 && (
                                                 <div className="mt-2">
                                                     <div className="w-full bg-secondary rounded-full h-2">
                                                         <div
@@ -343,29 +357,10 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                 类型
                                             </p>
                                             <p className="font-medium">
-                                                {service.type === "local"
+                                                {service.target_type ===
+                                                TargetType.LOCAL
                                                     ? "本地目录"
                                                     : "NDN网络"}
-                                            </p>
-                                        </div>
-                                        <div>
-                                            <p className="text-sm text-muted-foreground mb-1">
-                                                压缩
-                                            </p>
-                                            <p className="font-medium">
-                                                {service.compression
-                                                    ? "已启用"
-                                                    : "已禁用"}
-                                            </p>
-                                        </div>
-                                        <div>
-                                            <p className="text-sm text-muted-foreground mb-1">
-                                                加密
-                                            </p>
-                                            <p className="font-medium">
-                                                {service.encryption
-                                                    ? "已启用"
-                                                    : "已禁用"}
                                             </p>
                                         </div>
                                     </div>
@@ -373,7 +368,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                     <div className="flex items-center justify-end gap-2 pt-4 border-t">
                                         {isMobile ? (
                                             <>
-                                                {service.type !== "local" && (
+                                                {/* {service.type !== "local" && (
                                                     <Button
                                                         variant="outline"
                                                         size="sm"
@@ -386,7 +381,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                     >
                                                         <Settings className="w-3 h-3" />
                                                     </Button>
-                                                )}
+                                                )} */}
                                                 <AlertDialog>
                                                     <AlertDialogTrigger asChild>
                                                         <Button
@@ -416,7 +411,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                                                 onClick={() =>
                                                                     handleDelete(
-                                                                        service.id
+                                                                        service.target_id
                                                                     )
                                                                 }
                                                             >
@@ -428,7 +423,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                             </>
                                         ) : (
                                             <>
-                                                {service.type !== "local" && (
+                                                {/* {service.type !== "local" && (
                                                     <Button
                                                         variant="outline"
                                                         size="sm"
@@ -442,7 +437,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                         <Settings className="w-3 h-3" />
                                                         测试连接
                                                     </Button>
-                                                )}
+                                                )} */}
                                                 <AlertDialog>
                                                     <AlertDialogTrigger asChild>
                                                         <Button
@@ -473,7 +468,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                                                                 onClick={() =>
                                                                     handleDelete(
-                                                                        service.id
+                                                                        service.target_id
                                                                     )
                                                                 }
                                                             >
@@ -515,7 +510,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                             <p className="text-2xl">
                                 {
                                     services.filter(
-                                        (s) => s.status !== "offline"
+                                        (s) => s.state !== TargetState.OFFLINE
                                     ).length
                                 }
                             </p>
@@ -530,8 +525,10 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                         <CardContent>
                             <p className="text-2xl">
                                 {
-                                    services.filter((s) => s.type === "local")
-                                        .length
+                                    services.filter(
+                                        (s) =>
+                                            s.target_type === TargetType.LOCAL
+                                    ).length
                                 }
                             </p>
                         </CardContent>
@@ -545,8 +542,9 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                         <CardContent>
                             <p className="text-2xl">
                                 {
-                                    services.filter((s) => s.type === "ndn")
-                                        .length
+                                    services.filter(
+                                        (s) => s.target_type === TargetType.NDN
+                                    ).length
                                 }
                             </p>
                         </CardContent>

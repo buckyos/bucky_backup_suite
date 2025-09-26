@@ -361,7 +361,38 @@ export class BackupTaskManager {
             target_id: targetId,
         });
         result.target_id = targetId;
+        // compare with old state, if changed, emit event
+        const old_target = this.targets.get(targetId);
+        if (old_target) {
+            this.targets.set(targetId, result);
+            if (old_target.state !== result.state) {
+                this.emitTaskEvent(TaskEventType.CHANGE_TARGET_STATE, {
+                    targetId,
+                    oldState: old_target.state,
+                    newState: result.state,
+                });
+            }
+        } else {
+            this.targets.set(targetId, result);
+        }
         return result;
+    }
+
+    async updateBackupTarget(targetInfo: BackupTargetInfo): Promise<boolean> {
+        const result = await this.rpc_client.call(
+            "update_backup_target",
+            targetInfo
+        );
+        await this.emitTaskEvent(TaskEventType.UPDATE_TARGET, result);
+        return result.result === "success";
+    }
+
+    async removeBackupTarget(targetId: string): Promise<boolean> {
+        const result = await this.rpc_client.call("remove_backup_target", {
+            target_id: targetId,
+        });
+        await this.emitTaskEvent(TaskEventType.REMOVE_TARGET, result);
+        return result.result === "success";
     }
 
     async consumeSizeSummary(): Promise<{ total: number; today: number }> {
@@ -398,6 +429,23 @@ export class BackupTaskManager {
                                 this.getTaskInfo(taskid)
                             )
                         );
+                        // remove tasks that are no longer uncomplete
+                        for (const taskid of this.uncomplete_tasks.keys()) {
+                            if (!taskid_list.includes(taskid)) {
+                                const comp_task =
+                                    this.uncomplete_tasks.get(taskid);
+                                if (
+                                    comp_task &&
+                                    comp_task.state !== TaskState.DONE
+                                ) {
+                                    await this.emitTaskEvent(
+                                        TaskEventType.COMPLETE_TASK,
+                                        comp_task
+                                    );
+                                }
+                                this.uncomplete_tasks.delete(taskid);
+                            }
+                        }
                     } catch (error) {
                         console.error(
                             "Error refreshing uncomplete task state:",
@@ -422,12 +470,43 @@ export class BackupTaskManager {
     }
 
     startRefreshTargetStateTimer(): number {
-        // todo:
-        return 0;
+        let timer_id = this.next_timer_id++;
+        this.target_timer.listener_timers.add(timer_id);
+        if (this.target_timer.is_stop) {
+            this.target_timer.is_stop = false;
+            callInInterval(
+                async () => {
+                    try {
+                        let target_ids = await this.listBackupTargets();
+                        await Promise.all(
+                            target_ids.map((target_id) =>
+                                this.getBackupTarget(target_id)
+                            )
+                        );
+                        // remove targets that are no longer present
+                        for (const target_id of this.targets.keys()) {
+                            if (!target_ids.includes(target_id)) {
+                                this.targets.delete(target_id);
+                            }
+                        }
+                    } catch (error) {
+                        console.error("Error refreshing target state:", error);
+                    }
+                },
+                1000,
+                (_) => {
+                    return this.target_timer.is_stop;
+                }
+            );
+        }
+        return timer_id;
     }
 
     stopRefreshTargetStateTimer(timerId: number) {
-        // todo:
+        this.target_timer.listener_timers.delete(timerId);
+        if (this.target_timer.listener_timers.size === 0) {
+            this.target_timer.is_stop = true;
+        }
     }
 
     async listDirChildren(

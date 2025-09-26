@@ -259,6 +259,28 @@ export class FakeTaskManager extends BackupTaskManager {
         return result;
     }
 
+    async updateBackupTarget(targetInfo: BackupTargetInfo): Promise<boolean> {
+        const idx = this.target_list.targets.findIndex(
+            (t) => t.target_id === targetInfo.target_id
+        );
+        if (idx === -1) return false;
+        this.target_list.targets[idx] = targetInfo;
+        await this.emitTaskEvent(TaskEventType.UPDATE_TARGET, targetInfo);
+        return true;
+    }
+
+    async removeBackupTarget(targetId: string): Promise<boolean> {
+        const idx = this.target_list.targets.findIndex(
+            (t) => t.target_id === targetId
+        );
+        if (idx === -1) return false;
+        this.target_list.targets.splice(idx, 1);
+        await this.emitTaskEvent(TaskEventType.REMOVE_TARGET, {
+            target_id: targetId,
+        });
+        return true;
+    }
+
     async consumeSizeSummary(): Promise<{ total: number; today: number }> {
         const total = this.task_list.tasks
             .map((t) => t.completed_size)
