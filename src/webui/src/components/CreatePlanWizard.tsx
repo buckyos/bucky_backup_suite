@@ -497,7 +497,15 @@ export function CreatePlanWizard({
                                 {planData.scheduleType === "weekly" && (
                                     <div className="space-y-2">
                                         <Label>执行日期 *</Label>
-                                        <div className="flex flex-wrap gap-2">
+                                        <RadioGroup
+                                            value={planData.scheduleDay}
+                                            onValueChange={(value) =>
+                                                updatePlanData({
+                                                    scheduleDay: value,
+                                                })
+                                            }
+                                            className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+                                        >
                                             {[
                                                 "周一",
                                                 "周二",
@@ -511,30 +519,9 @@ export function CreatePlanWizard({
                                                     key={day}
                                                     className="flex items-center space-x-2"
                                                 >
-                                                    <Checkbox
+                                                    <RadioGroupItem
                                                         id={`day-${index}`}
-                                                        checked={
-                                                            planData.scheduleDay ===
-                                                            `${index + 1}`
-                                                        }
-                                                        onCheckedChange={(
-                                                            checked
-                                                        ) => {
-                                                            const dayValue = `${
-                                                                index + 1
-                                                            }`;
-                                                            if (checked) {
-                                                                updatePlanData({
-                                                                    scheduleDay:
-                                                                        dayValue,
-                                                                });
-                                                            } else {
-                                                                updatePlanData({
-                                                                    scheduleDay:
-                                                                        "",
-                                                                });
-                                                            }
-                                                        }}
+                                                        value={`${index + 1}`}
                                                     />
                                                     <Label
                                                         htmlFor={`day-${index}`}
@@ -544,7 +531,7 @@ export function CreatePlanWizard({
                                                     </Label>
                                                 </div>
                                             ))}
-                                        </div>
+                                        </RadioGroup>
                                         {errors.scheduleDay && (
                                             <p className="text-sm text-red-500">
                                                 {errors.scheduleDay}

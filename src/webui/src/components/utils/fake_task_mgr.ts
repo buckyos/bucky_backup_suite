@@ -43,8 +43,8 @@ export class FakeTaskManager extends BackupTaskManager {
         priority: number;
     }): Promise<string> {
         const result = {
-            plan_id: `plan_${this.plan_list.next_plan_id++}`,
             ...params,
+            plan_id: `plan_${this.plan_list.next_plan_id++}`,
             last_checkpoint_index: -1,
             last_run_time: 0,
         };
