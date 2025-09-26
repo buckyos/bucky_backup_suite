@@ -104,13 +104,13 @@ export class TaskMgrHelper {
                     period.minutes * 60 -
                     (nowWeek % (7 * 86400))) %
                     (7 * 86400) || 7 * 86400; // 计算到下一个指定星期几的秒数
-            return (now.getTime() + secondsUntilNext) * 1000;
+            return now.getTime() + secondsUntilNext * 1000;
         } else if ("date" in period) {
             // 每月的某一天
             let targetDate = new Date(now);
             targetDate.setDate(period.date);
             if (targetDate.getMonth() > now.getMonth()) {
-                targetDate.setMonth(targetDate.getMonth() + 1, 0);
+                targetDate.setMonth(now.getMonth() + 1, 0); // 设置为下个月的最后一天
             }
             targetDate.setHours(
                 Math.floor(period.minutes / 60),
