@@ -640,7 +640,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 </div>
                             ) : isMobile ? (
                                 <ScrollArea className="h-20">
-                                    <div className="space-y-2">
+                                    <div className="grid grid-cols-2 gap-3">
                                         {uncompleteTask.check().map((task) => (
                                             <div
                                                 key={task.taskid}
@@ -753,7 +753,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     </div>
                                 </ScrollArea>
                             ) : (
-                                <div className="space-y-3">
+                                <div className="grid grid-cols-3 gap-3">
                                     {/* {uncompleteTask.check().length === 0 && (
                                         <div className="text-center py-2">
                                             {plans.check().length === 0 ? (
@@ -932,7 +932,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                             return (
                                                 <div
                                                     key={service.target_id}
-                                                    className="flex items-center gap-2 text-sm cursor-pointer"
+                                                    className="flex flex-col gap-2 text-sm cursor-pointer border rounded-lg p-3 hover:bg-accent/30"
                                                     onClick={() =>
                                                         onNavigate?.("services")
                                                     }
@@ -991,7 +991,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     </div>
                                 </ScrollArea>
                             ) : (
-                                <div className="space-y-3">
+                                <div className="grid grid-cols-3 gap-3">
                                     {services.check().map((service) => {
                                         const ServiceIcon = getServiceIcon(
                                             service.target_type
@@ -1003,7 +1003,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                         return (
                                             <div
                                                 key={service.target_id}
-                                                className="flex items-center gap-3"
+                                                className="flex flex-col gap-2 border rounded-lg p-3 hover:bg-accent/30"
                                             >
                                                 <ServiceIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                                                 <div className="flex-1 min-w-0">
@@ -1114,7 +1114,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 </div>
                             ) : isMobile ? (
                                 <ScrollArea className="h-24">
-                                    <div className="space-y-2">
+                                    <div className="grid grid-cols-2 gap-3">
                                         {plans.check().map((plan) => {
                                             const state =
                                                 TaskMgrHelper.planState(
@@ -1124,7 +1124,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                             return (
                                                 <div
                                                     key={plan.plan_id}
-                                                    className="flex items-center justify-between text-sm cursor-pointer"
+                                                    className="flex flex-col gap-2 text-sm cursor-pointer border rounded-lg p-3 hover:bg-accent/30"
                                                     onClick={() =>
                                                         onNavigate?.("plans")
                                                     }
@@ -1170,7 +1170,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     {plans.check().map((plan) => (
                                         <div
                                             key={plan.plan_id}
-                                            className="flex items-center justify-between"
+                                            className="flex flex-col gap-2 border rounded-lg p-3 hover:bg-accent/30"
                                         >
                                             <div className="flex items-center gap-3 flex-1 min-w-0">
                                                 <div className="flex-1">
