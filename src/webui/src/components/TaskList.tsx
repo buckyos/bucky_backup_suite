@@ -949,7 +949,9 @@ function AllTaskTabContent({
     const refreshList = () => {
         refreshFilterTasks(
             {
-                owner_plan_title: [searchPlanFilter],
+                owner_plan_title: searchPlanFilter
+                    ? [searchPlanFilter]
+                    : undefined,
                 type: typeFilter ? [typeFilter] : undefined,
                 state: statusFilter ? statusFilter : undefined,
             },
