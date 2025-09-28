@@ -41,6 +41,7 @@ import {
     BackupTargetInfo,
     TaskFilter,
     TaskInfo,
+    TaskState,
 } from "./utils/task_mgr";
 import { taskManager } from "./utils/fake_task_mgr";
 import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
@@ -76,11 +77,14 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
             setLoading(false);
         });
         taskManager
-            .listBackupTasks([
-                TaskFilter.FAILED,
-                TaskFilter.PAUSED,
-                TaskFilter.RUNNING,
-            ])
+            .listBackupTasks({
+                state: [
+                    TaskState.FAILED,
+                    TaskState.PAUSED,
+                    TaskState.RUNNING,
+                    TaskState.PENDING,
+                ],
+            })
             .then(async (taskIds) => {
                 const uncompleteTasks = await Promise.all(
                     taskIds.map((id) => taskManager.getTaskInfo(id))

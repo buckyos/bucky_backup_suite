@@ -102,11 +102,14 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
     const refreshUncompleteTasks = () => {
         taskManager
-            .listBackupTasks([
-                TaskFilter.RUNNING,
-                TaskFilter.PAUSED,
-                TaskFilter.FAILED,
-            ])
+            .listBackupTasks({
+                state: [
+                    TaskState.RUNNING,
+                    TaskState.PENDING,
+                    TaskState.PAUSED,
+                    TaskState.FAILED,
+                ],
+            })
             .then(async (taskIds) => {
                 const taskInfos = await Promise.all(
                     taskIds.map((taskid) => taskManager.getTaskInfo(taskid))
@@ -118,10 +121,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     const refreshCompleteTasks = () => {
         taskManager
             .listBackupTasks(
-                [TaskFilter.DONE],
+                {
+                    state: [TaskState.DONE],
+                },
                 0,
-                null,
-                new Map([[ListTaskOrderBy.COMPLETE_TIME, ListOrder.DESC]])
+                undefined,
+                [[ListTaskOrderBy.COMPLETE_TIME, ListOrder.DESC]]
             )
             .then(async (taskIds) => {
                 const taskInfos = await Promise.all(

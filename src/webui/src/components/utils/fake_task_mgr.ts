@@ -140,29 +140,78 @@ export class FakeTaskManager extends BackupTaskManager {
     }
 
     async listBackupTasks(
-        filter: TaskFilter[] = [TaskFilter.ALL],
+        filter: TaskFilter = {},
         offset: number = 0,
-        limit: number | null = null,
-        orderBy: Map<ListTaskOrderBy, ListOrder> | null = null
+        limit?: number,
+        orderBy?: Array<[ListTaskOrderBy, ListOrder]>
     ): Promise<string[]> {
-        if (filter.includes(TaskFilter.ALL)) {
-            return this.task_list.tasks.map((t) => t.taskid);
-        } else {
-            let tasks = this.task_list.tasks.filter((t) => {
-                switch (t.state) {
-                    case TaskState.PENDING:
-                    case TaskState.RUNNING:
-                        return filter.includes(TaskFilter.RUNNING);
-                    case TaskState.FAILED:
-                        return filter.includes(TaskFilter.FAILED);
-                    case TaskState.DONE:
-                        return filter.includes(TaskFilter.DONE);
-                    case TaskState.PAUSED:
-                        return filter.includes(TaskFilter.PAUSED);
-                }
-            });
-            return tasks.map((t) => t.taskid);
+        let result_tasks = this.task_list.tasks;
+        if (filter.state) {
+            result_tasks = result_tasks.filter((t) =>
+                filter.state?.includes(t.state)
+            );
         }
+        if (filter.owner_plan_id) {
+            result_tasks = result_tasks.filter((t) =>
+                filter.owner_plan_id?.includes(t.owner_plan_id)
+            );
+        }
+        if (filter.type) {
+            result_tasks = result_tasks.filter((t) =>
+                filter.type?.includes(t.task_type)
+            );
+        }
+        if (filter.owner_plan_title) {
+            const lowercase_owner_plan_titles = filter.owner_plan_title.map(
+                (title) => title.toLowerCase()
+            );
+            result_tasks = result_tasks.filter((t) => {
+                const plan = this.plan_list.plans.find(
+                    (p) => p.plan_id === t.owner_plan_id
+                );
+                return (
+                    plan &&
+                    lowercase_owner_plan_titles.find(
+                        (title) => plan.title.toLowerCase().indexOf(title) >= 0
+                    )
+                );
+            });
+        }
+        if (orderBy) {
+            result_tasks = result_tasks.sort((a, b) => {
+                for (let [key, order] of orderBy) {
+                    let cmp = 0;
+                    switch (key) {
+                        case ListTaskOrderBy.CREATE_TIME:
+                            cmp = a.create_time - b.create_time;
+                            break;
+                        case ListTaskOrderBy.UPDATE_TIME:
+                            cmp = a.update_time - b.update_time;
+                            break;
+                        case ListTaskOrderBy.COMPLETE_TIME:
+                            if (
+                                a.state === TaskState.DONE &&
+                                b.state === TaskState.DONE
+                            ) {
+                                cmp = a.update_time - b.update_time;
+                            } else if (a.state === TaskState.DONE) return 1;
+                            else if (b.state === TaskState.DONE) return -1;
+                            break;
+                    }
+                    if (cmp !== 0) {
+                        return order === ListOrder.ASC ? cmp : -cmp;
+                    }
+                }
+                return 0;
+            });
+        }
+        if (offset > 0) {
+            result_tasks = result_tasks.slice(offset);
+        }
+        if (!limit) {
+            result_tasks = result_tasks.slice(0, limit);
+        }
+        return result_tasks.map((t) => t.taskid);
     }
 
     async getTaskInfo(taskId: string): Promise<TaskInfo> {
@@ -232,7 +281,9 @@ export class FakeTaskManager extends BackupTaskManager {
     }
 
     async resume_last_working_task() {
-        let taskid_list = await this.listBackupTasks([TaskFilter.PAUSED]);
+        let taskid_list = await this.listBackupTasks({
+            state: [TaskState.PAUSED],
+        });
         if (taskid_list.length > 0) {
             let last_task = taskid_list[0];
             console.log("resume last task:", last_task);
@@ -242,7 +293,9 @@ export class FakeTaskManager extends BackupTaskManager {
     }
 
     async pause_all_tasks() {
-        let taskid_list = await this.listBackupTasks([TaskFilter.RUNNING]);
+        let taskid_list = await this.listBackupTasks({
+            state: [TaskState.RUNNING, TaskState.PENDING],
+        });
         for (let taskid of taskid_list) {
             this.pauseBackupTask(taskid);
             await this.emitTaskEvent(TaskEventType.PAUSE_TASK, taskid);

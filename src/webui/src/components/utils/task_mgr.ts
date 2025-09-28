@@ -85,12 +85,11 @@ export interface BackupTargetInfo {
     last_error: string;
 }
 
-export enum TaskFilter {
-    ALL = "all",
-    RUNNING = "running",
-    PAUSED = "paused",
-    FAILED = "failed",
-    DONE = "done",
+export interface TaskFilter {
+    state?: TaskState[];
+    type?: TaskType[];
+    owner_plan_id?: string[];
+    owner_plan_title?: string[];
 }
 
 export enum ListTaskOrderBy {
@@ -277,16 +276,16 @@ export class BackupTaskManager {
     }
 
     async listBackupTasks(
-        filter: TaskFilter[] = [TaskFilter.ALL],
+        filter: TaskFilter = {},
         offset: number = 0,
-        limit: number | null = null,
-        orderBy: Map<ListTaskOrderBy, ListOrder> | null = null
+        limit?: number,
+        orderBy?: Array<[ListTaskOrderBy, ListOrder]>
     ): Promise<string[]> {
         const result = await this.rpc_client.call("list_backup_task", {
             filter: filter,
             offset: offset,
             limit: limit,
-            order_by: orderBy ? Object.fromEntries(orderBy) : undefined,
+            order_by: orderBy,
         });
         return result.task_list;
     }
@@ -355,7 +354,9 @@ export class BackupTaskManager {
     }
 
     async resume_last_working_task() {
-        let taskid_list = await this.listBackupTasks([TaskFilter.PAUSED]);
+        let taskid_list = await this.listBackupTasks({
+            state: [TaskState.PAUSED],
+        });
         if (taskid_list.length > 0) {
             let last_task = taskid_list[0];
             console.log("resume last task:", last_task);
@@ -365,7 +366,9 @@ export class BackupTaskManager {
     }
 
     async pause_all_tasks() {
-        let taskid_list = await this.listBackupTasks([TaskFilter.RUNNING]);
+        let taskid_list = await this.listBackupTasks({
+            state: [TaskState.RUNNING, TaskState.PENDING],
+        });
         for (let taskid of taskid_list) {
             this.pauseBackupTask(taskid);
             await this.emitTaskEvent(TaskEventType.PAUSE_TASK, taskid);
@@ -456,11 +459,14 @@ export class BackupTaskManager {
             callInInterval(
                 async () => {
                     try {
-                        let taskid_list = await this.listBackupTasks([
-                            TaskFilter.RUNNING,
-                            TaskFilter.PAUSED,
-                            TaskFilter.FAILED,
-                        ]);
+                        let taskid_list = await this.listBackupTasks({
+                            state: [
+                                TaskState.RUNNING,
+                                TaskState.PENDING,
+                                TaskState.PAUSED,
+                                TaskState.FAILED,
+                            ],
+                        });
                         await Promise.all(
                             taskid_list.map((taskid) =>
                                 this.getTaskInfo(taskid)
