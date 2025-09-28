@@ -54,6 +54,7 @@ import { Translations } from "./i18n";
 import {
     BackupPlanInfo,
     TaskEventType,
+    TaskFilter,
     TaskInfo,
     TaskState,
     TaskType,
@@ -62,7 +63,7 @@ import { taskManager } from "./utils/fake_task_mgr";
 import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
 
 interface TaskListProps {
-    onNavigate?: (page: string, data?: any) => void;
+    onNavigate: (page: string, data?: any) => void;
 }
 
 function getStatusBadge(status: TaskState, t: Translations) {
@@ -227,73 +228,6 @@ export function TaskList({ onNavigate }: TaskListProps) {
                 </div>
             </div>
 
-            {/* {tasks.length === 0 && (
-                <Card
-                    className={`w-full ${
-                        isMobile ? "" : "max-w-2xl mx-auto"
-                    } text-center`}
-                >
-                    <CardHeader>
-                        <CardTitle>暂无任务</CardTitle>
-                        <CardDescription>
-                            {servicesCount === 0
-                                ? "开始前，请先配置一个备份服务"
-                                : plansCount === 0
-                                ? "配置好服务后，创建你的第一个备份计划"
-                                : "你可以立即执行一次备份任务"}
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div
-                            className={`flex ${
-                                isMobile
-                                    ? "flex-col gap-2"
-                                    : "items-center justify-center gap-3"
-                            }`}
-                        >
-                            {servicesCount === 0 ? (
-                                <>
-                                    <Button
-                                        onClick={() =>
-                                            onNavigate?.("add-service")
-                                        }
-                                        className="gap-2"
-                                    >
-                                        去配置备份服务
-                                    </Button>
-                                    {!isMobile && (
-                                        <span className="text-muted-foreground">
-                                            或
-                                        </span>
-                                    )}
-                                    <Button
-                                        variant="outline"
-                                        disabled
-                                        className="gap-2"
-                                    >
-                                        新建备份计划
-                                    </Button>
-                                </>
-                            ) : plansCount === 0 ? (
-                                <Button
-                                    onClick={() => onNavigate?.("create-plan")}
-                                    className="gap-2"
-                                >
-                                    新建备份计划
-                                </Button>
-                            ) : (
-                                <Button
-                                    onClick={() => onNavigate?.("plans")}
-                                    className="gap-2"
-                                >
-                                    前往计划列表执行一次备份
-                                </Button>
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
-            )} */}
-
             {/* 筛选器和搜索 */}
             {/* {!isMobile && tasks.length > 0 && (
                 <Card>
@@ -416,7 +350,10 @@ export function TaskList({ onNavigate }: TaskListProps) {
                             {t.tasks.runningTasks} ({runningTaskCount})
                         </TabsTrigger>
                         <TabsTrigger value="all">
-                            {t.tasks.allTasks} ({filterTaskCount}/{allTaskCount}
+                            {t.tasks.allTasks} (
+                            {filterTaskCount
+                                ? `${filterTaskCount}/${allTaskCount}`
+                                : allTaskCount}{" "}
                             )
                         </TabsTrigger>
                     </TabsList>
@@ -539,11 +476,13 @@ export function TaskList({ onNavigate }: TaskListProps) {
                         t={t}
                         isMobile={isMobile}
                         setTaskCount={setRunningTaskCount}
+                        setAllTaskCount={setAllTaskCount}
                         selectedTasks={selectedRunningTasks}
                         setSelectedTasks={setSelectedRunningTasks}
                         showDetailTask={setShowDetailTask}
                         plans={plans}
                         setPlans={setPlans}
+                        onNavigate={onNavigate}
                     />
                 </TabsContent>
             </Tabs>
@@ -573,59 +512,209 @@ function Loading({ isMobile, t }: { isMobile?: boolean; t: Translations }) {
     );
 }
 
+function refreshFilterTasks(
+    filter: TaskFilter,
+    {
+        isSelectAll,
+        plans,
+        setPlans,
+        selectedTasks,
+        setSelectedTasks,
+        setFilterTasks,
+        setServiceCount,
+        setAllTaskCount,
+    }: {
+        isSelectAll: () => boolean;
+        plans: BackupPlanInfo[];
+        setPlans: (plans: BackupPlanInfo[]) => void;
+        selectedTasks: TaskInfo[];
+        setSelectedTasks: (tasks: TaskInfo[]) => void;
+        setFilterTasks: (tasks: TaskInfo[]) => void;
+        setServiceCount: (count: number) => void;
+        setAllTaskCount: (count: number) => void;
+    }
+) {
+    const refreshAllPlans = async () => {
+        const newPlanIds = await taskManager.listBackupPlans();
+        const newPlans = await Promise.all(
+            newPlanIds.map((planId) => taskManager.getBackupPlan(planId))
+        );
+        plans.splice(0, plans.length);
+        newPlans.forEach((p) => plans.push(p));
+        setPlans(plans);
+    };
+
+    const refreshAllServices = async () => {
+        const serviceIds = await taskManager.listBackupTargets();
+        setServiceCount(serviceIds.length);
+    };
+
+    taskManager.listBackupTasks(filter).then(async ({ task_ids, total }) => {
+        console.log("Filtered tasks:", task_ids, total);
+        const taskInfos = await Promise.all(
+            task_ids.map((taskid) => taskManager.getTaskInfo(taskid))
+        );
+        for (const task of taskInfos) {
+            if (!plans.find((p) => task.owner_plan_id === p.plan_id)) {
+                await refreshAllPlans();
+            }
+        }
+        setFilterTasks(taskInfos);
+        setAllTaskCount(total);
+        if (isSelectAll()) {
+            selectedTasks.splice(0, selectedTasks.length);
+            taskInfos.forEach((t) => selectedTasks.push(t));
+            setSelectedTasks(selectedTasks);
+        } else {
+            const newSelectedTasks = selectedTasks.filter((t) =>
+                taskInfos.find((ft) => ft.taskid === t.taskid)
+            );
+            selectedTasks.splice(0, selectedTasks.length);
+            newSelectedTasks.forEach((t) => selectedTasks.push(t));
+            setSelectedTasks(selectedTasks);
+        }
+
+        if (total === 0) {
+            await refreshAllPlans();
+            await refreshAllServices();
+        }
+    });
+}
+
+function CreateFirstTaskGuide({
+    isMobile,
+    plansCount,
+    servicesCount,
+    onNavigate,
+}: {
+    isMobile: boolean;
+    plansCount: number;
+    servicesCount: number;
+    onNavigate: (page: string, data?: any) => void;
+}) {
+    return (
+        <Card
+            className={`w-full ${
+                isMobile ? "" : "max-w-2xl mx-auto"
+            } text-center`}
+        >
+            <CardHeader>
+                <CardTitle>暂无任务</CardTitle>
+                <CardDescription>
+                    {servicesCount === 0
+                        ? "开始前，请先配置一个备份服务"
+                        : plansCount === 0
+                        ? "配置好服务后，创建你的第一个备份计划"
+                        : "你可以立即执行一次备份任务"}
+                </CardDescription>
+            </CardHeader>
+            <CardContent>
+                <div
+                    className={`flex ${
+                        isMobile
+                            ? "flex-col gap-2"
+                            : "items-center justify-center gap-3"
+                    }`}
+                >
+                    {servicesCount === 0 ? (
+                        <>
+                            <Button
+                                onClick={() => onNavigate?.("add-service")}
+                                className="gap-2"
+                            >
+                                去配置备份服务
+                            </Button>
+                            {!isMobile && (
+                                <span className="text-muted-foreground">
+                                    或
+                                </span>
+                            )}
+                            <Button
+                                variant="outline"
+                                disabled
+                                className="gap-2"
+                            >
+                                新建备份计划
+                            </Button>
+                        </>
+                    ) : plansCount === 0 ? (
+                        <Button
+                            onClick={() => onNavigate?.("create-plan")}
+                            className="gap-2"
+                        >
+                            新建备份计划
+                        </Button>
+                    ) : (
+                        <Button
+                            onClick={() => onNavigate?.("plans")}
+                            className="gap-2"
+                        >
+                            前往计划列表执行一次备份
+                        </Button>
+                    )}
+                </div>
+            </CardContent>
+        </Card>
+    );
+}
+
 function RunningTaskTabContent({
     isMobile,
     t,
     setTaskCount,
+    setAllTaskCount,
     selectedTasks,
     setSelectedTasks,
     showDetailTask,
     plans,
     setPlans,
+    onNavigate,
 }: {
-    isMobile?: boolean;
+    isMobile: boolean;
     t: Translations;
     setTaskCount: (count: number) => void;
+    setAllTaskCount: (count: number) => void;
     selectedTasks: TaskInfo[];
     setSelectedTasks: (task: TaskInfo[]) => void;
     showDetailTask: (task: TaskInfo | null) => void;
     plans: BackupPlanInfo[];
     setPlans: (plans: BackupPlanInfo[]) => void;
+    onNavigate: (page: string, data?: any) => void;
 }) {
     const [uncompleteTasks, setUncompleteTasks] = useState<TaskInfo[] | null>(
         null
     );
+    const [serviceCount, setServiceCount] = useState(0);
+    const [allTaskCount, setAllTaskCountInner] = useState(0);
+    const [isSelectAll, setIsSelectAll] = useState(false);
 
     const refreshUncompleteTasks = () => {
-        taskManager
-            .listBackupTasks({
+        refreshFilterTasks(
+            {
                 state: [
                     TaskState.RUNNING,
                     TaskState.PENDING,
                     TaskState.PAUSED,
                     TaskState.FAILED,
                 ],
-            })
-            .then(async ({ task_ids }) => {
-                const taskInfos = await Promise.all(
-                    task_ids.map((taskid) => taskManager.getTaskInfo(taskid))
-                );
-                for (const task of taskInfos) {
-                    if (!plans.find((p) => task.owner_plan_id === p.plan_id)) {
-                        const newPlanIds = await taskManager.listBackupPlans();
-                        const newPlans = await Promise.all(
-                            newPlanIds.map((planId) =>
-                                taskManager.getBackupPlan(planId)
-                            )
-                        );
-                        plans.splice(0, plans.length);
-                        newPlans.forEach((p) => plans.push(p));
-                        setPlans(plans);
-                    }
-                }
-                setUncompleteTasks(taskInfos);
-                setTaskCount(taskInfos.length);
-            });
+            },
+            {
+                isSelectAll: () => isSelectAll,
+                plans,
+                setPlans,
+                selectedTasks,
+                setSelectedTasks,
+                setFilterTasks: (tasks: TaskInfo[]) => {
+                    setUncompleteTasks(tasks);
+                    setTaskCount(tasks.length);
+                },
+                setServiceCount,
+                setAllTaskCount: (count: number) => {
+                    setAllTaskCountInner(count);
+                    setAllTaskCount(count);
+                },
+            }
+        );
     };
 
     const taskEventHandler = async (event: TaskEventType, data: any) => {
@@ -638,6 +727,7 @@ function RunningTaskTabContent({
             case TaskEventType.UPDATE_TASK:
             case TaskEventType.COMPLETE_TASK:
             case TaskEventType.REMOVE_TASK:
+            case TaskEventType.CREATE_TARGET:
                 refreshUncompleteTasks();
                 break;
         }
@@ -645,7 +735,6 @@ function RunningTaskTabContent({
 
     useEffect(() => {
         refreshUncompleteTasks();
-
         taskManager.addTaskEventListener(taskEventHandler);
         return () => {
             taskManager.removeTaskEventListener(taskEventHandler);
@@ -654,6 +743,17 @@ function RunningTaskTabContent({
 
     if (uncompleteTasks === null) {
         return <Loading isMobile={isMobile} t={t} />;
+    }
+
+    if (allTaskCount === 0) {
+        return (
+            <CreateFirstTaskGuide
+                plansCount={plans.length}
+                servicesCount={serviceCount}
+                onNavigate={onNavigate}
+                isMobile={isMobile}
+            />
+        );
     }
 
     return (
@@ -814,7 +914,7 @@ function AllTaskTabContent({
     showDetailTask: (task: TaskInfo | null) => void;
     plans: BackupPlanInfo[];
     setPlans: (plans: BackupPlanInfo[]) => void;
-    onNavigate?: (page: string, data?: any) => void;
+    onNavigate: (page: string, data?: any) => void;
 }) {
     // Ensure hooks order is stable on every render
     const [searchPlanFilter, setPlanFilter] = useState("");
@@ -822,6 +922,8 @@ function AllTaskTabContent({
     const [typeFilter, setTypeFilter] = useState<TaskType | null>(null);
     const [filterTasks, setFilterTasks] = useState<TaskInfo[] | null>(null);
     const [isSelectAll, setIsSelectAll] = useState(false);
+    const [serviceCount, setServiceCount] = useState(0);
+    const [allTaskCount, setAllTaskCount] = useState(0);
 
     const toggleTaskSelection = (task: TaskInfo) => {
         const index = selectedTasks.findIndex((t) => t.taskid === task.taskid);
@@ -840,51 +942,35 @@ function AllTaskTabContent({
             setSelectedTasks([]);
         } else {
             setIsSelectAll(true);
-            setSelectedTasks([...filterTasks]);
+            setSelectedTasks([...filterTasks!]);
         }
     };
 
-    const refreshFilterTasks = () => {
-        taskManager
-            .listBackupTasks({
+    const refreshList = () => {
+        refreshFilterTasks(
+            {
                 owner_plan_title: [searchPlanFilter],
                 type: typeFilter ? [typeFilter] : undefined,
                 state: statusFilter ? statusFilter : undefined,
-            })
-            .then(async ({ task_ids, total }) => {
-                const taskInfos = await Promise.all(
-                    task_ids.map((taskid) => taskManager.getTaskInfo(taskid))
-                );
-                for (const task of taskInfos) {
-                    if (!plans.find((p) => task.owner_plan_id === p.plan_id)) {
-                        const newPlanIds = await taskManager.listBackupPlans();
-                        const newPlans = await Promise.all(
-                            newPlanIds.map((planId) =>
-                                taskManager.getBackupPlan(planId)
-                            )
-                        );
-                        plans.splice(0, plans.length);
-                        newPlans.forEach((p) => plans.push(p));
-                        setPlans(plans);
-                    }
-                }
-                setFilterTasks(taskInfos);
-                setFilterTaskCount(total);
-                if (isSelectAll) {
-                    selectedTasks.splice(0, selectedTasks.length);
-                    taskInfos.forEach((t) => selectedTasks.push(t));
-                    setSelectedTasks(selectedTasks);
-                } else {
-                    const newSelectedTasks = selectedTasks.filter((t) =>
-                        taskInfos.find((ft) => ft.taskid === t.taskid)
-                    );
-                    selectedTasks.splice(0, selectedTasks.length);
-                    newSelectedTasks.forEach((t) => selectedTasks.push(t));
-                    setSelectedTasks(selectedTasks);
-                }
-            });
+            },
+            {
+                isSelectAll: () => isSelectAll,
+                plans,
+                setPlans,
+                selectedTasks,
+                setSelectedTasks,
+                setFilterTasks: (tasks: TaskInfo[]) => {
+                    setFilterTasks(tasks);
+                    setFilterTaskCount(tasks.length);
+                },
+                setServiceCount,
+                setAllTaskCount: (count: number) => {
+                    setAllTaskCount(count);
+                    setTaskCount(count);
+                },
+            }
+        );
     };
-
     const taskEventHandler = async (event: TaskEventType, data: any) => {
         console.log("task event:", event, data);
         switch (event) {
@@ -895,13 +981,14 @@ function AllTaskTabContent({
             case TaskEventType.UPDATE_TASK:
             case TaskEventType.COMPLETE_TASK:
             case TaskEventType.REMOVE_TASK:
-                refreshFilterTasks();
+            case TaskEventType.CREATE_TARGET:
+                refreshList();
                 break;
         }
     };
 
     useEffect(() => {
-        refreshFilterTasks();
+        refreshList();
 
         taskManager.addTaskEventListener(taskEventHandler);
         return () => {
@@ -911,6 +998,17 @@ function AllTaskTabContent({
 
     if (filterTasks === null) {
         return <Loading isMobile={isMobile} t={t} />;
+    }
+
+    if (allTaskCount === 0) {
+        return (
+            <CreateFirstTaskGuide
+                plansCount={plans.length}
+                servicesCount={serviceCount}
+                isMobile={false}
+                onNavigate={onNavigate}
+            />
+        );
     }
 
     return filterTasks.length === 0 ? (

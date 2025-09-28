@@ -213,7 +213,7 @@ export class FakeTaskManager extends BackupTaskManager {
         }
         return {
             task_ids: result_tasks.map((t) => t.taskid),
-            total: result_tasks.length,
+            total: this.task_list.tasks.length,
         };
     }
 
