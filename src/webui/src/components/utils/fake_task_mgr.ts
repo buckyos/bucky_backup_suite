@@ -144,7 +144,7 @@ export class FakeTaskManager extends BackupTaskManager {
         offset: number = 0,
         limit?: number,
         orderBy?: Array<[ListTaskOrderBy, ListOrder]>
-    ): Promise<string[]> {
+    ): Promise<{ task_ids: string[]; total: number }> {
         let result_tasks = this.task_list.tasks;
         if (filter.state) {
             result_tasks = result_tasks.filter((t) =>
@@ -211,7 +211,10 @@ export class FakeTaskManager extends BackupTaskManager {
         if (!limit) {
             result_tasks = result_tasks.slice(0, limit);
         }
-        return result_tasks.map((t) => t.taskid);
+        return {
+            task_ids: result_tasks.map((t) => t.taskid),
+            total: result_tasks.length,
+        };
     }
 
     async getTaskInfo(taskId: string): Promise<TaskInfo> {
@@ -280,26 +283,12 @@ export class FakeTaskManager extends BackupTaskManager {
         return true;
     }
 
-    async resume_last_working_task() {
-        let taskid_list = await this.listBackupTasks({
-            state: [TaskState.PAUSED],
-        });
-        if (taskid_list.length > 0) {
-            let last_task = taskid_list[0];
-            console.log("resume last task:", last_task);
-            this.resumeBackupTask(last_task);
-            await this.emitTaskEvent(TaskEventType.RESUME_TASK, last_task);
-        }
-    }
-
-    async pause_all_tasks() {
-        let taskid_list = await this.listBackupTasks({
-            state: [TaskState.RUNNING, TaskState.PENDING],
-        });
-        for (let taskid of taskid_list) {
-            this.pauseBackupTask(taskid);
-            await this.emitTaskEvent(TaskEventType.PAUSE_TASK, taskid);
-        }
+    async removeBackupTask(taskId: string): Promise<boolean> {
+        const idx = this.task_list.tasks.findIndex((t) => t.taskid === taskId);
+        if (idx === -1) return false;
+        this.task_list.tasks.splice(idx, 1);
+        await this.emitTaskEvent(TaskEventType.REMOVE_TASK, taskId);
+        return true;
     }
 
     async createBackupTarget(

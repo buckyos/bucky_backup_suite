@@ -57,7 +57,7 @@ import {
     TaskState,
 } from "./utils/task_mgr";
 import { taskManager } from "./utils/fake_task_mgr";
-import { LoadingData, LoadingPage } from "./LoadingPage";
+import { LoadingPage } from "./LoadingPage";
 import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
 
 interface DashboardProps {
@@ -67,37 +67,36 @@ interface DashboardProps {
 export function Dashboard({ onNavigate }: DashboardProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
-    const [uncompleteTask, setUncompleteTask] = useState(
-        new LoadingData<TaskInfo[]>(null)
+    const [uncompleteTask, setUncompleteTask] = useState<TaskInfo[] | null>(
+        null
     );
-    const [lastCompletedTasks, setLastCompletedTasks] = useState(
-        new LoadingData<TaskInfo[]>(null)
-    );
-    const [consumeSize, setConsumeSize] = useState(
-        new LoadingData<{ total: number; today: number }>(null)
-    );
-    const [statistics, setStatistics] = useState(
-        new LoadingData<{ complete: number; failed: number }>(null)
-    );
-    const [plans, setPlans] = useState(new LoadingData<BackupPlanInfo[]>(null));
-    const [services, setServices] = useState(
-        new LoadingData<BackupTargetInfo[]>(null)
-    );
+    const [lastCompletedTasks, setLastCompletedTasks] = useState<
+        TaskInfo[] | null
+    >(null);
+    const [consumeSize, setConsumeSize] = useState<{
+        total: number;
+        today: number;
+    } | null>(null);
+    const [statistics, setStatistics] = useState<{
+        complete: number;
+        failed: number;
+    } | null>(null);
+    let [plans, setPlans] = useState<BackupPlanInfo[] | null>(null);
+    const [services, setServices] = useState<BackupTargetInfo[] | null>(null);
     const [selectedPlan, setSelectedPlan] = useState("");
 
-    const loading = !(
-        uncompleteTask.isLoaded() &&
-        lastCompletedTasks.isLoaded() &&
-        plans.isLoaded() &&
-        services.isLoaded()
-    );
+    const loading =
+        uncompleteTask === null ||
+        lastCompletedTasks === null ||
+        plans === null ||
+        services === null;
 
     const loadingText = () => {
-        if (!uncompleteTask.isLoaded()) return `${t.common.loading} 任务...`;
-        if (!lastCompletedTasks.isLoaded())
+        if (uncompleteTask === null) return `${t.common.loading} 任务...`;
+        if (lastCompletedTasks === null)
             return `${t.common.loading} 最近任务...`;
-        if (!plans.isLoaded()) return `${t.common.loading} 备份计划...`;
-        if (!services.isLoaded()) return `${t.common.loading} 备份服务...`;
+        if (plans === null) return `${t.common.loading} 备份计划...`;
+        if (services === null) return `${t.common.loading} 备份服务...`;
     };
 
     const refreshUncompleteTasks = () => {
@@ -110,11 +109,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                     TaskState.FAILED,
                 ],
             })
-            .then(async (taskIds) => {
+            .then(async ({ task_ids }) => {
                 const taskInfos = await Promise.all(
-                    taskIds.map((taskid) => taskManager.getTaskInfo(taskid))
+                    task_ids.map((taskid) => taskManager.getTaskInfo(taskid))
                 );
-                setUncompleteTask(new LoadingData(taskInfos));
+                setUncompleteTask(taskInfos);
             });
     };
 
@@ -128,19 +127,19 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                 undefined,
                 [[ListTaskOrderBy.COMPLETE_TIME, ListOrder.DESC]]
             )
-            .then(async (taskIds) => {
+            .then(async ({ task_ids }) => {
                 const taskInfos = await Promise.all(
-                    taskIds
+                    task_ids
                         .slice(0, 3)
                         .map((taskid) => taskManager.getTaskInfo(taskid))
                 );
-                setLastCompletedTasks(new LoadingData(taskInfos));
+                setLastCompletedTasks(taskInfos);
             });
     };
 
     const refreshConsumeSize = () => {
         taskManager.consumeSizeSummary().then((data) => {
-            setConsumeSize(new LoadingData(data));
+            setConsumeSize(data);
         });
     };
 
@@ -149,7 +148,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             const planInfos = await Promise.all(
                 planIds.map((planid) => taskManager.getBackupPlan(planid))
             );
-            setPlans(new LoadingData(planInfos));
+            setPlans(planInfos);
         });
     };
 
@@ -160,7 +159,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                     taskManager.getBackupTarget(targetid)
                 )
             );
-            setServices(new LoadingData(targetInfos));
+            setServices(targetInfos);
         });
     };
 
@@ -172,16 +171,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         taskManager
             .statisticsSummary(last30DaysStart.getTime(), now)
             .then((data) => {
-                setStatistics(new LoadingData(data));
+                setStatistics(data);
             });
     };
 
     const completePercent = () => {
-        if (!statistics.isLoaded()) return "--";
-        const stat = statistics.check();
+        if (statistics === null) return "--";
         return TaskMgrHelper.percent(
-            stat.complete,
-            stat.complete + stat.failed
+            statistics.complete,
+            statistics.complete + statistics.failed
         ).toFixed(1);
     };
 
@@ -358,7 +356,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     };
 
     const handleBackupNow = () => {
-        const plan = plans.check().find((p) => p.plan_id === selectedPlan);
+        const plan = plans?.find((p) => p.plan_id === selectedPlan);
         if (plan) {
             toast.success(`已启动备份计划: ${plan.title}`);
         }
@@ -394,7 +392,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 {t.dashboard.subtitle}
                             </p>
                         </div>
-                        {services.check().length > 0 && (
+                        {services!.length > 0 && (
                             <div className="flex gap-3">
                                 <Button
                                     variant="outline"
@@ -404,7 +402,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     <Plus className="w-4 h-4" />
                                     {t.dashboard.createNewPlan}
                                 </Button>
-                                {plans.check().length > 0 && (
+                                {plans!.length > 0 && (
                                     <AlertDialog>
                                         <AlertDialogTrigger asChild>
                                             <Button className="gap-2">
@@ -432,8 +430,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         <SelectValue placeholder="选择备份计划" />
                                                     </SelectTrigger>
                                                     <SelectContent>
-                                                        {plans
-                                                            .check()
+                                                        {plans!
                                                             .filter(
                                                                 (plan) =>
                                                                     plan.policy
@@ -495,16 +492,14 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     isMobile ? "text-xl" : "text-2xl"
                                 } font-bold`}
                             >
-                                {uncompleteTask.check().length}
+                                {uncompleteTask!.length}
                             </div>
                             <p className="text-xs text-muted-foreground">
                                 {
-                                    uncompleteTask
-                                        .check()
-                                        .filter(
-                                            (task) =>
-                                                task.state === TaskState.RUNNING
-                                        ).length
+                                    uncompleteTask!.filter(
+                                        (task) =>
+                                            task.state === TaskState.RUNNING
+                                    ).length
                                 }
                                 个执行中
                             </p>
@@ -528,17 +523,17 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     isMobile ? "text-xl" : "text-2xl"
                                 } font-bold`}
                             >
-                                {consumeSize.isLoaded()
+                                {consumeSize
                                     ? TaskMgrHelper.formatSize(
-                                          consumeSize.check().total
+                                          consumeSize.total
                                       )
                                     : "--"}
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                {consumeSize.isLoaded()
+                                {consumeSize
                                     ? "+" +
                                       TaskMgrHelper.formatSize(
-                                          consumeSize.check().today
+                                          consumeSize.today
                                       ) +
                                       " 今日"
                                     : "--"}
@@ -563,13 +558,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     isMobile ? "text-xl" : "text-2xl"
                                 } font-bold`}
                             >
-                                {plans.check().length}
+                                {plans!.length}
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                {
-                                    plans.check().filter((plan) => plan.policy)
-                                        .length
-                                }
+                                {plans!.filter((plan) => plan.policy).length}
                                 个已启用
                             </p>
                         </CardContent>
@@ -625,9 +617,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             </Button>
                         </CardHeader>
                         <CardContent>
-                            {uncompleteTask.check().length === 0 &&
-                            services.check().length > 0 &&
-                            plans.check().length > 0 ? (
+                            {uncompleteTask!.length === 0 &&
+                            services!.length > 0 &&
+                            plans!.length > 0 ? (
                                 <div
                                     className={`flex ${
                                         isMobile
@@ -646,7 +638,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             ) : isMobile ? (
                                 <ScrollArea className="h-20">
                                     <div className="grid grid-cols-2 gap-3">
-                                        {uncompleteTask.check().map((task) => (
+                                        {uncompleteTask!.map((task) => (
                                             <div
                                                 key={task.taskid}
                                                 className="flex items-center gap-2 text-sm cursor-pointer"
@@ -687,144 +679,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 </div>
                                             </div>
                                         ))}
-                                        {/* {uncompleteTask.check().length ===
-                                            0 && (
-                                            <div className="text-center py-4">
-                                                {plans.check().length === 0 ? (
-                                                    <div
-                                                        className={`flex ${
-                                                            isMobile
-                                                                ? "flex-col gap-2"
-                                                                : "items-center gap-3"
-                                                        } justify-center`}
-                                                    >
-                                                        {services.check()
-                                                            .length === 0 ? (
-                                                            <>
-                                                                <Button
-                                                                    onClick={() =>
-                                                                        onNavigate?.(
-                                                                            "add-service"
-                                                                        )
-                                                                    }
-                                                                    size="sm"
-                                                                    className="gap-2"
-                                                                >
-                                                                    去配置备份服务
-                                                                </Button>
-                                                                {!isMobile && (
-                                                                    <span className="text-muted-foreground text-sm">
-                                                                        或
-                                                                    </span>
-                                                                )}
-                                                                <Button
-                                                                    variant="outline"
-                                                                    size="sm"
-                                                                    className="gap-2"
-                                                                    disabled
-                                                                >
-                                                                    新建备份计划
-                                                                </Button>
-                                                            </>
-                                                        ) : (
-                                                            <Button
-                                                                onClick={() =>
-                                                                    onNavigate?.(
-                                                                        "create-plan"
-                                                                    )
-                                                                }
-                                                                size="sm"
-                                                                className="gap-2"
-                                                            >
-                                                                新建备份计划
-                                                            </Button>
-                                                        )}
-                                                    </div>
-                                                ) : (
-                                                    <Button
-                                                        onClick={() =>
-                                                            onNavigate?.(
-                                                                "plans"
-                                                            )
-                                                        }
-                                                        size="sm"
-                                                        className="gap-2"
-                                                    >
-                                                        前往计划列表执行一次备份
-                                                    </Button>
-                                                )}
-                                            </div>
-                                        )} */}
                                     </div>
                                 </ScrollArea>
                             ) : (
                                 <div className="grid grid-cols-3 gap-3">
-                                    {/* {uncompleteTask.check().length === 0 && (
-                                        <div className="text-center py-2">
-                                            {plans.check().length === 0 ? (
-                                                <div
-                                                    className={`flex ${
-                                                        isMobile
-                                                            ? "flex-col gap-2"
-                                                            : "items-center gap-3"
-                                                    } justify-center`}
-                                                >
-                                                    {services.check().length ===
-                                                    0 ? (
-                                                        <>
-                                                            <Button
-                                                                onClick={() =>
-                                                                    onNavigate?.(
-                                                                        "add-service"
-                                                                    )
-                                                                }
-                                                                size="sm"
-                                                                className="gap-2"
-                                                            >
-                                                                去配置备份服务
-                                                            </Button>
-                                                            {!isMobile && (
-                                                                <span className="text-muted-foreground text-sm">
-                                                                    或
-                                                                </span>
-                                                            )}
-                                                            <Button
-                                                                variant="outline"
-                                                                size="sm"
-                                                                className="gap-2"
-                                                                disabled
-                                                            >
-                                                                新建备份计划
-                                                            </Button>
-                                                        </>
-                                                    ) : (
-                                                        <Button
-                                                            onClick={() =>
-                                                                onNavigate?.(
-                                                                    "create-plan"
-                                                                )
-                                                            }
-                                                            size="sm"
-                                                            className="gap-2"
-                                                        >
-                                                            新建备份计划
-                                                        </Button>
-                                                    )}
-                                                </div>
-                                            ) : (
-                                                <Button
-                                                    onClick={() =>
-                                                        onNavigate?.("plans")
-                                                    }
-                                                    size="sm"
-                                                    className="gap-2"
-                                                >
-                                                    前往计划列表执行一次备份
-                                                </Button>
-                                            )}
-                                        </div>
-                                    )} */}
-                                    {uncompleteTask.check().map((task) => (
+                                    {uncompleteTask!.map((task) => (
                                         <div
                                             key={task.taskid}
                                             className="flex items-center gap-3"
@@ -905,7 +764,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             </div>
                         </CardHeader>
                         <CardContent>
-                            {services.check().length === 0 ? (
+                            {services!.length === 0 ? (
                                 <div
                                     className={`flex ${
                                         isMobile
@@ -926,7 +785,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             ) : isMobile ? (
                                 <ScrollArea className="h-20">
                                     <div className="space-y-2">
-                                        {services.check().map((service) => {
+                                        {services!.map((service) => {
                                             const ServiceIcon = getServiceIcon(
                                                 service.target_type
                                             );
@@ -997,7 +856,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 </ScrollArea>
                             ) : (
                                 <div className="grid grid-cols-3 gap-3">
-                                    {services.check().map((service) => {
+                                    {services!.map((service) => {
                                         const ServiceIcon = getServiceIcon(
                                             service.target_type
                                         );
@@ -1097,7 +956,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             </div>
                         </CardHeader>
                         <CardContent>
-                            {plans.check().length === 0 ? (
+                            {plans!.length === 0 ? (
                                 <div
                                     className={`flex ${
                                         isMobile
@@ -1105,7 +964,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                             : "items-center gap-3"
                                     } justify-center`}
                                 >
-                                    {services.check().length > 0 && (
+                                    {services!.length > 0 && (
                                         <Button
                                             onClick={() =>
                                                 onNavigate?.("create-plan")
@@ -1120,11 +979,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             ) : isMobile ? (
                                 <ScrollArea className="h-24">
                                     <div className="grid grid-cols-2 gap-3">
-                                        {plans.check().map((plan) => {
+                                        {plans!.map((plan) => {
                                             const state =
                                                 TaskMgrHelper.planState(
                                                     plan,
-                                                    uncompleteTask.check()
+                                                    uncompleteTask!
                                                 );
                                             return (
                                                 <div
@@ -1172,7 +1031,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 </ScrollArea>
                             ) : (
                                 <div className="space-y-3">
-                                    {plans.check().map((plan) => (
+                                    {plans!.map((plan) => (
                                         <div
                                             key={plan.plan_id}
                                             className="flex flex-col gap-2 border rounded-lg p-3 hover:bg-accent/30"
@@ -1186,7 +1045,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         {getPlanStatusBadge(
                                                             TaskMgrHelper.planState(
                                                                 plan,
-                                                                uncompleteTask.check()
+                                                                uncompleteTask!
                                                             )
                                                         )}
                                                     </div>
@@ -1234,7 +1093,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                         </CardHeader>
                         <CardContent>
                             <div className="space-y-3">
-                                {lastCompletedTasks.check().map((task) => (
+                                {lastCompletedTasks!.map((task) => (
                                     <div
                                         key={task.taskid}
                                         className={`flex items-center justify-between ${
@@ -1291,7 +1150,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                             <SelectValue placeholder="选择备份计划" />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            {plans.check().map((plan) => (
+                                            {plans!.map((plan) => (
                                                 <SelectItem
                                                     key={plan.plan_id}
                                                     value={plan.plan_id}

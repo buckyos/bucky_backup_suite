@@ -280,14 +280,14 @@ export class BackupTaskManager {
         offset: number = 0,
         limit?: number,
         orderBy?: Array<[ListTaskOrderBy, ListOrder]>
-    ): Promise<string[]> {
+    ): Promise<{ task_ids: string[]; total: number }> {
         const result = await this.rpc_client.call("list_backup_task", {
             filter: filter,
             offset: offset,
             limit: limit,
             order_by: orderBy,
         });
-        return result.task_list;
+        return { task_ids: result.task_list, total: result.total };
     }
 
     async getTaskInfo(taskId: string): Promise<TaskInfo> {
@@ -345,6 +345,14 @@ export class BackupTaskManager {
         return result.result === "success";
     }
 
+    async removeBackupTask(taskId: string) {
+        const result = await this.rpc_client.call("remove_backup_task", {
+            taskid: taskId,
+        });
+        await this.emitTaskEvent(TaskEventType.REMOVE_TASK, taskId);
+        return result.result === "success";
+    }
+
     async validatePath(path: string) {
         const result = await this.rpc_client.call("validate_path", {
             path: path,
@@ -357,8 +365,8 @@ export class BackupTaskManager {
         let taskid_list = await this.listBackupTasks({
             state: [TaskState.PAUSED],
         });
-        if (taskid_list.length > 0) {
-            let last_task = taskid_list[0];
+        if (taskid_list.task_ids.length > 0) {
+            let last_task = taskid_list.task_ids[0];
             console.log("resume last task:", last_task);
             this.resumeBackupTask(last_task);
             await this.emitTaskEvent(TaskEventType.RESUME_TASK, last_task);
@@ -369,7 +377,7 @@ export class BackupTaskManager {
         let taskid_list = await this.listBackupTasks({
             state: [TaskState.RUNNING, TaskState.PENDING],
         });
-        for (let taskid of taskid_list) {
+        for (let taskid of taskid_list.task_ids) {
             this.pauseBackupTask(taskid);
             await this.emitTaskEvent(TaskEventType.PAUSE_TASK, taskid);
         }
@@ -468,13 +476,13 @@ export class BackupTaskManager {
                             ],
                         });
                         await Promise.all(
-                            taskid_list.map((taskid) =>
+                            taskid_list.task_ids.map((taskid) =>
                                 this.getTaskInfo(taskid)
                             )
                         );
                         // remove tasks that are no longer uncomplete
                         for (const taskid of this.uncomplete_tasks.keys()) {
-                            if (!taskid_list.includes(taskid)) {
+                            if (!taskid_list.task_ids.includes(taskid)) {
                                 const comp_task =
                                     this.uncomplete_tasks.get(taskid);
                                 if (

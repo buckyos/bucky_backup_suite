@@ -85,9 +85,9 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                     TaskState.PENDING,
                 ],
             })
-            .then(async (taskIds) => {
+            .then(async ({ task_ids }) => {
                 const uncompleteTasks = await Promise.all(
-                    taskIds.map((id) => taskManager.getTaskInfo(id))
+                    task_ids.map((id) => taskManager.getTaskInfo(id))
                 );
                 setUncompleteTasks(uncompleteTasks);
             });

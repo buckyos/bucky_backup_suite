@@ -78,18 +78,3 @@ export function LoadingPage({ status }: LoadingPageProps) {
         </div>
     );
 }
-
-export class LoadingData<T> {
-    private data: T | null;
-
-    constructor(data: T | null = null) {
-        this.data = data;
-    }
-
-    public check(): T {
-        return this.data!;
-    }
-    public isLoaded(): boolean {
-        return this.data !== null;
-    }
-}
