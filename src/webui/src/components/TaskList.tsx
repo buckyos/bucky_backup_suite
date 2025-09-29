@@ -199,25 +199,13 @@ export function TaskList({ onNavigate }: TaskListProps) {
     const [runningTaskCount, setRunningTaskCount] = useState(0);
     const [filterTaskCount, setFilterTaskCount] = useState(0);
     const [allTaskCount, setAllTaskCount] = useState(0);
-    const [selectedRunningTasks, setSelectedRunningTasks] = useState<
-        TaskInfo[]
-    >([]);
-    const [selectedAnyTasks, setSelectedAnyTasks] = useState<TaskInfo[]>([]);
     const [showDetailTask, setShowDetailTask] = useState<TaskInfo | null>(null);
     const [plans, setPlans] = useState<BackupPlanInfo[]>([]);
-    const [activeTab, setActiveTab] = useState<"running" | "all">("running");
 
     useEffect(() => {
         const timerId = taskManager.startRefreshUncompleteTaskStateTimer();
         return () => taskManager.stopRefreshUncompleteTaskStateTimer(timerId);
     }, []);
-
-    const selectTasksInCurrentTab = () => {
-        if (activeTab === "all") {
-            return selectedAnyTasks;
-        }
-        return selectedRunningTasks;
-    };
 
     return (
         <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-4`}>
@@ -229,14 +217,7 @@ export function TaskList({ onNavigate }: TaskListProps) {
             </div>
 
             {/* 任务列表 */}
-            <Tabs
-                defaultValue="running"
-                className="space-y-4"
-                onValueChange={(val) => {
-                    console.log("Selected tab:", val);
-                    setActiveTab(val as "running" | "all");
-                }}
-            >
+            <Tabs defaultValue="running" className="space-y-4">
                 <div className="flex items-center justify-between">
                     <TabsList>
                         <TabsTrigger value="running">
@@ -250,103 +231,6 @@ export function TaskList({ onNavigate }: TaskListProps) {
                             )
                         </TabsTrigger>
                     </TabsList>
-                    {/* 
-                    {isMobile && (
-                        <Sheet open={showFilters} onOpenChange={setShowFilters}>
-                            <SheetTrigger asChild>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="gap-2"
-                                >
-                                    <Filter className="w-4 h-4" />
-                                    {t.common.filter}
-                                </Button>
-                            </SheetTrigger>
-                            <SheetContent side="right" className="w-80">
-                                <SheetHeader>
-                                    <SheetTitle>筛选和搜索</SheetTitle>
-                                </SheetHeader>
-                                <div className="space-y-4 mt-6">
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">
-                                            {t.common.search}
-                                        </label>
-                                        <div className="relative">
-                                            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                                            <Input
-                                                placeholder="搜索任务或计划名称..."
-                                                value={searchQuery}
-                                                onChange={(e) =>
-                                                    setSearchQuery(
-                                                        e.target.value
-                                                    )
-                                                }
-                                                className="pl-10"
-                                            />
-                                        </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">
-                                            {t.common.status}
-                                        </label>
-                                        <Select
-                                            value={statusFilter}
-                                            onValueChange={setStatusFilter}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="all">
-                                                    全部状态
-                                                </SelectItem>
-                                                <SelectItem value="running">
-                                                    {t.tasks.running}
-                                                </SelectItem>
-                                                <SelectItem value="completed">
-                                                    {t.tasks.completed}
-                                                </SelectItem>
-                                                <SelectItem value="paused">
-                                                    {t.tasks.paused}
-                                                </SelectItem>
-                                                <SelectItem value="failed">
-                                                    {t.tasks.failed}
-                                                </SelectItem>
-                                                <SelectItem value="queued">
-                                                    {t.tasks.queued}
-                                                </SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">
-                                            {t.common.type}
-                                        </label>
-                                        <Select
-                                            value={typeFilter}
-                                            onValueChange={setTypeFilter}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="all">
-                                                    全部类型
-                                                </SelectItem>
-                                                <SelectItem value="backup">
-                                                    {t.tasks.backup}任务
-                                                </SelectItem>
-                                                <SelectItem value="restore">
-                                                    {t.tasks.restore}任务
-                                                </SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                </div>
-                            </SheetContent>
-                        </Sheet>
-                    )} */}
                 </div>
 
                 <TabsContent value="all" className="space-y-4">
@@ -780,7 +664,7 @@ function AllTaskTabContent({
     const [statusFilter, setStatusFilter] = useState<TaskState[] | null>(null);
     const [typeFilter, setTypeFilter] = useState<TaskType | null>(null);
     const [filterTasks, setFilterTasks] = useState<TaskInfo[] | null>(null);
-    const [isSelectAll, setIsSelectAll] = useState(false);
+    const [showFilters, setShowFilters] = useState(false);
     const [serviceCount, setServiceCount] = useState(0);
     const [allTaskCount, setAllTaskCount] = useState(0);
 
@@ -854,7 +738,108 @@ function AllTaskTabContent({
 
     return (
         <>
-            {!isMobile && (
+            {isMobile ? (
+                <Sheet open={showFilters} onOpenChange={setShowFilters}>
+                    <SheetTrigger asChild>
+                        <Button variant="outline" size="sm" className="gap-2">
+                            <Filter className="w-4 h-4" />
+                            {t.common.filter}
+                        </Button>
+                    </SheetTrigger>
+                    <SheetContent side="right" className="w-80">
+                        <SheetHeader>
+                            <SheetTitle>筛选和搜索</SheetTitle>
+                        </SheetHeader>
+                        <div className="space-y-4 mt-6">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">
+                                    {t.common.search}
+                                </label>
+                                <div className="relative">
+                                    <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                                    <Input
+                                        placeholder="搜索计划名称..."
+                                        value={searchPlanFilter}
+                                        onChange={(e) =>
+                                            setSearchPlanFilter(e.target.value)
+                                        }
+                                        className="pl-10"
+                                    />
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">
+                                    {t.common.status}
+                                </label>
+                                <Select
+                                    value={statusFilter}
+                                    onValueChange={(
+                                        taskState: TaskState | "all"
+                                    ) =>
+                                        taskState === "all"
+                                            ? setStatusFilter(null)
+                                            : setStatusFilter([taskState])
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">
+                                            全部状态
+                                        </SelectItem>
+                                        <SelectItem value={TaskState.RUNNING}>
+                                            {t.tasks.running}
+                                        </SelectItem>
+                                        <SelectItem value={TaskState.DONE}>
+                                            {t.tasks.completed}
+                                        </SelectItem>
+                                        <SelectItem value={TaskState.PAUSED}>
+                                            {t.tasks.paused}
+                                        </SelectItem>
+                                        <SelectItem value={TaskState.FAILED}>
+                                            {t.tasks.failed}
+                                        </SelectItem>
+                                        <SelectItem value={TaskState.PENDING}>
+                                            {t.tasks.queued}
+                                        </SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium">
+                                    {t.common.type}
+                                </label>
+                                <Select
+                                    value={typeFilter}
+                                    onValueChange={(
+                                        taskType: TaskType | "all"
+                                    ) =>
+                                        taskType === "all"
+                                            ? setTypeFilter(null)
+                                            : setTypeFilter(taskType)
+                                    }
+                                >
+                                    <SelectTrigger>
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="all">
+                                            全部类型
+                                        </SelectItem>
+                                        <SelectItem value={TaskType.BACKUP}>
+                                            {t.tasks.backup}任务
+                                        </SelectItem>
+                                        <SelectItem value={TaskType.RESTORE}>
+                                            {t.tasks.restore}任务
+                                        </SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        </div>
+                    </SheetContent>
+                </Sheet>
+            ) : (
                 <>
                     <Card>
                         <CardHeader>
