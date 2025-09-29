@@ -156,6 +156,7 @@ export interface Translations {
     allTasks: string;
     runningTasks: string;
     filterTasks: string;
+    showingCountLabel: string;
     searchPlaceholder: string;
     planName: string;
     taskType: string;
@@ -350,6 +351,7 @@ const zhTranslations: Translations = {
     allTasks: '全部任务',
     runningTasks: '执行中',
     filterTasks: '筛选任务',
+    showingCountLabel: '显示 {visible} / {total} 个任务',
     searchPlaceholder: '搜索任务名称或计划',
     planName: '计划名称',
     taskType: '任务类型',
@@ -544,6 +546,7 @@ const enTranslations: Translations = {
     allTasks: 'All Tasks',
     runningTasks: 'Running',
     filterTasks: 'Filter Tasks',
+    showingCountLabel: 'Showing {visible} of {total} tasks',
     searchPlaceholder: 'Search tasks or plans',
     planName: 'Plan Name',
     taskType: 'Task Type',

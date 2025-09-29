@@ -122,6 +122,16 @@ function getTypeBadge(type: TaskType, t: Translations) {
     );
 }
 
+function formatTaskCountLabel(
+    template: string,
+    visible: number,
+    total: number
+) {
+    return template
+        .replace("{visible}", visible.toString())
+        .replace("{total}", total.toString());
+}
+
 enum TaskAction {
     PAUSE,
     REMOVE,
@@ -736,109 +746,163 @@ function AllTaskTabContent({
         );
     }
 
+    const visibleTaskCount = filterTasks.length;
+    const activeFilterCount =
+        (searchPlanFilter ? 1 : 0) +
+        (statusFilter?.length ?? 0) +
+        (typeFilter ? 1 : 0);
+    const hasActiveFilters = activeFilterCount > 0;
+    const taskCountLabel = formatTaskCountLabel(
+        t.tasks.showingCountLabel,
+        visibleTaskCount,
+        allTaskCount
+    );
+
     return (
         <>
             {isMobile ? (
-                <Sheet open={showFilters} onOpenChange={setShowFilters}>
-                    <SheetTrigger asChild>
-                        <Button variant="outline" size="sm" className="gap-2">
-                            <Filter className="w-4 h-4" />
-                            {t.common.filter}
-                        </Button>
-                    </SheetTrigger>
-                    <SheetContent side="right" className="w-80">
-                        <SheetHeader>
-                            <SheetTitle>筛选和搜索</SheetTitle>
-                        </SheetHeader>
-                        <div className="space-y-4 mt-6">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">
-                                    {t.common.search}
-                                </label>
-                                <div className="relative">
-                                    <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        placeholder="搜索计划名称..."
-                                        value={searchPlanFilter}
-                                        onChange={(e) =>
-                                            setSearchPlanFilter(e.target.value)
-                                        }
-                                        className="pl-10"
-                                    />
-                                </div>
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">
-                                    {t.common.status}
-                                </label>
-                                <Select
-                                    value={statusFilter}
-                                    onValueChange={(
-                                        taskState: TaskState | "all"
-                                    ) =>
-                                        taskState === "all"
-                                            ? setStatusFilter(null)
-                                            : setStatusFilter([taskState])
-                                    }
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">
-                                            全部状态
-                                        </SelectItem>
-                                        <SelectItem value={TaskState.RUNNING}>
-                                            {t.tasks.running}
-                                        </SelectItem>
-                                        <SelectItem value={TaskState.DONE}>
-                                            {t.tasks.completed}
-                                        </SelectItem>
-                                        <SelectItem value={TaskState.PAUSED}>
-                                            {t.tasks.paused}
-                                        </SelectItem>
-                                        <SelectItem value={TaskState.FAILED}>
-                                            {t.tasks.failed}
-                                        </SelectItem>
-                                        <SelectItem value={TaskState.PENDING}>
-                                            {t.tasks.queued}
-                                        </SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">
-                                    {t.common.type}
-                                </label>
-                                <Select
-                                    value={typeFilter}
-                                    onValueChange={(
-                                        taskType: TaskType | "all"
-                                    ) =>
-                                        taskType === "all"
-                                            ? setTypeFilter(null)
-                                            : setTypeFilter(taskType)
-                                    }
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">
-                                            全部类型
-                                        </SelectItem>
-                                        <SelectItem value={TaskType.BACKUP}>
-                                            {t.tasks.backup}任务
-                                        </SelectItem>
-                                        <SelectItem value={TaskType.RESTORE}>
-                                            {t.tasks.restore}任务
-                                        </SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
+                <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="space-y-1">
+                            <p className="text-xs font-medium text-muted-foreground">
+                                匹配任务
+                            </p>
+                            <p className="text-sm font-semibold text-foreground">
+                                {taskCountLabel}
+                            </p>
                         </div>
-                    </SheetContent>
-                </Sheet>
+                        <Sheet open={showFilters} onOpenChange={setShowFilters}>
+                            <SheetTrigger asChild>
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    className="flex items-center gap-1 rounded-full px-3 py-2 shadow-sm"
+                                >
+                                    <Filter className="h-4 w-4" />
+                                    <span>{t.common.filter}</span>
+                                    {hasActiveFilters && (
+                                        <span className="inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
+                                            {activeFilterCount}
+                                        </span>
+                                    )}
+                                </Button>
+                            </SheetTrigger>
+                            <SheetContent
+                                side="right"
+                                className="w-[min(85vw,20rem)] sm:w-80"
+                            >
+                                <SheetHeader>
+                                    <SheetTitle>{t.common.filter}</SheetTitle>
+                                </SheetHeader>
+                                <div className="space-y-4 mt-6">
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">
+                                            {t.common.search}
+                                        </label>
+                                        <div className="relative">
+                                            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                                            <Input
+                                                placeholder="搜索计划名称..."
+                                                value={searchPlanFilter}
+                                                onChange={(e) =>
+                                                    setSearchPlanFilter(
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="pl-10"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">
+                                            {t.common.status}
+                                        </label>
+                                        <Select
+                                            value={statusFilter}
+                                            onValueChange={(
+                                                taskState: TaskState | "all"
+                                            ) =>
+                                                taskState === "all"
+                                                    ? setStatusFilter(null)
+                                                    : setStatusFilter([
+                                                          taskState,
+                                                      ])
+                                            }
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="all">
+                                                    全部状态
+                                                </SelectItem>
+                                                <SelectItem
+                                                    value={TaskState.RUNNING}
+                                                >
+                                                    {t.tasks.running}
+                                                </SelectItem>
+                                                <SelectItem
+                                                    value={TaskState.DONE}
+                                                >
+                                                    {t.tasks.completed}
+                                                </SelectItem>
+                                                <SelectItem
+                                                    value={TaskState.PAUSED}
+                                                >
+                                                    {t.tasks.paused}
+                                                </SelectItem>
+                                                <SelectItem
+                                                    value={TaskState.FAILED}
+                                                >
+                                                    {t.tasks.failed}
+                                                </SelectItem>
+                                                <SelectItem
+                                                    value={TaskState.PENDING}
+                                                >
+                                                    {t.tasks.queued}
+                                                </SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-sm font-medium">
+                                            {t.common.type}
+                                        </label>
+                                        <Select
+                                            value={typeFilter}
+                                            onValueChange={(
+                                                taskType: TaskType | "all"
+                                            ) =>
+                                                taskType === "all"
+                                                    ? setTypeFilter(null)
+                                                    : setTypeFilter(taskType)
+                                            }
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="all">
+                                                    全部类型
+                                                </SelectItem>
+                                                <SelectItem
+                                                    value={TaskType.BACKUP}
+                                                >
+                                                    {t.tasks.backup}任务
+                                                </SelectItem>
+                                                <SelectItem
+                                                    value={TaskType.RESTORE}
+                                                >
+                                                    {t.tasks.restore}任务
+                                                </SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                            </SheetContent>
+                        </Sheet>
+                    </div>
+                </div>
             ) : (
                 <>
                     <Card>
