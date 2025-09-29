@@ -233,8 +233,8 @@ export function TaskList({ onNavigate }: TaskListProps) {
                         <TabsTrigger value="running">
                             {t.tasks.runningTasks} ({runningTaskCount})
                         </TabsTrigger>
-                        <TabsTrigger value="all">
-                            {t.tasks.allTasks} (
+                        <TabsTrigger value="history">
+                            {"历史任务"} (
                             {filterTaskCount
                                 ? `${filterTaskCount}/${allTaskCount}`
                                 : allTaskCount}{" "}
@@ -243,8 +243,8 @@ export function TaskList({ onNavigate }: TaskListProps) {
                     </TabsList>
                 </div>
 
-                <TabsContent value="all" className="space-y-4">
-                    <AllTaskTabContent
+                <TabsContent value="history" className="space-y-4">
+                    <HistoryTaskTabContent
                         t={t}
                         isMobile={isMobile}
                         setFilterTaskCount={setFilterTaskCount}
@@ -650,7 +650,7 @@ function RunningTaskTabContent({
     );
 }
 
-function AllTaskTabContent({
+function HistoryTaskTabContent({
     isMobile,
     t,
     setFilterTaskCount,
@@ -671,10 +671,8 @@ function AllTaskTabContent({
 }) {
     // Ensure hooks order is stable on every render
     const [searchPlanFilter, setSearchPlanFilter] = useState("");
-    const [statusFilter, setStatusFilter] = useState<TaskState[] | null>(null);
     const [typeFilter, setTypeFilter] = useState<TaskType | null>(null);
     const [filterTasks, setFilterTasks] = useState<TaskInfo[] | null>(null);
-    const [showFilters, setShowFilters] = useState(false);
     const [serviceCount, setServiceCount] = useState(0);
     const [allTaskCount, setAllTaskCount] = useState(0);
 
@@ -685,7 +683,7 @@ function AllTaskTabContent({
                     ? [searchPlanFilter]
                     : undefined,
                 type: typeFilter ? [typeFilter] : undefined,
-                state: statusFilter ? statusFilter : undefined,
+                state: [TaskState.DONE],
             },
             {
                 plans,
@@ -705,11 +703,6 @@ function AllTaskTabContent({
     const taskEventHandler = async (event: TaskEventType, data: any) => {
         console.log("task event:", event, data);
         switch (event) {
-            case TaskEventType.CREATE_TASK:
-            case TaskEventType.FAIL_TASK:
-            case TaskEventType.PAUSE_TASK:
-            case TaskEventType.RESUME_TASK:
-            case TaskEventType.UPDATE_TASK:
             case TaskEventType.COMPLETE_TASK:
             case TaskEventType.REMOVE_TASK:
             case TaskEventType.CREATE_TARGET:
@@ -729,7 +722,7 @@ function AllTaskTabContent({
 
     useEffect(() => {
         refreshList();
-    }, [searchPlanFilter, statusFilter, typeFilter]);
+    }, [searchPlanFilter, typeFilter]);
 
     if (filterTasks === null) {
         return <Loading isMobile={isMobile} t={t} />;
@@ -746,164 +739,9 @@ function AllTaskTabContent({
         );
     }
 
-    const visibleTaskCount = filterTasks.length;
-    const activeFilterCount =
-        (searchPlanFilter ? 1 : 0) +
-        (statusFilter?.length ?? 0) +
-        (typeFilter ? 1 : 0);
-    const hasActiveFilters = activeFilterCount > 0;
-    const taskCountLabel = formatTaskCountLabel(
-        t.tasks.showingCountLabel,
-        visibleTaskCount,
-        allTaskCount
-    );
-
     return (
         <>
-            {isMobile ? (
-                <div className="rounded-lg border border-border/60 bg-muted/30 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="space-y-1">
-                            <p className="text-xs font-medium text-muted-foreground">
-                                匹配任务
-                            </p>
-                            <p className="text-sm font-semibold text-foreground">
-                                {taskCountLabel}
-                            </p>
-                        </div>
-                        <Sheet open={showFilters} onOpenChange={setShowFilters}>
-                            <SheetTrigger asChild>
-                                <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="flex items-center gap-1 rounded-full px-3 py-2 shadow-sm"
-                                >
-                                    <Filter className="h-4 w-4" />
-                                    <span>{t.common.filter}</span>
-                                    {hasActiveFilters && (
-                                        <span className="inline-flex h-5 min-w-[1.5rem] items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
-                                            {activeFilterCount}
-                                        </span>
-                                    )}
-                                </Button>
-                            </SheetTrigger>
-                            <SheetContent
-                                side="right"
-                                className="w-[min(85vw,20rem)] sm:w-80"
-                            >
-                                <SheetHeader>
-                                    <SheetTitle>{t.common.filter}</SheetTitle>
-                                </SheetHeader>
-                                <div className="space-y-4 mt-6">
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">
-                                            {t.common.search}
-                                        </label>
-                                        <div className="relative">
-                                            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                                            <Input
-                                                placeholder="搜索计划名称..."
-                                                value={searchPlanFilter}
-                                                onChange={(e) =>
-                                                    setSearchPlanFilter(
-                                                        e.target.value
-                                                    )
-                                                }
-                                                className="pl-10"
-                                            />
-                                        </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">
-                                            {t.common.status}
-                                        </label>
-                                        <Select
-                                            value={statusFilter}
-                                            onValueChange={(
-                                                taskState: TaskState | "all"
-                                            ) =>
-                                                taskState === "all"
-                                                    ? setStatusFilter(null)
-                                                    : setStatusFilter([
-                                                          taskState,
-                                                      ])
-                                            }
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="all">
-                                                    全部状态
-                                                </SelectItem>
-                                                <SelectItem
-                                                    value={TaskState.RUNNING}
-                                                >
-                                                    {t.tasks.running}
-                                                </SelectItem>
-                                                <SelectItem
-                                                    value={TaskState.DONE}
-                                                >
-                                                    {t.tasks.completed}
-                                                </SelectItem>
-                                                <SelectItem
-                                                    value={TaskState.PAUSED}
-                                                >
-                                                    {t.tasks.paused}
-                                                </SelectItem>
-                                                <SelectItem
-                                                    value={TaskState.FAILED}
-                                                >
-                                                    {t.tasks.failed}
-                                                </SelectItem>
-                                                <SelectItem
-                                                    value={TaskState.PENDING}
-                                                >
-                                                    {t.tasks.queued}
-                                                </SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-sm font-medium">
-                                            {t.common.type}
-                                        </label>
-                                        <Select
-                                            value={typeFilter}
-                                            onValueChange={(
-                                                taskType: TaskType | "all"
-                                            ) =>
-                                                taskType === "all"
-                                                    ? setTypeFilter(null)
-                                                    : setTypeFilter(taskType)
-                                            }
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                <SelectItem value="all">
-                                                    全部类型
-                                                </SelectItem>
-                                                <SelectItem
-                                                    value={TaskType.BACKUP}
-                                                >
-                                                    {t.tasks.backup}任务
-                                                </SelectItem>
-                                                <SelectItem
-                                                    value={TaskType.RESTORE}
-                                                >
-                                                    {t.tasks.restore}任务
-                                                </SelectItem>
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                </div>
-                            </SheetContent>
-                        </Sheet>
-                    </div>
-                </div>
-            ) : (
+            {
                 <>
                     <Card>
                         <CardHeader>
@@ -930,61 +768,6 @@ function AllTaskTabContent({
                                             className="pl-10"
                                         />
                                     </div>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-sm font-medium">
-                                        {t.common.status}
-                                    </label>
-                                    <Select
-                                        value={statusFilter}
-                                        onValueChange={(
-                                            selectStates: TaskState | "all"
-                                        ) => {
-                                            console.log(
-                                                "Selected status:",
-                                                selectStates
-                                            );
-                                            setStatusFilter(
-                                                selectStates.includes("all")
-                                                    ? null
-                                                    : [
-                                                          selectStates as TaskState,
-                                                      ]
-                                            );
-                                        }}
-                                    >
-                                        <SelectTrigger>
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="all">
-                                                全部状态
-                                            </SelectItem>
-                                            <SelectItem
-                                                value={TaskState.RUNNING}
-                                            >
-                                                {t.tasks.running}
-                                            </SelectItem>
-                                            <SelectItem value={TaskState.DONE}>
-                                                {t.tasks.completed}
-                                            </SelectItem>
-                                            <SelectItem
-                                                value={TaskState.PAUSED}
-                                            >
-                                                {t.tasks.paused}
-                                            </SelectItem>
-                                            <SelectItem
-                                                value={TaskState.FAILED}
-                                            >
-                                                {t.tasks.failed}
-                                            </SelectItem>
-                                            <SelectItem
-                                                value={TaskState.PENDING}
-                                            >
-                                                {t.tasks.queued}
-                                            </SelectItem>
-                                        </SelectContent>
-                                    </Select>
                                 </div>
                                 <div className="space-y-2">
                                     <label className="text-sm font-medium">
@@ -1044,7 +827,7 @@ function AllTaskTabContent({
                         </CardContent>
                     </Card>
                 </>
-            )}
+            }
 
             {filterTasks.length === 0 ? (
                 <Card>
