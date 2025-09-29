@@ -355,8 +355,6 @@ export function TaskList({ onNavigate }: TaskListProps) {
                         isMobile={isMobile}
                         setFilterTaskCount={setFilterTaskCount}
                         setTaskCount={setAllTaskCount}
-                        selectedTasks={selectedAnyTasks}
-                        setSelectedTasks={setSelectedAnyTasks}
                         showDetailTask={setShowDetailTask}
                         plans={plans}
                         setPlans={setPlans}
@@ -370,8 +368,6 @@ export function TaskList({ onNavigate }: TaskListProps) {
                         isMobile={isMobile}
                         setTaskCount={setRunningTaskCount}
                         setAllTaskCount={setAllTaskCount}
-                        selectedTasks={selectedRunningTasks}
-                        setSelectedTasks={setSelectedRunningTasks}
                         showDetailTask={setShowDetailTask}
                         plans={plans}
                         setPlans={setPlans}
@@ -408,20 +404,14 @@ function Loading({ isMobile, t }: { isMobile?: boolean; t: Translations }) {
 function refreshFilterTasks(
     filter: TaskFilter,
     {
-        isSelectAll,
         plans,
         setPlans,
-        selectedTasks,
-        setSelectedTasks,
         setFilterTasks,
         setServiceCount,
         setAllTaskCount,
     }: {
-        isSelectAll: () => boolean;
         plans: BackupPlanInfo[];
         setPlans: (plans: BackupPlanInfo[]) => void;
-        selectedTasks: TaskInfo[];
-        setSelectedTasks: (tasks: TaskInfo[]) => void;
         setFilterTasks: (tasks: TaskInfo[]) => void;
         setServiceCount: (count: number) => void;
         setAllTaskCount: (count: number) => void;
@@ -454,18 +444,6 @@ function refreshFilterTasks(
         }
         setFilterTasks(taskInfos);
         setAllTaskCount(total);
-        if (isSelectAll()) {
-            selectedTasks.splice(0, selectedTasks.length);
-            taskInfos.forEach((t) => selectedTasks.push(t));
-            setSelectedTasks(selectedTasks);
-        } else {
-            const newSelectedTasks = selectedTasks.filter((t) =>
-                taskInfos.find((ft) => ft.taskid === t.taskid)
-            );
-            selectedTasks.splice(0, selectedTasks.length);
-            newSelectedTasks.forEach((t) => selectedTasks.push(t));
-            setSelectedTasks(selectedTasks);
-        }
 
         if (total === 0) {
             await refreshAllPlans();
@@ -556,8 +534,6 @@ function RunningTaskTabContent({
     t,
     setTaskCount,
     setAllTaskCount,
-    selectedTasks,
-    setSelectedTasks,
     showDetailTask,
     plans,
     setPlans,
@@ -567,8 +543,6 @@ function RunningTaskTabContent({
     t: Translations;
     setTaskCount: (count: number) => void;
     setAllTaskCount: (count: number) => void;
-    selectedTasks: TaskInfo[];
-    setSelectedTasks: (task: TaskInfo[]) => void;
     showDetailTask: (task: TaskInfo | null) => void;
     plans: BackupPlanInfo[];
     setPlans: (plans: BackupPlanInfo[]) => void;
@@ -579,7 +553,6 @@ function RunningTaskTabContent({
     );
     const [serviceCount, setServiceCount] = useState(0);
     const [allTaskCount, setAllTaskCountInner] = useState(0);
-    const [isSelectAll, setIsSelectAll] = useState(false);
 
     const refreshUncompleteTasks = () => {
         refreshFilterTasks(
@@ -592,11 +565,8 @@ function RunningTaskTabContent({
                 ],
             },
             {
-                isSelectAll: () => isSelectAll,
                 plans,
                 setPlans,
-                selectedTasks,
-                setSelectedTasks,
                 setFilterTasks: (tasks: TaskInfo[]) => {
                     setUncompleteTasks(tasks);
                     setTaskCount(tasks.length);
@@ -791,8 +761,6 @@ function AllTaskTabContent({
     t,
     setFilterTaskCount,
     setTaskCount,
-    selectedTasks,
-    setSelectedTasks,
     showDetailTask,
     plans,
     setPlans,
@@ -802,8 +770,6 @@ function AllTaskTabContent({
     t: Translations;
     setFilterTaskCount: (count: number) => void;
     setTaskCount: (count: number) => void;
-    selectedTasks: TaskInfo[];
-    setSelectedTasks: (task: TaskInfo[]) => void;
     showDetailTask: (task: TaskInfo | null) => void;
     plans: BackupPlanInfo[];
     setPlans: (plans: BackupPlanInfo[]) => void;
@@ -818,27 +784,6 @@ function AllTaskTabContent({
     const [serviceCount, setServiceCount] = useState(0);
     const [allTaskCount, setAllTaskCount] = useState(0);
 
-    const toggleTaskSelection = (task: TaskInfo) => {
-        const index = selectedTasks.findIndex((t) => t.taskid === task.taskid);
-        if (index === -1) {
-            selectedTasks.push(task);
-            setSelectedTasks(selectedTasks);
-        } else {
-            selectedTasks.splice(index, 1);
-            setSelectedTasks(selectedTasks);
-        }
-    };
-
-    const toggleAllSelection = () => {
-        if (isSelectAll) {
-            setIsSelectAll(false);
-            setSelectedTasks([]);
-        } else {
-            setIsSelectAll(true);
-            setSelectedTasks([...filterTasks!]);
-        }
-    };
-
     const refreshList = () => {
         refreshFilterTasks(
             {
@@ -849,11 +794,8 @@ function AllTaskTabContent({
                 state: statusFilter ? statusFilter : undefined,
             },
             {
-                isSelectAll: () => isSelectAll,
                 plans,
                 setPlans,
-                selectedTasks,
-                setSelectedTasks,
                 setFilterTasks: (tasks: TaskInfo[]) => {
                     setFilterTasks(tasks);
                     setFilterTaskCount(tasks.length);
@@ -1033,10 +975,6 @@ function AllTaskTabContent({
                     <Card>
                         <CardContent className="py-3">
                             <div className="flex items-center gap-4">
-                                <Checkbox
-                                    checked={isSelectAll}
-                                    onCheckedChange={toggleAllSelection}
-                                />
                                 <div className="grid grid-cols-6 gap-4 flex-1 items-center">
                                     <div className="font-medium">任务名称</div>
                                     <div className="font-medium">
@@ -1239,18 +1177,6 @@ function AllTaskTabContent({
                                     ) : (
                                         // 桌面端详细布局
                                         <div className="flex items-center gap-4">
-                                            <Checkbox
-                                                checked={selectedTasks.find(
-                                                    (t) =>
-                                                        t.taskid === task.taskid
-                                                )}
-                                                onCheckedChange={() =>
-                                                    toggleTaskSelection(task)
-                                                }
-                                                onClick={(e) =>
-                                                    e.stopPropagation()
-                                                }
-                                            />
                                             <div className="grid grid-cols-6 gap-4 flex-1 items-center">
                                                 <div>
                                                     <p className="font-medium">
