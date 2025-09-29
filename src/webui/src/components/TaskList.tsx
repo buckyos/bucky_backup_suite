@@ -228,113 +228,6 @@ export function TaskList({ onNavigate }: TaskListProps) {
                 </div>
             </div>
 
-            {/* 筛选器和搜索 */}
-            {/* {!isMobile && tasks.length > 0 && (
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="text-lg">筛选和搜索</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">
-                                    {t.common.search}
-                                </label>
-                                <div className="relative">
-                                    <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                                    <Input
-                                        placeholder="搜索任务或计划名称..."
-                                        value={searchQuery}
-                                        onChange={(e) =>
-                                            setSearchQuery(e.target.value)
-                                        }
-                                        className="pl-10"
-                                    />
-                                </div>
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">
-                                    {t.common.status}
-                                </label>
-                                <Select
-                                    value={statusFilter}
-                                    onValueChange={setStatusFilter}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">
-                                            全部状态
-                                        </SelectItem>
-                                        <SelectItem value="running">
-                                            {t.tasks.running}
-                                        </SelectItem>
-                                        <SelectItem value="completed">
-                                            {t.tasks.completed}
-                                        </SelectItem>
-                                        <SelectItem value="paused">
-                                            {t.tasks.paused}
-                                        </SelectItem>
-                                        <SelectItem value="failed">
-                                            {t.tasks.failed}
-                                        </SelectItem>
-                                        <SelectItem value="queued">
-                                            {t.tasks.queued}
-                                        </SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">
-                                    {t.common.type}
-                                </label>
-                                <Select
-                                    value={typeFilter}
-                                    onValueChange={setTypeFilter}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="all">
-                                            全部类型
-                                        </SelectItem>
-                                        <SelectItem value="backup">
-                                            {t.tasks.backup}任务
-                                        </SelectItem>
-                                        <SelectItem value="restore">
-                                            {t.tasks.restore}任务
-                                        </SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium">
-                                    批量操作
-                                </label>
-                                <div className="flex gap-2">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={selectedTasks.length === 0}
-                                    >
-                                        批量暂停
-                                    </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={selectedTasks.length === 0}
-                                    >
-                                        批量删除
-                                    </Button>
-                                </div>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-            )} */}
-
             {/* 任务列表 */}
             <Tabs
                 defaultValue="running"
@@ -550,7 +443,7 @@ function refreshFilterTasks(
     };
 
     taskManager.listBackupTasks(filter).then(async ({ task_ids, total }) => {
-        console.log("Filtered tasks:", task_ids, total);
+        console.log("Filtered tasks:", task_ids, total, filter);
         const taskInfos = await Promise.all(
             task_ids.map((taskid) => taskManager.getTaskInfo(taskid))
         );
@@ -917,7 +810,7 @@ function AllTaskTabContent({
     onNavigate: (page: string, data?: any) => void;
 }) {
     // Ensure hooks order is stable on every render
-    const [searchPlanFilter, setPlanFilter] = useState("");
+    const [searchPlanFilter, setSearchPlanFilter] = useState("");
     const [statusFilter, setStatusFilter] = useState<TaskState[] | null>(null);
     const [typeFilter, setTypeFilter] = useState<TaskType | null>(null);
     const [filterTasks, setFilterTasks] = useState<TaskInfo[] | null>(null);
@@ -998,6 +891,10 @@ function AllTaskTabContent({
         };
     }, []);
 
+    useEffect(() => {
+        refreshList();
+    }, [searchPlanFilter, statusFilter, typeFilter]);
+
     if (filterTasks === null) {
         return <Loading isMobile={isMobile} t={t} />;
     }
@@ -1013,310 +910,470 @@ function AllTaskTabContent({
         );
     }
 
-    return filterTasks.length === 0 ? (
-        <Card>
-            <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground">没有找到匹配的任务</p>
-            </CardContent>
-        </Card>
-    ) : (
+    return (
         <>
             {!isMobile && (
-                <Card>
-                    <CardContent className="py-3">
-                        <div className="flex items-center gap-4">
-                            <Checkbox
-                                checked={isSelectAll}
-                                onCheckedChange={toggleAllSelection}
-                            />
-                            <div className="grid grid-cols-6 gap-4 flex-1 items-center">
-                                <div className="font-medium">任务名称</div>
-                                <div className="font-medium">
-                                    {t.common.type}
+                <>
+                    <Card>
+                        <CardHeader>
+                            <CardTitle className="text-lg">
+                                筛选和搜索
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">
+                                        {t.common.search}
+                                    </label>
+                                    <div className="relative">
+                                        <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                                        <Input
+                                            placeholder="搜索计划名称..."
+                                            value={searchPlanFilter}
+                                            onChange={(e) =>
+                                                setSearchPlanFilter(
+                                                    e.target.value
+                                                )
+                                            }
+                                            className="pl-10"
+                                        />
+                                    </div>
                                 </div>
-                                <div className="font-medium">
-                                    {t.common.status}
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">
+                                        {t.common.status}
+                                    </label>
+                                    <Select
+                                        value={statusFilter}
+                                        onValueChange={(
+                                            selectStates: TaskState | "all"
+                                        ) => {
+                                            console.log(
+                                                "Selected status:",
+                                                selectStates
+                                            );
+                                            setStatusFilter(
+                                                selectStates.includes("all")
+                                                    ? null
+                                                    : [
+                                                          selectStates as TaskState,
+                                                      ]
+                                            );
+                                        }}
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">
+                                                全部状态
+                                            </SelectItem>
+                                            <SelectItem
+                                                value={TaskState.RUNNING}
+                                            >
+                                                {t.tasks.running}
+                                            </SelectItem>
+                                            <SelectItem value={TaskState.DONE}>
+                                                {t.tasks.completed}
+                                            </SelectItem>
+                                            <SelectItem
+                                                value={TaskState.PAUSED}
+                                            >
+                                                {t.tasks.paused}
+                                            </SelectItem>
+                                            <SelectItem
+                                                value={TaskState.FAILED}
+                                            >
+                                                {t.tasks.failed}
+                                            </SelectItem>
+                                            <SelectItem
+                                                value={TaskState.PENDING}
+                                            >
+                                                {t.tasks.queued}
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
                                 </div>
-                                <div className="font-medium">
-                                    {t.tasks.progress}
-                                </div>
-                                <div className="font-medium">时间</div>
-                                <div className="font-medium text-right">
-                                    {t.common.actions}
+                                <div className="space-y-2">
+                                    <label className="text-sm font-medium">
+                                        {t.common.type}
+                                    </label>
+                                    <Select
+                                        value={typeFilter}
+                                        onValueChange={(
+                                            taskType: TaskType | "all"
+                                        ) =>
+                                            taskType === "all"
+                                                ? setTypeFilter(null)
+                                                : setTypeFilter(taskType)
+                                        }
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">
+                                                全部类型
+                                            </SelectItem>
+                                            <SelectItem value={TaskType.BACKUP}>
+                                                {t.tasks.backup}任务
+                                            </SelectItem>
+                                            <SelectItem
+                                                value={TaskType.RESTORE}
+                                            >
+                                                {t.tasks.restore}任务
+                                            </SelectItem>
+                                        </SelectContent>
+                                    </Select>
                                 </div>
                             </div>
-                        </div>
-                    </CardContent>
-                </Card>
+                        </CardContent>
+                    </Card>
+                    <Card>
+                        <CardContent className="py-3">
+                            <div className="flex items-center gap-4">
+                                <Checkbox
+                                    checked={isSelectAll}
+                                    onCheckedChange={toggleAllSelection}
+                                />
+                                <div className="grid grid-cols-6 gap-4 flex-1 items-center">
+                                    <div className="font-medium">任务名称</div>
+                                    <div className="font-medium">
+                                        {t.common.type}
+                                    </div>
+                                    <div className="font-medium">
+                                        {t.common.status}
+                                    </div>
+                                    <div className="font-medium">
+                                        {t.tasks.progress}
+                                    </div>
+                                    <div className="font-medium">时间</div>
+                                    <div className="font-medium text-right">
+                                        {t.common.actions}
+                                    </div>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                </>
             )}
 
-            {/* 任务列表 */}
-            {filterTasks.map((task) => {
-                const taskProgress = TaskMgrHelper.taskProgress(task);
-                const taskRemainStr = TaskMgrHelper.taskRemainingStr(task);
-                return (
-                    <Card
-                        key={task.taskid}
-                        className="cursor-pointer hover:bg-accent/50"
-                        onClick={() => showDetailTask(task)}
-                    >
-                        <CardContent
-                            className={`${isMobile ? "py-3" : "py-4"}`}
-                        >
-                            {isMobile ? (
-                                // 移动端紧凑布局
-                                <div className="space-y-2">
-                                    <div className="flex items-center justify-between">
-                                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                                            <span className="font-medium text-sm truncate">
-                                                {task.name}
-                                            </span>
-                                            {getStatusBadge(task.state, t)}
-                                            {getTypeBadge(task.task_type, t)}
+            {filterTasks.length === 0 ? (
+                <Card>
+                    <CardContent className="py-12 text-center">
+                        <p className="text-muted-foreground">
+                            没有找到匹配的任务
+                        </p>
+                    </CardContent>
+                </Card>
+            ) : (
+                <>
+                    {/* 任务列表 */}
+                    {filterTasks.map((task) => {
+                        const taskProgress = TaskMgrHelper.taskProgress(task);
+                        const taskRemainStr =
+                            TaskMgrHelper.taskRemainingStr(task);
+                        return (
+                            <Card
+                                key={task.taskid}
+                                className="cursor-pointer hover:bg-accent/50"
+                                onClick={() => showDetailTask(task)}
+                            >
+                                <CardContent
+                                    className={`${isMobile ? "py-3" : "py-4"}`}
+                                >
+                                    {isMobile ? (
+                                        // 移动端紧凑布局
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                                    <span className="font-medium text-sm truncate">
+                                                        {task.name}
+                                                    </span>
+                                                    {getStatusBadge(
+                                                        task.state,
+                                                        t
+                                                    )}
+                                                    {getTypeBadge(
+                                                        task.task_type,
+                                                        t
+                                                    )}
+                                                </div>
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger
+                                                        asChild
+                                                    >
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="sm"
+                                                            className="h-6 w-6 p-0"
+                                                            onClick={(e) =>
+                                                                e.stopPropagation()
+                                                            }
+                                                        >
+                                                            <MoreVertical className="w-4 h-4" />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="end">
+                                                        <DropdownMenuItem
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                showDetailTask(
+                                                                    task
+                                                                );
+                                                            }}
+                                                        >
+                                                            <Eye className="w-4 h-4 mr-2" />
+                                                            {t.common.details}
+                                                        </DropdownMenuItem>
+                                                        {(task.state ===
+                                                            TaskState.RUNNING ||
+                                                            task.state ===
+                                                                TaskState.PENDING) && (
+                                                            <DropdownMenuItem
+                                                                onClick={(e) =>
+                                                                    e.stopPropagation()
+                                                                }
+                                                            >
+                                                                <Pause className="w-4 h-4 mr-2" />
+                                                                {t.tasks.pause}
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        {task.state ===
+                                                            TaskState.PAUSED && (
+                                                            <DropdownMenuItem
+                                                                onClick={(e) =>
+                                                                    e.stopPropagation()
+                                                                }
+                                                            >
+                                                                <Play className="w-4 h-4 mr-2" />
+                                                                {t.tasks.resume}
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                        {task.state ===
+                                                            TaskState.DONE &&
+                                                            task.task_type ===
+                                                                TaskType.BACKUP && (
+                                                                <DropdownMenuItem
+                                                                    onClick={(
+                                                                        e
+                                                                    ) => {
+                                                                        e.stopPropagation();
+                                                                        onNavigate?.(
+                                                                            "restore",
+                                                                            {
+                                                                                taskId: task.taskid,
+                                                                            }
+                                                                        );
+                                                                    }}
+                                                                >
+                                                                    <FileText className="w-4 h-4 mr-2" />
+                                                                    恢复
+                                                                </DropdownMenuItem>
+                                                            )}
+                                                        {task.state !==
+                                                            TaskState.RUNNING && (
+                                                            <DropdownMenuItem
+                                                                onClick={(e) =>
+                                                                    e.stopPropagation()
+                                                                }
+                                                                className="text-destructive"
+                                                            >
+                                                                <Trash2 className="w-4 h-4 mr-2" />
+                                                                {
+                                                                    t.common
+                                                                        .delete
+                                                                }
+                                                            </DropdownMenuItem>
+                                                        )}
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            </div>
+
+                                            {task.state !== TaskState.DONE && (
+                                                <div className="space-y-1">
+                                                    <Progress
+                                                        value={taskProgress}
+                                                        className="h-1.5"
+                                                    />
+                                                    <div className="flex justify-between text-xs text-muted-foreground">
+                                                        <span>
+                                                            {taskProgress}%
+                                                            {task.speed &&
+                                                                ` • ${task.speed}`}
+                                                        </span>
+                                                        <span>
+                                                            {taskRemainStr &&
+                                                            taskRemainStr != "0"
+                                                                ? taskRemainStr
+                                                                : `${taskProgress}%`}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            <div className="flex justify-between text-xs text-muted-foreground">
+                                                <span>
+                                                    {
+                                                        plans.find(
+                                                            (p) =>
+                                                                p.plan_id ===
+                                                                task.owner_plan_id
+                                                        )?.title
+                                                    }
+                                                </span>
+                                                <span>
+                                                    {task.create_time
+                                                        ? new Date(
+                                                              task.create_time
+                                                          ).toLocaleDateString()
+                                                        : task.update_time
+                                                        ? new Date(
+                                                              task.update_time
+                                                          ).toLocaleDateString()
+                                                        : "--"}
+                                                </span>
+                                            </div>
                                         </div>
-                                        <DropdownMenu>
-                                            <DropdownMenuTrigger asChild>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    className="h-6 w-6 p-0"
+                                    ) : (
+                                        // 桌面端详细布局
+                                        <div className="flex items-center gap-4">
+                                            <Checkbox
+                                                checked={selectedTasks.find(
+                                                    (t) =>
+                                                        t.taskid === task.taskid
+                                                )}
+                                                onCheckedChange={() =>
+                                                    toggleTaskSelection(task)
+                                                }
+                                                onClick={(e) =>
+                                                    e.stopPropagation()
+                                                }
+                                            />
+                                            <div className="grid grid-cols-6 gap-4 flex-1 items-center">
+                                                <div>
+                                                    <p className="font-medium">
+                                                        {task.name}
+                                                    </p>
+                                                    <p className="text-sm text-muted-foreground">
+                                                        {plans.find(
+                                                            (p) =>
+                                                                p.plan_id ===
+                                                                task.owner_plan_id
+                                                        )?.title || "-"}
+                                                    </p>
+                                                </div>
+                                                <div>
+                                                    {getTypeBadge(
+                                                        task.task_type,
+                                                        t
+                                                    )}
+                                                </div>
+                                                <div>
+                                                    {getStatusBadge(
+                                                        task.state,
+                                                        t
+                                                    )}
+                                                </div>
+                                                <div>
+                                                    {task.state ===
+                                                        TaskState.RUNNING && (
+                                                        <>
+                                                            <Progress
+                                                                value={
+                                                                    taskProgress
+                                                                }
+                                                                className="h-2 mb-1"
+                                                            />
+                                                            <div className="text-sm text-muted-foreground">
+                                                                {taskProgress}%
+                                                                - {task.speed}
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                    {task.state ===
+                                                        TaskState.DONE && (
+                                                        <div className="text-sm text-green-600">
+                                                            100% 完成
+                                                        </div>
+                                                    )}
+                                                    {task.state ===
+                                                        TaskState.PAUSED && (
+                                                        <>
+                                                            <Progress
+                                                                value={
+                                                                    taskProgress
+                                                                }
+                                                                className="h-2 mb-1"
+                                                            />
+                                                            <div className="text-sm text-muted-foreground">
+                                                                {taskProgress}%
+                                                                已暂停
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                    {task.state ===
+                                                        TaskState.FAILED && (
+                                                        <>
+                                                            <Progress
+                                                                value={
+                                                                    taskProgress
+                                                                }
+                                                                className="h-2 mb-1"
+                                                            />
+                                                            <div className="text-sm text-red-600">
+                                                                {taskProgress}%
+                                                                失败
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                    {task.state ===
+                                                        TaskState.PENDING && (
+                                                        <div className="text-sm text-muted-foreground">
+                                                            等待执行
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                <div className="text-sm">
+                                                    <div className="flex items-center gap-1 mb-1">
+                                                        <Clock className="w-3 h-3" />
+                                                        {task.create_time
+                                                            ? new Date(
+                                                                  task.create_time
+                                                              ).toLocaleString()
+                                                            : task.update_time
+                                                            ? `计划: ${new Date(
+                                                                  task.update_time
+                                                              ).toLocaleString()}`
+                                                            : "-"}
+                                                    </div>
+                                                    <div className="text-muted-foreground">
+                                                        {task.completed_size} /{" "}
+                                                        {task.total_size}
+                                                    </div>
+                                                </div>
+                                                <div
+                                                    className="flex items-center gap-1 justify-end"
                                                     onClick={(e) =>
                                                         e.stopPropagation()
                                                     }
                                                 >
-                                                    <MoreVertical className="w-4 h-4" />
-                                                </Button>
-                                            </DropdownMenuTrigger>
-                                            <DropdownMenuContent align="end">
-                                                <DropdownMenuItem
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        showDetailTask(task);
-                                                    }}
-                                                >
-                                                    <Eye className="w-4 h-4 mr-2" />
-                                                    {t.common.details}
-                                                </DropdownMenuItem>
-                                                {(task.state ===
-                                                    TaskState.RUNNING ||
-                                                    task.state ===
-                                                        TaskState.PENDING) && (
-                                                    <DropdownMenuItem
-                                                        onClick={(e) =>
-                                                            e.stopPropagation()
-                                                        }
-                                                    >
-                                                        <Pause className="w-4 h-4 mr-2" />
-                                                        {t.tasks.pause}
-                                                    </DropdownMenuItem>
-                                                )}
-                                                {task.state ===
-                                                    TaskState.PAUSED && (
-                                                    <DropdownMenuItem
-                                                        onClick={(e) =>
-                                                            e.stopPropagation()
-                                                        }
-                                                    >
-                                                        <Play className="w-4 h-4 mr-2" />
-                                                        {t.tasks.resume}
-                                                    </DropdownMenuItem>
-                                                )}
-                                                {task.state ===
-                                                    TaskState.DONE &&
-                                                    task.task_type ===
-                                                        TaskType.BACKUP && (
-                                                        <DropdownMenuItem
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                onNavigate?.(
-                                                                    "restore",
-                                                                    {
-                                                                        taskId: task.taskid,
-                                                                    }
-                                                                );
-                                                            }}
-                                                        >
-                                                            <FileText className="w-4 h-4 mr-2" />
-                                                            恢复
-                                                        </DropdownMenuItem>
+                                                    {getTaskActions(
+                                                        task,
+                                                        showDetailTask,
+                                                        t
                                                     )}
-                                                {task.state !==
-                                                    TaskState.RUNNING && (
-                                                    <DropdownMenuItem
-                                                        onClick={(e) =>
-                                                            e.stopPropagation()
-                                                        }
-                                                        className="text-destructive"
-                                                    >
-                                                        <Trash2 className="w-4 h-4 mr-2" />
-                                                        {t.common.delete}
-                                                    </DropdownMenuItem>
-                                                )}
-                                            </DropdownMenuContent>
-                                        </DropdownMenu>
-                                    </div>
-
-                                    {task.state !== TaskState.DONE && (
-                                        <div className="space-y-1">
-                                            <Progress
-                                                value={taskProgress}
-                                                className="h-1.5"
-                                            />
-                                            <div className="flex justify-between text-xs text-muted-foreground">
-                                                <span>
-                                                    {taskProgress}%
-                                                    {task.speed &&
-                                                        ` • ${task.speed}`}
-                                                </span>
-                                                <span>
-                                                    {taskRemainStr &&
-                                                    taskRemainStr != "0"
-                                                        ? taskRemainStr
-                                                        : `${taskProgress}%`}
-                                                </span>
+                                                </div>
                                             </div>
                                         </div>
                                     )}
-
-                                    <div className="flex justify-between text-xs text-muted-foreground">
-                                        <span>
-                                            {
-                                                plans.find(
-                                                    (p) =>
-                                                        p.plan_id ===
-                                                        task.owner_plan_id
-                                                )?.title
-                                            }
-                                        </span>
-                                        <span>
-                                            {task.create_time
-                                                ? new Date(
-                                                      task.create_time
-                                                  ).toLocaleDateString()
-                                                : task.update_time
-                                                ? new Date(
-                                                      task.update_time
-                                                  ).toLocaleDateString()
-                                                : "--"}
-                                        </span>
-                                    </div>
-                                </div>
-                            ) : (
-                                // 桌面端详细布局
-                                <div className="flex items-center gap-4">
-                                    <Checkbox
-                                        checked={selectedTasks.find(
-                                            (t) => t.taskid === task.taskid
-                                        )}
-                                        onCheckedChange={() =>
-                                            toggleTaskSelection(task)
-                                        }
-                                        onClick={(e) => e.stopPropagation()}
-                                    />
-                                    <div className="grid grid-cols-6 gap-4 flex-1 items-center">
-                                        <div>
-                                            <p className="font-medium">
-                                                {task.name}
-                                            </p>
-                                            <p className="text-sm text-muted-foreground">
-                                                {plans.find(
-                                                    (p) =>
-                                                        p.plan_id ===
-                                                        task.owner_plan_id
-                                                )?.title || "-"}
-                                            </p>
-                                        </div>
-                                        <div>
-                                            {getTypeBadge(task.task_type, t)}
-                                        </div>
-                                        <div>
-                                            {getStatusBadge(task.state, t)}
-                                        </div>
-                                        <div>
-                                            {task.state ===
-                                                TaskState.RUNNING && (
-                                                <>
-                                                    <Progress
-                                                        value={taskProgress}
-                                                        className="h-2 mb-1"
-                                                    />
-                                                    <div className="text-sm text-muted-foreground">
-                                                        {taskProgress}% -{" "}
-                                                        {task.speed}
-                                                    </div>
-                                                </>
-                                            )}
-                                            {task.state === TaskState.DONE && (
-                                                <div className="text-sm text-green-600">
-                                                    100% 完成
-                                                </div>
-                                            )}
-                                            {task.state ===
-                                                TaskState.PAUSED && (
-                                                <>
-                                                    <Progress
-                                                        value={taskProgress}
-                                                        className="h-2 mb-1"
-                                                    />
-                                                    <div className="text-sm text-muted-foreground">
-                                                        {taskProgress}% 已暂停
-                                                    </div>
-                                                </>
-                                            )}
-                                            {task.state ===
-                                                TaskState.FAILED && (
-                                                <>
-                                                    <Progress
-                                                        value={taskProgress}
-                                                        className="h-2 mb-1"
-                                                    />
-                                                    <div className="text-sm text-red-600">
-                                                        {taskProgress}% 失败
-                                                    </div>
-                                                </>
-                                            )}
-                                            {task.state ===
-                                                TaskState.PENDING && (
-                                                <div className="text-sm text-muted-foreground">
-                                                    等待执行
-                                                </div>
-                                            )}
-                                        </div>
-                                        <div className="text-sm">
-                                            <div className="flex items-center gap-1 mb-1">
-                                                <Clock className="w-3 h-3" />
-                                                {task.create_time
-                                                    ? new Date(
-                                                          task.create_time
-                                                      ).toLocaleString()
-                                                    : task.update_time
-                                                    ? `计划: ${new Date(
-                                                          task.update_time
-                                                      ).toLocaleString()}`
-                                                    : "-"}
-                                            </div>
-                                            <div className="text-muted-foreground">
-                                                {task.completed_size} /{" "}
-                                                {task.total_size}
-                                            </div>
-                                        </div>
-                                        <div
-                                            className="flex items-center gap-1 justify-end"
-                                            onClick={(e) => e.stopPropagation()}
-                                        >
-                                            {getTaskActions(
-                                                task,
-                                                showDetailTask,
-                                                t
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
-                );
-            })}
+                                </CardContent>
+                            </Card>
+                        );
+                    })}
+                </>
+            )}
         </>
     );
 }
