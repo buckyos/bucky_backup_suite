@@ -750,8 +750,8 @@ function HistoryTaskTabContent({
                             </CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                <div className="space-y-2">
+                            <div className="flex flex-wrap items-end gap-4">
+                                <div className="flex-1 min-w-[240px] space-y-2">
                                     <label className="text-sm font-medium">
                                         {t.common.search}
                                     </label>
@@ -761,30 +761,26 @@ function HistoryTaskTabContent({
                                             placeholder="搜索计划名称..."
                                             value={searchPlanFilter}
                                             onChange={(e) =>
-                                                setSearchPlanFilter(
-                                                    e.target.value
-                                                )
+                                                setSearchPlanFilter(e.target.value)
                                             }
                                             className="pl-10"
                                         />
                                     </div>
                                 </div>
-                                <div className="space-y-2">
+                                <div className="flex-none min-w-[200px] space-y-2">
                                     <label className="text-sm font-medium">
                                         {t.common.type}
                                     </label>
                                     <Select
-                                        value={typeFilter}
-                                        onValueChange={(
-                                            taskType: TaskType | "all"
-                                        ) =>
+                                        value={typeFilter ?? "all"}
+                                        onValueChange={(taskType: TaskType | "all") =>
                                             taskType === "all"
                                                 ? setTypeFilter(null)
                                                 : setTypeFilter(taskType)
                                         }
                                     >
-                                        <SelectTrigger>
-                                            <SelectValue />
+                                        <SelectTrigger className="w-full">
+                                            <SelectValue placeholder="全部类型" />
                                         </SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="all">
@@ -793,9 +789,7 @@ function HistoryTaskTabContent({
                                             <SelectItem value={TaskType.BACKUP}>
                                                 {t.tasks.backup}任务
                                             </SelectItem>
-                                            <SelectItem
-                                                value={TaskType.RESTORE}
-                                            >
+                                            <SelectItem value={TaskType.RESTORE}>
                                                 {t.tasks.restore}任务
                                             </SelectItem>
                                         </SelectContent>
