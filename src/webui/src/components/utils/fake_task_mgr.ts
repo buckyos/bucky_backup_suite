@@ -41,6 +41,7 @@ export class FakeTaskManager extends BackupTaskManager {
         description: string;
         policy: PlanPolicy[];
         priority: number;
+        reserved_versions: number;
     }): Promise<string> {
         const result = {
             ...params,

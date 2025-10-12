@@ -53,9 +53,6 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
     const [loading, setLoading] = useState(true);
-    const [loadingText, setLoadingText] = useState<string>(
-        `${t.common.loading} ${t.nav.plans}...`
-    );
     const [plans, setPlans] = useState<BackupPlanInfo[]>([]);
     const [services, setServices] = useState<BackupTargetInfo[]>([]);
     const [uncompleteTasks, setUncompleteTasks] = useState<TaskInfo[]>([]);
@@ -104,7 +101,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                     <h1 className="mb-2">{t.plans.title}</h1>
                     <p className="text-muted-foreground">{t.plans.subtitle}</p>
                 </div>
-                <LoadingPage status={loadingText} />
+                <LoadingPage status={`${t.common.loading} ${t.nav.plans}...`} />
             </div>
         );
     }

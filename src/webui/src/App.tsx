@@ -81,7 +81,7 @@ export default function App() {
                     <EditPlanWizard
                         onBack={navigateBack}
                         onComplete={navigateBack}
-                        data={currentPage.data}
+                        plan={currentPage.data}
                     />
                 );
             case "plan-details":

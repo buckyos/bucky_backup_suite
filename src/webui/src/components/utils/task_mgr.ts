@@ -59,6 +59,7 @@ export interface BackupPlanInfo {
     policy_disabled?: boolean;
     policy: PlanPolicy[];
     priority: number; // 0-10
+    reserved_versions: number; // 0 means unlimited
 }
 
 export enum TargetState {

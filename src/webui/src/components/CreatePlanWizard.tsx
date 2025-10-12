@@ -177,6 +177,7 @@ export function CreatePlanWizard({
                 target: planData.service,
                 policy: [],
                 priority: { high: 10, medium: 5, low: 1 }[planData.priority],
+                reserved_versions: parseInt(planData.versions) || 0,
             };
             if (planData.triggerTypes.includes("scheduled")) {
                 console.log(
@@ -729,14 +730,14 @@ export function CreatePlanWizard({
                                               )
                                               .join(", ")}
                                 </div>
-                                <div>
+                                {/* <div>
                                     <span className="font-medium">
                                         备份类型:
                                     </span>{" "}
                                     {planData.backupType === "full"
                                         ? "完全备份"
                                         : "增量备份"}
-                                </div>
+                                </div> */}
                                 <div>
                                     <span className="font-medium">
                                         版本保留:
