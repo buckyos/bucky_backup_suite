@@ -50,6 +50,10 @@ interface PlanData {
     versions: string;
     priority: "high" | "medium" | "low";
     last_checkpoint_index: number;
+    create_time: number;
+    update_time: number;
+    total_backup: number;
+    total_size: number;
 }
 
 const STEPS = [
@@ -109,6 +113,10 @@ function dataFromPlan(plan: BackupPlanInfo): PlanData {
                 ? "medium"
                 : "low",
         last_checkpoint_index: plan.last_checkpoint_index,
+        create_time: plan.create_time,
+        update_time: plan.update_time,
+        total_backup: plan.total_backup,
+        total_size: plan.total_size,
     };
     return planData;
 }
@@ -156,6 +164,10 @@ function planFromData(
         policy,
         priority: { high: 10, medium: 5, low: 1 }[plan.priority],
         reserved_versions: parseInt(plan.versions) || 0,
+        create_time: plan.create_time,
+        update_time: plan.update_time,
+        total_backup: plan.total_backup,
+        total_size: plan.total_size,
     };
     return backupPlan;
 }

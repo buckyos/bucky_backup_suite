@@ -15,7 +15,7 @@ import {
 import { DirectorySelector } from "./DirectorySelector";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 import {
     ArrowLeft,
     ChevronLeft,
@@ -29,7 +29,7 @@ import {
 interface RestoreWizardProps {
     onBack: () => void;
     onComplete: () => void;
-    data?: any;
+    data?: { planId?: string; taskId?: string };
 }
 
 export function RestoreWizard({

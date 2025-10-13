@@ -1,5 +1,10 @@
 import { AlertDialogContent } from "../ui/alert-dialog";
-import { BackupPlanInfo, BackupTargetInfo, TaskInfo } from "./task_mgr";
+import {
+    BackupLog,
+    BackupPlanInfo,
+    BackupTargetInfo,
+    TaskInfo,
+} from "./task_mgr";
 
 export enum PlanState {
     ACTIVE = "ACTIVE",
@@ -210,5 +215,9 @@ export class TaskMgrHelper {
         const hours = parseInt(match[1], 10);
         const minutes = parseInt(match[2], 10);
         return hours * 60 + minutes;
+    }
+
+    static formatLog(log: BackupLog): string {
+        return `${log.params}`;
     }
 }

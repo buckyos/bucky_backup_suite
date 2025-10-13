@@ -21,6 +21,7 @@ export interface TaskInfo {
     total_size: number;
     completed_size: number;
     state: TaskState;
+    error?: string;
     create_time: number; //unix timestamp
     update_time: number; //unix timestamp
     item_count: number;
@@ -60,6 +61,11 @@ export interface BackupPlanInfo {
     policy: PlanPolicy[];
     priority: number; // 0-10
     reserved_versions: number; // 0 means unlimited
+
+    create_time: number; //unix timestamp
+    update_time: number; //unix timestamp
+    total_backup: number;
+    total_size: number;
 }
 
 export enum TargetState {
@@ -133,6 +139,98 @@ export enum DirectoryPurpose {
     RESTORE_TARGET = "restore_target",
     BACKUP_TARGET = "backup_target",
 }
+
+type BackupSubject =
+    | { kind: "plan"; plan_id: string; plan_title: string }
+    | { kind: "target"; target_id: string; name: string; target_url: string }
+    | { kind: "task"; task_id: string; task_name: string; task_type: TaskType };
+
+// 每种日志类型对应的参数表（扩展时只需在这里加键）
+type BackupLogTypeMap = {
+    create_plan: {};
+    update_plan: {};
+    run_plan: { task_id: string; task_name: string };
+    run_success: { task_id: string; task_name: string };
+    run_fail: { task_id: string; task_name: string; reason: string };
+    remove_plan: {};
+    create_target: {};
+    update_target: {};
+    remove_target: {};
+    check_target: { old_state: TargetState; new_state: TargetState };
+    create_task: {
+        plan_id: string;
+        plan_title: string;
+        backup_task?: { id: string; task_name: string };
+    };
+    update_task: {
+        plan_id: string;
+        plan_title: string;
+        backup_task?: { id: string; task_name: string };
+    };
+    pause_task: {
+        plan_id: string;
+        plan_title: string;
+        backup_task?: { id: string; task_name: string };
+    };
+    resume_task: {
+        plan_id: string;
+        plan_title: string;
+        backup_task?: { id: string; task_name: string };
+    };
+    task_success: {
+        plan_id: string;
+        plan_title: string;
+        consume_size: number;
+        backup_task?: { id: string; task_name: string };
+    };
+    task_fail: {
+        plan_id: string;
+        plan_title: string;
+        reason: string;
+        backup_task?: { id: string; task_name: string };
+    };
+    remove_task: {
+        plan_id: string;
+        plan_title: string;
+        backup_task?: { id: string; task_name: string };
+    };
+    restore_backup: {
+        plan_id: string;
+        plan_title: string;
+        restore_task: { id: string; task_name: string };
+    };
+    restore_success: {
+        plan_id: string;
+        plan_title: string;
+        restore_task: { id: string; task_name: string };
+    };
+    restore_fail: {
+        plan_id: string;
+        plan_title: string;
+        restore_task: { id: string; task_name: string };
+        reason: string;
+    };
+    find_file: { path: string; size: number };
+    hash_file: { path: string; hash: string };
+    transfer_start: { path: string; size: number };
+    transfer_success: { path: string; size: number; duration: number };
+    transfer_fail: { path: string; reason: string };
+};
+
+// 通用日志结构（用泛型将 type 与 params 绑定）
+type BackupLogEntry<T extends keyof BackupLogTypeMap = keyof BackupLogTypeMap> =
+    {
+        seq: number;
+        timestamp: number;
+        subject: BackupSubject;
+        type: T;
+        params: BackupLogTypeMap[T];
+    };
+
+// 全部日志的联合类型（用于变量、数组等）
+export type BackupLog = {
+    [K in keyof BackupLogTypeMap]: BackupLogEntry<K>;
+}[keyof BackupLogTypeMap];
 
 export class BackupTaskManager {
     private rpc_client: any;
@@ -570,6 +668,23 @@ export class BackupTaskManager {
         }
     ): Promise<DirectoryNode[]> {
         return this.rpc_client.call("list_directory_children", { path: path });
+    }
+
+    async listLogs(
+        offset: number,
+        limit: number,
+        orderBy: ListOrder,
+        subject?:
+            | { plan_id: string }
+            | { target_id: string }
+            | { task_id: string }
+    ): Promise<{ logs: BackupLog[]; total: number }> {
+        const result = await this.rpc_client.call("list_logs", {
+            offset: offset,
+            limit: limit,
+            subject: subject,
+        });
+        return { logs: result.logs, total: result.total };
     }
 }
 

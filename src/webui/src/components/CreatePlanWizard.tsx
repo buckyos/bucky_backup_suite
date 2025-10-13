@@ -178,6 +178,10 @@ export function CreatePlanWizard({
                 policy: [],
                 priority: { high: 10, medium: 5, low: 1 }[planData.priority],
                 reserved_versions: parseInt(planData.versions) || 0,
+                create_time: Date.now(),
+                update_time: Date.now(),
+                total_backup: 0,
+                total_size: 0
             };
             if (planData.triggerTypes.includes("scheduled")) {
                 console.log(

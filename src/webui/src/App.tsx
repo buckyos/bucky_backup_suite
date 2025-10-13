@@ -89,7 +89,7 @@ export default function App() {
                     <PlanDetails
                         onBack={navigateBack}
                         onNavigate={navigateTo}
-                        data={currentPage.data}
+                        plan={currentPage.data}
                     />
                 );
             default:

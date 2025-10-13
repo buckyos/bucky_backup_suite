@@ -1,4 +1,5 @@
 import {
+    BackupLog,
     BackupPlanInfo,
     BackupTargetInfo,
     BackupTaskManager,
@@ -30,6 +31,7 @@ export class FakeTaskManager extends BackupTaskManager {
         next_target_id: 1,
         targets: new Array<BackupTargetInfo>(),
     };
+    private logs: BackupLog[] = [];
 
     async createBackupPlan(params: {
         type_str: string;
@@ -48,6 +50,10 @@ export class FakeTaskManager extends BackupTaskManager {
             plan_id: `plan_${this.plan_list.next_plan_id++}`,
             last_checkpoint_index: -1,
             last_run_time: 0,
+            create_time: Date.now(),
+            update_time: Date.now(),
+            total_backup: 0,
+            total_size: 0,
         };
         console.log("Created plan:", result);
         this.plan_list.plans.push(result);
@@ -376,6 +382,18 @@ export class FakeTaskManager extends BackupTaskManager {
         }
     ): Promise<DirectoryNode[]> {
         return mockGetDirectories(path);
+    }
+
+    async listLogs(
+        offset: number,
+        limit: number,
+        orderBy: ListOrder,
+        subject?:
+            | { plan_id: string }
+            | { target_id: string }
+            | { task_id: string }
+    ): Promise<{ logs: BackupLog[]; total: number }> {
+        return { logs: [], total: 0 };
     }
 }
 
