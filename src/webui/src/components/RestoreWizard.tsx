@@ -66,12 +66,10 @@ export function RestoreWizard({
         "skip" | "overwrite" | "rename"
     >("skip");
 
-    const selectedPlan = AVAILABLE_PLANS.find(
-        (plan) => plan.id === selectedPlanId
-    );
-    const selectedTask = selectedPlan?.tasks.find(
-        (task) => task.id === selectedTaskId
-    );
+    const selectedPlan =
+        planList && planList.find((plan) => plan.plan_id === selectedPlanId);
+    const selectedTask =
+        taskList && taskList.find((task) => task.taskid === selectedTaskId);
 
     const loadPlanList = async () => {
         if (data?.planId) {
@@ -216,7 +214,7 @@ export function RestoreWizard({
                             </p>
                         </div>
                         <div className="space-y-3">
-                            {AVAILABLE_PLANS.map((plan) => (
+                            {planList.map((plan) => (
                                 <Card
                                     key={plan.id}
                                     className={`cursor-pointer transition-all ${
