@@ -30,93 +30,6 @@ interface RestoreWizardProps {
     data?: { planId?: string; taskId?: string };
 }
 
-interface BackupTask {
-    id: string;
-    executedAt: string;
-    size: string;
-    files: string[];
-    status: string;
-}
-
-interface BackupPlan {
-    id: string;
-    name: string;
-    description: string;
-    tasks: BackupTask[];
-}
-
-const AVAILABLE_PLANS: BackupPlan[] = [
-    {
-        id: "plan-system",
-        name: "系统文件备份",
-        description: "系统核心文件每日备份",
-        tasks: [
-            {
-                id: "task-system-20240115",
-                executedAt: "2024-01-15 23:30:00",
-                size: "2.1 GB",
-                files: [
-                    "C:\\Windows\\System32\\config",
-                    "C:\\Windows\\System32\\drivers",
-                ],
-                status: "completed",
-            },
-            {
-                id: "task-system-20240108",
-                executedAt: "2024-01-08 23:30:00",
-                size: "2.0 GB",
-                files: [
-                    "C:\\Windows\\System32\\config",
-                    "C:\\Windows\\System32\\drivers",
-                ],
-                status: "completed",
-            },
-        ],
-    },
-    {
-        id: "plan-projects",
-        name: "项目文件备份",
-        description: "研发项目差异备份",
-        tasks: [
-            {
-                id: "task-project-20240115",
-                executedAt: "2024-01-15 02:45:00",
-                size: "856 MB",
-                files: ["D:\\Projects\\WebApp", "D:\\Projects\\Mobile"],
-                status: "completed",
-            },
-            {
-                id: "task-project-20240112",
-                executedAt: "2024-01-12 02:45:00",
-                size: "852 MB",
-                files: ["D:\\Projects\\WebApp"],
-                status: "completed",
-            },
-        ],
-    },
-    {
-        id: "plan-documents",
-        name: "文档备份",
-        description: "办公文档定时备份",
-        tasks: [
-            {
-                id: "task-docs-20240114",
-                executedAt: "2024-01-14 01:00:00",
-                size: "1.2 GB",
-                files: ["C:\\Users\\Documents", "C:\\Users\\Desktop"],
-                status: "completed",
-            },
-            {
-                id: "task-docs-20240107",
-                executedAt: "2024-01-07 01:00:00",
-                size: "1.1 GB",
-                files: ["C:\\Users\\Documents"],
-                status: "completed",
-            },
-        ],
-    },
-];
-
 const STEPS = [
     { number: 1, title: "选择备份计划", description: "选择要恢复的备份计划" },
     { number: 2, title: "选择备份任务", description: "确定要恢复的备份任务" },
@@ -249,7 +162,7 @@ export function RestoreWizard({
         setSelectedFiles([]);
         setViewDirectory(null);
     }, [selectedTaskId]);
-    
+
     useEffect(() => {
         loadFiles();
     }, [viewDirectory, selectedTaskId]);
