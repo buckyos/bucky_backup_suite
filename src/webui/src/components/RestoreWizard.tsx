@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useMemo, useState } from "react";
 import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
 import { Label } from "./ui/label";
@@ -12,17 +12,30 @@ import {
     ChevronLeft,
     ChevronRight,
     Folder,
+    FileText,
+    HardDrive,
     Check,
+    Loader2,
 } from "lucide-react";
 import {
+    Breadcrumb,
+    BreadcrumbList,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
+} from "./ui/breadcrumb";
+import {
     BackupPlanInfo,
-    ListOrder,
-    ListTaskOrderBy,
     TaskInfo,
-    TaskState,
     TaskType,
+    TaskState,
+    ListTaskOrderBy,
+    ListOrder,
+    DirectoryPurpose,
 } from "./utils/task_mgr";
 import { taskManager } from "./utils/fake_task_mgr";
+import { TaskMgrHelper } from "./utils/task_mgr_helper";
 
 interface RestoreWizardProps {
     onBack: () => void;
@@ -30,13 +43,22 @@ interface RestoreWizardProps {
     data?: { planId?: string; taskId?: string };
 }
 
-const STEPS = [
-    { number: 1, title: "选择备份计划", description: "选择要恢复的备份计划" },
-    { number: 2, title: "选择备份任务", description: "确定要恢复的备份任务" },
-    { number: 3, title: "选择备份文件", description: "勾选需要恢复的文件" },
-    { number: 4, title: "选择恢复目标", description: "设置恢复目标与策略" },
-    { number: 5, title: "确认与完成", description: "检查信息并创建任务" },
-];
+interface BreadcrumbNode {
+    label: string;
+    path: string | null;
+}
+
+interface TaskFileEntry {
+    id: string;
+    label: string;
+    fullPath: string;
+    requestPath: string;
+    isDirectory: boolean;
+}
+
+type RawTaskFileEntry = string | Record<string, any>;
+
+const ROOT_BREADCRUMB: BreadcrumbNode = { label: "备份内容", path: null };
 
 export function RestoreWizard({
     onBack,
@@ -44,20 +66,35 @@ export function RestoreWizard({
     data,
 }: RestoreWizardProps) {
     const isMobile = useMobile();
+    const [cancelled, setCancelled] = useState(false);
+
     const [currentStep, setCurrentStep] = useState(
         (data && (data.taskId ? 3 : data.planId ? 2 : 1)) || 1
     );
+
     const [planList, setPlanList] = useState<BackupPlanInfo[] | null>(null);
     const [selectedPlanId, setSelectedPlanId] = useState(
         () => data?.planId ?? ""
     );
+    const [plansLoading, setPlansLoading] = useState(true);
+    const [plansError, setPlansError] = useState<string | null>(null);
+
     const [taskList, setTaskList] = useState<TaskInfo[] | null>(null);
     const [selectedTaskId, setSelectedTaskId] = useState(
         () => data?.taskId ?? ""
     );
-    const [viewDirectory, setViewDirectory] = useState<string | null>(null);
-    const [fileList, setFileList] = useState<string[] | null>(null);
+    const [tasksLoading, setTasksLoading] = useState(false);
+    const [tasksError, setTasksError] = useState<string | null>(null);
+
+    const [fileEntries, setFileEntries] = useState<TaskFileEntry[]>([]);
+    const [filesLoading, setFilesLoading] = useState(false);
+    const [filesError, setFilesError] = useState<string | null>(null);
+
     const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
+    const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbNode[]>([
+        ROOT_BREADCRUMB,
+    ]);
+
     const [restoreType, setRestoreType] = useState<"original" | "custom">(
         "original"
     );
@@ -66,74 +103,142 @@ export function RestoreWizard({
         "skip" | "overwrite" | "rename"
     >("skip");
 
-    const selectedPlan =
-        planList && planList.find((plan) => plan.plan_id === selectedPlanId);
-    const selectedTask =
-        taskList && taskList.find((task) => task.taskid === selectedTaskId);
+    const steps = [
+        {
+            number: 1,
+            title: "选择备份计划",
+            description: "选择要恢复的备份计划",
+        },
+        {
+            number: 2,
+            title: "选择备份任务",
+            description: "选择要使用的备份任务",
+        },
+        { number: 3, title: "选择备份文件", description: "勾选需要恢复的文件" },
+        { number: 4, title: "选择恢复目标", description: "设置恢复目标路径" },
+        { number: 5, title: "确认与完成", description: "检查设置并创建任务" },
+    ];
+
+    const currentBreadcrumb = breadcrumbs[breadcrumbs.length - 1];
+    const currentPath = currentBreadcrumb?.path ?? null;
+
+    const selectedPlan = useMemo(
+        () =>
+            planList &&
+            planList.find((plan) => plan.plan_id === selectedPlanId),
+        [planList, selectedPlanId]
+    );
+    const selectedTask = useMemo(
+        () =>
+            taskList && taskList.find((task) => task.taskid === selectedTaskId),
+        [taskList, selectedTaskId]
+    );
 
     const loadPlanList = async () => {
-        if (data?.planId) {
-            setSelectedPlanId(data.planId);
-            const plan = await taskManager.getBackupPlan(data.planId);
-            if (plan) {
-                setPlanList([plan]);
-            }
-        } else {
-            const planIds = await taskManager.listBackupPlans();
-            const plans = await Promise.all(
-                planIds.map((id) => taskManager.getBackupPlan(id))
-            );
-            setPlanList(plans.filter((p): p is BackupPlanInfo => p !== null));
-            if (data?.taskId) {
-                const plan = plans.find((p) => p.plan_id === data.taskId);
+        setPlansLoading(true);
+        setPlansError(null);
+
+        try {
+            if (data?.planId) {
+                setSelectedPlanId(data.planId);
+                const plan = await taskManager.getBackupPlan(data.planId);
                 if (plan) {
-                    setSelectedPlanId(plan.plan_id);
                     setPlanList([plan]);
                 }
-            }
-        }
-    };
-
-    const loadTaskList = async () => {
-        if (data?.taskId) {
-            setSelectedTaskId(data.taskId);
-            const task = await taskManager.getTaskInfo(data.taskId);
-            if (task) {
-                setTaskList([task]);
-                if (planList) {
-                    const plan = planList.find(
-                        (p) => p.plan_id === task.owner_plan_id
-                    );
+            } else {
+                const planIds = await taskManager.listBackupPlans();
+                if (cancelled) return;
+                const plans = await Promise.all(
+                    planIds.map((id) => taskManager.getBackupPlan(id))
+                );
+                setPlanList(
+                    plans.filter((p): p is BackupPlanInfo => p !== null)
+                );
+                if (data?.taskId) {
+                    const plan = plans.find((p) => p.plan_id === data.taskId);
                     if (plan) {
                         setSelectedPlanId(plan.plan_id);
                         setPlanList([plan]);
                     }
                 }
             }
-        } else if (selectedPlanId) {
-            const taskIds = await taskManager.listBackupTasks(
-                {
-                    type: [TaskType.BACKUP],
-                    owner_plan_id: [selectedPlanId],
-                    state: [TaskState.DONE],
-                },
-                0,
-                undefined,
-                [[ListTaskOrderBy.CREATE_TIME, ListOrder.DESC]]
-            );
-            const tasks = await Promise.all(
-                taskIds.task_ids.map((id) => taskManager.getTaskInfo(id))
-            );
-            setTaskList(tasks.filter((t): t is TaskInfo => t !== null));
+        } catch (error) {
+            if (cancelled) return;
+
+            setPlansError(formatErrorMessage(error));
+        } finally {
+            if (!cancelled) {
+                setPlansLoading(false);
+            }
+        }
+    };
+
+    const loadTaskList = async () => {
+        setTasksLoading(true);
+        setTasksError(null);
+        try {
+            if (data?.taskId) {
+                setSelectedTaskId(data.taskId);
+                const task = await taskManager.getTaskInfo(data.taskId);
+                if (task) {
+                    setTaskList([task]);
+                    if (planList) {
+                        const plan = planList.find(
+                            (p) => p.plan_id === task.owner_plan_id
+                        );
+                        if (plan) {
+                            setSelectedPlanId(plan.plan_id);
+                            setPlanList([plan]);
+                        }
+                    }
+                }
+            } else if (selectedPlanId) {
+                const taskIds = await taskManager.listBackupTasks(
+                    {
+                        type: [TaskType.BACKUP],
+                        owner_plan_id: [selectedPlanId],
+                        state: [TaskState.DONE],
+                    },
+                    0,
+                    undefined,
+                    [[ListTaskOrderBy.CREATE_TIME, ListOrder.DESC]]
+                );
+                const tasks = await Promise.all(
+                    taskIds.task_ids.map((id) => taskManager.getTaskInfo(id))
+                );
+                setTaskList(tasks.filter((t): t is TaskInfo => t !== null));
+            }
+        } catch (error) {
+            if (cancelled) return;
+            setTasksError(formatErrorMessage(error));
+        } finally {
+            if (!cancelled) {
+                setTasksLoading(false);
+            }
         }
     };
 
     const loadFiles = async () => {
-        const files = await taskManager.listFilesInTask(
-            selectedTaskId,
-            viewDirectory
-        );
-        setFileList(files);
+        setFilesLoading(true);
+        setFilesError(null);
+        try {
+            const files = await taskManager.listFilesInTask(
+                selectedTaskId,
+                currentPath
+            );
+            const entries = normalizeTaskFileEntries(
+                Array.isArray(files) ? files : [],
+                currentPath
+            );
+            setFileEntries(entries);
+        } catch (error) {
+            if (cancelled) return;
+            setFilesError(formatErrorMessage(error));
+        } finally {
+            if (!cancelled) {
+                setFilesLoading(false);
+            }
+        }
     };
 
     const init = async () => {
@@ -144,6 +249,9 @@ export function RestoreWizard({
 
     useEffect(() => {
         init();
+        return () => {
+            setCancelled(true);
+        };
     }, []);
 
     useEffect(() => {
@@ -151,49 +259,31 @@ export function RestoreWizard({
             setSelectedTaskId("");
             setTaskList(null);
             setSelectedFiles([]);
-            setViewDirectory(null);
             loadTaskList();
         }
     }, [selectedPlanId]);
 
     useEffect(() => {
         setSelectedFiles([]);
-        setViewDirectory(null);
+        setBreadcrumbs([ROOT_BREADCRUMB]);
     }, [selectedTaskId]);
 
     useEffect(() => {
         loadFiles();
-    }, [viewDirectory, selectedTaskId]);
+    }, [breadcrumbs, selectedTaskId]);
 
-    const canProceed = () => {
-        switch (currentStep) {
-            case 1:
-                return selectedPlanId !== "";
-            case 2:
-                return selectedTaskId !== "";
-            case 3:
-                return selectedFiles.length > 0;
-            case 4:
-                return (
-                    restoreType === "original" || customPath.trim().length > 0
-                );
-            default:
-                return true;
+    useEffect(() => {
+        if (
+            !plansLoading &&
+            selectedPlanId &&
+            !(
+                planList &&
+                planList.find((plan) => plan.plan_id === selectedPlanId)
+            )
+        ) {
+            setSelectedPlanId("");
         }
-    };
-
-    const statusLabel = (status: string) => {
-        switch (status) {
-            case "completed":
-                return "已完成";
-            case "running":
-                return "进行中";
-            case "failed":
-                return "失败";
-            default:
-                return status;
-        }
-    };
+    }, [planList, plansLoading, selectedPlanId]);
 
     const overwriteModeLabel =
         overwriteMode === "skip"
@@ -201,355 +291,29 @@ export function RestoreWizard({
             : overwriteMode === "overwrite"
             ? "覆盖已存在文件"
             : "重命名新文件";
-
-    const renderStep = () => {
+    const canProceed = () => {
         switch (currentStep) {
             case 1:
-                return (
-                    <div className="space-y-4">
-                        <div>
-                            <Label className="text-base">选择备份计划</Label>
-                            <p className="text-sm text-muted-foreground">
-                                请选择需要恢复的备份计划。
-                            </p>
-                        </div>
-                        <div className="space-y-3">
-                            {planList.map((plan) => (
-                                <Card
-                                    key={plan.id}
-                                    className={`cursor-pointer transition-all ${
-                                        plan.id === selectedPlanId
-                                            ? "ring-2 ring-primary"
-                                            : ""
-                                    }`}
-                                    onClick={() => setSelectedPlanId(plan.id)}
-                                >
-                                    <CardContent className="p-4 flex items-center justify-between gap-4">
-                                        <div>
-                                            <p className="font-medium">
-                                                {plan.name}
-                                            </p>
-                                            <p className="text-xs text-muted-foreground">
-                                                {plan.description}
-                                            </p>
-                                        </div>
-                                        <div className="text-xs text-muted-foreground text-right">
-                                            <div>
-                                                {plan.tasks.length} 个任务
-                                            </div>
-                                            <div>
-                                                最近：
-                                                {plan.tasks[0]?.executedAt ??
-                                                    "-"}
-                                            </div>
-                                        </div>
-                                    </CardContent>
-                                </Card>
-                            ))}
-                        </div>
-                    </div>
-                );
-
+                return selectedPlanId !== "" && !plansLoading;
             case 2:
-                return (
-                    <div className="space-y-4">
-                        <div>
-                            <Label className="text-base">选择备份任务</Label>
-                            <p className="text-sm text-muted-foreground">
-                                请选择要恢复的具体备份任务。
-                            </p>
-                        </div>
-                        {!selectedPlan ? (
-                            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                                请先选择备份计划。
-                            </div>
-                        ) : (
-                            <div className="space-y-3">
-                                {selectedPlan.tasks.map((task) => (
-                                    <Card
-                                        key={task.id}
-                                        className={`cursor-pointer transition-all ${
-                                            task.id === selectedTaskId
-                                                ? "ring-2 ring-primary"
-                                                : ""
-                                        }`}
-                                        onClick={() =>
-                                            setSelectedTaskId(task.id)
-                                        }
-                                    >
-                                        <CardContent className="p-4 flex items-center justify-between gap-4">
-                                            <div>
-                                                <p className="font-medium">
-                                                    {task.executedAt}
-                                                </p>
-                                                <p className="text-xs text-muted-foreground">
-                                                    {task.files.length} 项内容 ·{" "}
-                                                    {task.size}
-                                                </p>
-                                            </div>
-                                            <div className="text-xs text-muted-foreground text-right">
-                                                {statusLabel(task.status)}
-                                            </div>
-                                        </CardContent>
-                                    </Card>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                );
-
+                return selectedTaskId !== "" && !tasksLoading;
             case 3:
-                return (
-                    <div className="space-y-4">
-                        <div>
-                            <Label className="text-base">选择备份文件</Label>
-                            <p className="text-sm text-muted-foreground">
-                                勾选需要恢复的文件或目录。
-                            </p>
-                        </div>
-                        {!selectedTask ? (
-                            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                                请先选择备份任务。
-                            </div>
-                        ) : (
-                            <div className="space-y-2">
-                                <div className="flex items-center space-x-2">
-                                    <Checkbox
-                                        id="select-all"
-                                        checked={
-                                            selectedTask.files.length > 0 &&
-                                            selectedFiles.length ===
-                                                selectedTask.files.length
-                                        }
-                                        onCheckedChange={(checked) => {
-                                            if (checked === true) {
-                                                setSelectedFiles(
-                                                    selectedTask.files
-                                                );
-                                            } else {
-                                                setSelectedFiles([]);
-                                            }
-                                        }}
-                                    />
-                                    <Label
-                                        htmlFor="select-all"
-                                        className="font-medium"
-                                    >
-                                        全选
-                                    </Label>
-                                </div>
-                                {selectedTask.files.map((file, index) => (
-                                    <div
-                                        key={file}
-                                        className="flex items-center gap-2 rounded-lg border p-3"
-                                    >
-                                        <Checkbox
-                                            id={`file-${index}`}
-                                            checked={selectedFiles.includes(
-                                                file
-                                            )}
-                                            onCheckedChange={(checked) => {
-                                                if (checked === true) {
-                                                    setSelectedFiles((prev) =>
-                                                        prev.includes(file)
-                                                            ? prev
-                                                            : [...prev, file]
-                                                    );
-                                                } else {
-                                                    setSelectedFiles((prev) =>
-                                                        prev.filter(
-                                                            (item) =>
-                                                                item !== file
-                                                        )
-                                                    );
-                                                }
-                                            }}
-                                        />
-                                        <Folder className="w-4 h-4 text-muted-foreground" />
-                                        <Label
-                                            htmlFor={`file-${index}`}
-                                            className="flex-1"
-                                        >
-                                            {file}
-                                        </Label>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                );
-
+                return selectedFiles.length > 0 && !filesLoading;
             case 4:
                 return (
-                    <div className="space-y-4">
-                        <div>
-                            <Label className="text-base">选择恢复目标</Label>
-                            <p className="text-sm text-muted-foreground">
-                                设置恢复路径与文件冲突处理策略。
-                            </p>
-                        </div>
-                        <div className="space-y-3">
-                            <Label className="text-sm font-medium">
-                                恢复位置
-                            </Label>
-                            <RadioGroup
-                                value={restoreType}
-                                onValueChange={(value) =>
-                                    setRestoreType(
-                                        value as "original" | "custom"
-                                    )
-                                }
-                            >
-                                <div className="flex items-center space-x-2">
-                                    <RadioGroupItem
-                                        value="original"
-                                        id="restore-original"
-                                    />
-                                    <Label htmlFor="restore-original">
-                                        恢复到原始位置
-                                    </Label>
-                                </div>
-                                <div className="flex items-center space-x-2">
-                                    <RadioGroupItem
-                                        value="custom"
-                                        id="restore-custom"
-                                    />
-                                    <Label htmlFor="restore-custom">
-                                        恢复到自定义位置
-                                    </Label>
-                                </div>
-                            </RadioGroup>
-                        </div>
-                        {restoreType === "custom" && (
-                            <div className="space-y-2">
-                                <Label className="text-sm font-medium">
-                                    选择目标路径
-                                </Label>
-                                <DirectorySelector
-                                    value={customPath}
-                                    onChange={setCustomPath}
-                                    placeholder="请选择恢复目标路径"
-                                />
-                            </div>
-                        )}
-                        <div className="space-y-3">
-                            <Label className="text-sm font-medium">
-                                文件冲突处理
-                            </Label>
-                            <RadioGroup
-                                value={overwriteMode}
-                                onValueChange={(value) =>
-                                    setOverwriteMode(
-                                        value as "skip" | "overwrite" | "rename"
-                                    )
-                                }
-                            >
-                                <div className="flex items-center space-x-2">
-                                    <RadioGroupItem value="skip" id="skip" />
-                                    <Label htmlFor="skip">跳过已存在文件</Label>
-                                </div>
-                                <div className="flex items-center space-x-2">
-                                    <RadioGroupItem
-                                        value="overwrite"
-                                        id="overwrite"
-                                    />
-                                    <Label htmlFor="overwrite">
-                                        覆盖已存在文件
-                                    </Label>
-                                </div>
-                                <div className="flex items-center space-x-2">
-                                    <RadioGroupItem
-                                        value="rename"
-                                        id="rename"
-                                    />
-                                    <Label htmlFor="rename">重命名新文件</Label>
-                                </div>
-                            </RadioGroup>
-                        </div>
-                    </div>
+                    (restoreType === "original" ||
+                        customPath.trim().length > 0) &&
+                    !filesLoading
                 );
-
             case 5:
-                return (
-                    <div className="space-y-4">
-                        <div>
-                            <Label className="text-base">确认与完成</Label>
-                            <p className="text-sm text-muted-foreground">
-                                检查信息后创建恢复任务。
-                            </p>
-                        </div>
-                        <Card>
-                            <CardContent className="p-4 space-y-2 text-sm">
-                                <div className="flex justify-between">
-                                    <span className="text-muted-foreground">
-                                        备份计划
-                                    </span>
-                                    <span>
-                                        {selectedPlan?.name ?? "未选择"}
-                                    </span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-muted-foreground">
-                                        备份任务
-                                    </span>
-                                    <span>
-                                        {selectedTask?.executedAt ?? "未选择"}
-                                    </span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-muted-foreground">
-                                        文件数量
-                                    </span>
-                                    <span>{selectedFiles.length} 项</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-muted-foreground">
-                                        恢复路径
-                                    </span>
-                                    <span>
-                                        {restoreType === "original"
-                                            ? "原始位置"
-                                            : customPath || "未设置"}
-                                    </span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-muted-foreground">
-                                        冲突策略
-                                    </span>
-                                    <span>{overwriteModeLabel}</span>
-                                </div>
-                            </CardContent>
-                        </Card>
-                        {selectedFiles.length > 0 && (
-                            <Card>
-                                <CardContent className="p-4 space-y-2 text-sm text-muted-foreground">
-                                    {selectedFiles.map((file) => (
-                                        <div
-                                            key={file}
-                                            className="flex items-center gap-2"
-                                        >
-                                            <Folder className="w-4 h-4 text-muted-foreground" />
-                                            <span className="truncate">
-                                                {file}
-                                            </span>
-                                        </div>
-                                    ))}
-                                </CardContent>
-                            </Card>
-                        )}
-                        <div className="rounded-lg bg-blue-50 p-4 text-sm text-blue-800 dark:bg-blue-950 dark:text-blue-200">
-                            恢复任务将在后台执行，可在任务列表查看进度。
-                        </div>
-                    </div>
-                );
-
+                return true;
             default:
-                return null;
+                return false;
         }
     };
 
     const handleNext = () => {
-        if (currentStep < STEPS.length) {
+        if (currentStep < steps.length) {
             setCurrentStep((prev) => prev + 1);
         }
     };
@@ -560,16 +324,527 @@ export function RestoreWizard({
         }
     };
 
-    const handleComplete = () => {
-        toast.success("恢复任务已创建");
-        onComplete();
+    const handleComplete = async () => {
+        try {
+            await taskManager.createRestoreTask(
+                selectedPlanId,
+                selectedTaskId,
+                customPath,
+                overwriteMode === "overwrite",
+                selectedFiles[0]
+            );
+            toast.success("恢复任务已创建");
+            onComplete();
+        } catch (error) {
+            toast.error("创建恢复任务失败：" + formatErrorMessage(error));
+            return;
+        }
+    };
+
+    const handleToggleSelectAll = (checked: boolean | "indeterminate") => {
+        if (checked === true) {
+            setSelectedFiles((prev) => {
+                const existing = new Set(prev);
+                fileEntries.forEach((entry) =>
+                    existing.add(entry.fullPath || entry.label)
+                );
+                return Array.from(existing);
+            });
+        } else if (checked === false) {
+            setSelectedFiles((prev) =>
+                prev.filter(
+                    (item) =>
+                        !fileEntries.some(
+                            (entry) =>
+                                entry.fullPath === item || entry.label === item
+                        )
+                )
+            );
+        }
+    };
+
+    const handleEnterDirectory = (entry: TaskFileEntry) => {
+        if (!entry.isDirectory) return;
+        const nextPath = entry.requestPath;
+        setBreadcrumbs((prev) => [
+            ...prev,
+            { label: entry.label, path: nextPath },
+        ]);
+    };
+
+    const handleBreadcrumbClick = (index: number) => {
+        setBreadcrumbs((prev) => prev.slice(0, index + 1));
+    };
+
+    const renderPlansStep = () => (
+        <div className="space-y-4">
+            <div>
+                <Label className="text-base">选择备份计划</Label>
+                <p className="text-sm text-muted-foreground">
+                    请选择需要恢复的备份计划。
+                </p>
+            </div>
+
+            {plansLoading ? (
+                <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    正在加载备份计划...
+                </div>
+            ) : plansError ? (
+                <div className="rounded-lg border border-destructive/60 bg-destructive/5 p-4 text-sm text-destructive">
+                    加载备份计划失败：{plansError}
+                </div>
+            ) : planList!.length === 0 ? (
+                <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                    暂无可用的备份计划。
+                </div>
+            ) : (
+                <div className="space-y-3">
+                    {planList!.map((plan) => (
+                        <Card
+                            key={plan.plan_id}
+                            className={`cursor-pointer transition-all ${
+                                selectedPlanId === plan.plan_id
+                                    ? "ring-2 ring-primary"
+                                    : ""
+                            }`}
+                            onClick={() => setSelectedPlanId(plan.plan_id)}
+                        >
+                            <CardContent className="flex items-start justify-between gap-4 p-4">
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <div
+                                            className={`flex h-4 w-4 items-center justify-center rounded-full border-2 ${
+                                                selectedPlanId === plan.plan_id
+                                                    ? "border-primary bg-primary"
+                                                    : "border-muted-foreground"
+                                            }`}
+                                        >
+                                            {selectedPlanId ===
+                                                plan.plan_id && (
+                                                <Check className="h-3 w-3 text-primary-foreground" />
+                                            )}
+                                        </div>
+                                        <p className="font-medium">
+                                            {plan.title || plan.plan_id}
+                                        </p>
+                                    </div>
+                                    {plan.description && (
+                                        <p className="text-xs text-muted-foreground">
+                                            {plan.description}
+                                        </p>
+                                    )}
+                                    <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                                        <span>来源：{plan.source}</span>
+                                        <span>目标：{plan.target}</span>
+                                    </div>
+                                </div>
+                                <div className="text-right text-xs text-muted-foreground">
+                                    <div>已备份 {plan.total_backup} 次</div>
+                                    <div>
+                                        最近一次：
+                                        {plan.last_run_time
+                                            ? new Date(
+                                                  plan.last_run_time
+                                              ).toLocaleString()
+                                            : "未执行"}
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+    const renderTasksStep = () => (
+        <div className="space-y-4">
+            <div>
+                <Label className="text-base">选择备份任务</Label>
+                <p className="text-sm text-muted-foreground">
+                    请选择要用于恢复的备份任务。
+                </p>
+            </div>
+
+            {!selectedPlan ? (
+                <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                    请先选择备份计划。
+                </div>
+            ) : tasksLoading ? (
+                <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    正在加载备份任务...
+                </div>
+            ) : tasksError ? (
+                <div className="rounded-lg border border-destructive/60 bg-destructive/5 p-4 text-sm text-destructive">
+                    加载备份任务失败：{tasksError}
+                </div>
+            ) : taskList!.length === 0 ? (
+                <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                    当前备份计划尚无可用任务。
+                </div>
+            ) : (
+                <div className="space-y-3">
+                    {taskList!.map((task) => (
+                        <Card
+                            key={task.taskid}
+                            className={`cursor-pointer transition-all ${
+                                selectedTaskId === task.taskid
+                                    ? "ring-2 ring-primary"
+                                    : ""
+                            }`}
+                            onClick={() => setSelectedTaskId(task.taskid)}
+                        >
+                            <CardContent className="flex items-center justify-between gap-4 p-4">
+                                <div className="flex items-start gap-3">
+                                    <FileText className="h-4 w-4 text-muted-foreground" />
+                                    <div>
+                                        <p className="font-medium">
+                                            {task.name || task.taskid}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">
+                                            创建时间：
+                                            {formatDateTime(task.create_time)}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">
+                                            大小：
+                                            {TaskMgrHelper.taskTotalStr(task)} ·
+                                            条目：
+                                            {task.item_count}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="text-right text-xs text-muted-foreground">
+                                    <div>
+                                        状态：{translateTaskState(task.state)}
+                                    </div>
+                                    <div>检查点：{task.checkpoint_id}</div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+
+    const renderFilesStep = () => {
+        const allSelected =
+            fileEntries.length > 0 &&
+            fileEntries.every((entry) =>
+                selectedFiles.includes(entry.fullPath)
+            );
+        const someSelected = fileEntries.some((entry) =>
+            selectedFiles.includes(entry.fullPath)
+        );
+        const selectAllState =
+            fileEntries.length === 0
+                ? false
+                : allSelected
+                ? true
+                : someSelected
+                ? "indeterminate"
+                : false;
+
+        return (
+            <div className="space-y-4">
+                <div>
+                    <Label className="text-base">选择备份文件</Label>
+                    <p className="text-sm text-muted-foreground">
+                        使用面包屑逐级浏览目录，勾选需要恢复的文件或目录。
+                    </p>
+                </div>
+
+                {!selectedTask ? (
+                    <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                        请先选择备份任务。
+                    </div>
+                ) : (
+                    <>
+                        <Breadcrumb>
+                            <BreadcrumbList>
+                                {breadcrumbs.map((item, index) => (
+                                    <React.Fragment
+                                        key={`${item.label}-${index}`}
+                                    >
+                                        <BreadcrumbItem>
+                                            {index ===
+                                            breadcrumbs.length - 1 ? (
+                                                <BreadcrumbPage>
+                                                    {item.label}
+                                                </BreadcrumbPage>
+                                            ) : (
+                                                <BreadcrumbLink
+                                                    className="cursor-pointer"
+                                                    onClick={() =>
+                                                        handleBreadcrumbClick(
+                                                            index
+                                                        )
+                                                    }
+                                                >
+                                                    {item.label}
+                                                </BreadcrumbLink>
+                                            )}
+                                        </BreadcrumbItem>
+                                        {index < breadcrumbs.length - 1 && (
+                                            <BreadcrumbSeparator />
+                                        )}
+                                    </React.Fragment>
+                                ))}
+                            </BreadcrumbList>
+                        </Breadcrumb>
+
+                        <div className="flex items-center space-x-2">
+                            <Checkbox
+                                id="select-all"
+                                checked={selectAllState}
+                                onCheckedChange={handleToggleSelectAll}
+                                disabled={fileEntries.length === 0}
+                            />
+                            <Label htmlFor="select-all" className="font-medium">
+                                全选当前目录
+                            </Label>
+                        </div>
+
+                        {filesLoading ? (
+                            <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                正在加载文件列表...
+                            </div>
+                        ) : filesError ? (
+                            <div className="rounded-lg border border-destructive/60 bg-destructive/5 p-4 text-sm text-destructive">
+                                加载文件列表失败：{filesError}
+                            </div>
+                        ) : fileEntries.length === 0 ? (
+                            <div className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
+                                当前目录下没有发现文件或目录。
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                {fileEntries.map((entry) => (
+                                    <div
+                                        key={entry.id}
+                                        className="flex items-center gap-2 rounded-lg border p-3 hover:bg-muted/40"
+                                    >
+                                        <Checkbox
+                                            checked={selectedFiles.includes(
+                                                entry.fullPath
+                                            )}
+                                            onCheckedChange={(checked) => {
+                                                if (checked === true) {
+                                                    setSelectedFiles((prev) =>
+                                                        prev.includes(
+                                                            entry.fullPath
+                                                        )
+                                                            ? prev
+                                                            : [
+                                                                  ...prev,
+                                                                  entry.fullPath,
+                                                              ]
+                                                    );
+                                                } else if (checked === false) {
+                                                    setSelectedFiles((prev) =>
+                                                        prev.filter(
+                                                            (item) =>
+                                                                item !==
+                                                                entry.fullPath
+                                                        )
+                                                    );
+                                                }
+                                            }}
+                                        />
+                                        {entry.isDirectory ? (
+                                            <Folder className="h-4 w-4 text-muted-foreground" />
+                                        ) : (
+                                            <FileText className="h-4 w-4 text-muted-foreground" />
+                                        )}
+                                        <button
+                                            type="button"
+                                            className="flex-1 text-left"
+                                            onClick={() =>
+                                                handleEnterDirectory(entry)
+                                            }
+                                            disabled={!entry.isDirectory}
+                                        >
+                                            <span
+                                                className={`${
+                                                    entry.isDirectory
+                                                        ? "text-primary"
+                                                        : ""
+                                                }`}
+                                            >
+                                                {entry.label}
+                                            </span>
+                                            <span className="block text-xs text-muted-foreground">
+                                                {entry.fullPath}
+                                            </span>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </>
+                )}
+            </div>
+        );
+    };
+    const renderSettingsStep = () => (
+        <div className="space-y-4">
+            <div>
+                <Label className="text-base">选择恢复目标</Label>
+                <p className="text-sm text-muted-foreground">
+                    设置恢复路径和文件冲突处理策略。
+                </p>
+            </div>
+
+            <div className="space-y-3">
+                <Label className="text-sm font-medium">恢复位置</Label>
+                <RadioGroup
+                    value={restoreType}
+                    onValueChange={(value) =>
+                        setRestoreType(value as "original" | "custom")
+                    }
+                >
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem
+                            value="original"
+                            id="restore-original"
+                        />
+                        <Label htmlFor="restore-original">恢复到原始位置</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="custom" id="restore-custom" />
+                        <Label htmlFor="restore-custom">恢复到自定义位置</Label>
+                    </div>
+                </RadioGroup>
+            </div>
+
+            {restoreType === "custom" && (
+                <div className="space-y-2">
+                    <Label className="text-sm font-medium">选择目标路径</Label>
+                    <DirectorySelector
+                        value={customPath}
+                        onChange={setCustomPath}
+                        placeholder="请选择恢复目标路径"
+                        purpose={DirectoryPurpose.RESTORE_TARGET}
+                    />
+                </div>
+            )}
+
+            <div className="space-y-3">
+                <Label className="text-sm font-medium">文件冲突处理</Label>
+                <RadioGroup
+                    value={overwriteMode}
+                    onValueChange={(value) =>
+                        setOverwriteMode(
+                            value as "skip" | "overwrite" | "rename"
+                        )
+                    }
+                >
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="skip" id="skip" />
+                        <Label htmlFor="skip">跳过已存在文件</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="overwrite" id="overwrite" />
+                        <Label htmlFor="overwrite">覆盖已存在文件</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="rename" id="rename" />
+                        <Label htmlFor="rename">重命名新文件</Label>
+                    </div>
+                </RadioGroup>
+            </div>
+        </div>
+    );
+
+    const renderConfirmStep = () => (
+        <div className="space-y-4">
+            <div>
+                <Label className="text-base">确认恢复信息</Label>
+                <p className="text-sm text-muted-foreground">
+                    请确认以下配置信息，确保恢复任务符合预期。
+                </p>
+            </div>
+
+            <Card>
+                <CardContent className="space-y-2 p-4 text-sm">
+                    <div className="flex justify-between">
+                        <span className="text-muted-foreground">备份计划</span>
+                        <span>{selectedPlan?.title ?? "未选择"}</span>
+                    </div>
+                    <div className="flex justify-between">
+                        <span className="text-muted-foreground">备份任务</span>
+                        <span>{selectedTask?.name ?? "未选择"}</span>
+                    </div>
+                    <div className="flex justify-between">
+                        <span className="text-muted-foreground">检查点</span>
+                        <span>{selectedTask?.checkpoint_id ?? "-"}</span>
+                    </div>
+                    <div className="flex justify之间">
+                        <span className="text-muted-foreground">文件数量</span>
+                        <span>{selectedFiles.length} 项</span>
+                    </div>
+                    <div className="flex justify-between">
+                        <span className="text-muted-foreground">恢复路径</span>
+                        <span>
+                            {restoreType === "original"
+                                ? "原始位置"
+                                : customPath || "未设置"}
+                        </span>
+                    </div>
+                    <div className="flex justify-between">
+                        <span className="text-muted-foreground">冲突策略</span>
+                        <span>{overwriteModeLabel}</span>
+                    </div>
+                </CardContent>
+            </Card>
+
+            {selectedFiles.length > 0 && (
+                <Card>
+                    <CardContent className="space-y-2 p-4 text-sm text-muted-foreground">
+                        <div className="flex items-center gap-2 text-foreground">
+                            <HardDrive className="h-4 w-4" />
+                            即将恢复的文件
+                        </div>
+                        {selectedFiles.map((file) => (
+                            <div key={file} className="flex items-center gap-2">
+                                <Folder className="h-4 w-4 text-muted-foreground" />
+                                <span className="truncate">{file}</span>
+                            </div>
+                        ))}
+                    </CardContent>
+                </Card>
+            )}
+
+            <div className="rounded-lg bg-blue-50 p-4 text-sm text-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                恢复任务将在后台执行，您可以在任务列表中查看进度。
+            </div>
+        </div>
+    );
+
+    const renderStepContent = () => {
+        switch (currentStep) {
+            case 1:
+                return renderPlansStep();
+            case 2:
+                return renderTasksStep();
+            case 3:
+                return renderFilesStep();
+            case 4:
+                return renderSettingsStep();
+            case 5:
+                return renderConfirmStep();
+            default:
+                return null;
+        }
     };
 
     return (
         <div className={`${isMobile ? "p-4" : "p-6"} space-y-6`}>
             <div className="flex items-center gap-4">
                 <Button variant="ghost" size="sm" onClick={onBack}>
-                    <ArrowLeft className="w-4 h-4" />
+                    <ArrowLeft className="h-4 w-4" />
                     {!isMobile && <span className="ml-2">返回</span>}
                 </Button>
                 <div>
@@ -581,7 +856,7 @@ export function RestoreWizard({
             </div>
 
             <div className="flex items-center justify-between">
-                {STEPS.map((step, index) => (
+                {steps.map((step, index) => (
                     <div key={step.number} className="flex items-center">
                         <div
                             className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
@@ -612,7 +887,7 @@ export function RestoreWizard({
                                 </p>
                             </div>
                         )}
-                        {index < STEPS.length - 1 && (
+                        {index < steps.length - 1 && (
                             <div
                                 className={`mx-4 h-px w-8 ${
                                     currentStep > step.number
@@ -626,7 +901,7 @@ export function RestoreWizard({
             </div>
 
             <Card>
-                <CardContent className="p-6">{renderStep()}</CardContent>
+                <CardContent className="p-6">{renderStepContent()}</CardContent>
             </Card>
 
             <div className="flex items-center justify-between">
@@ -642,7 +917,7 @@ export function RestoreWizard({
                     <Button variant="outline" onClick={onBack}>
                         取消
                     </Button>
-                    {currentStep < STEPS.length ? (
+                    {currentStep < steps.length ? (
                         <Button onClick={handleNext} disabled={!canProceed()}>
                             下一步
                             <ChevronRight className="ml-2 h-4 w-4" />
@@ -659,4 +934,139 @@ export function RestoreWizard({
             </div>
         </div>
     );
+}
+function normalizeTaskFileEntries(
+    rawEntries: Array<{
+        name: string;
+        len: number;
+        create_time: number;
+        update_time: number;
+        is_dir: boolean;
+    }>,
+    currentPath: string | null
+): TaskFileEntry[] {
+    return rawEntries.map((entry, index) => {
+        const raw = entry.name || "";
+        const trimmed = trimTrailingSlash(raw);
+        const isDirectory = Boolean(entry.is_dir);
+        const label =
+            getLastPathSegment(trimmed) ||
+            trimmed ||
+            (isDirectory ? "目录" : "文件");
+        const requestPath = buildRequestPath(currentPath, trimmed || label);
+        const fullPath = normalizeDisplayPath(requestPath || trimmed || label);
+        return {
+            id: `${fullPath || label}-${index}`,
+            label,
+            fullPath,
+            requestPath: requestPath || fullPath || label,
+            isDirectory,
+        };
+    });
+}
+
+function buildRequestPath(base: string | null, segment: string): string {
+    const normalizedSegment = normalizeSegment(segment);
+    if (!base || base.length === 0) {
+        return normalizedSegment;
+    }
+    if (isAbsolutePath(normalizedSegment)) {
+        return normalizedSegment;
+    }
+    const normalizedBase = normalizeSegment(base);
+    if (normalizedBase === "") {
+        return normalizedSegment;
+    }
+    if (normalizedBase === "/") {
+        return `/${normalizedSegment}`;
+    }
+    return `${normalizedBase}${
+        normalizedBase.endsWith("/") ? "" : "/"
+    }${normalizedSegment}`;
+}
+
+function normalizeSegment(input: string): string {
+    if (!input) return "";
+    let result = input.replace(/\\/g, "/");
+    if (/^[A-Za-z]:$/.test(result)) {
+        return result;
+    }
+    if (result.includes("://")) {
+        return trimTrailingSlash(result);
+    }
+    if (result === "/") {
+        return "/";
+    }
+    return trimTrailingSlash(result);
+}
+
+function normalizeDisplayPath(input: string): string {
+    if (!input) return "";
+    let result = input.replace(/\\/g, "/");
+    if (result !== "/" && result.endsWith("/")) {
+        result = result.slice(0, -1);
+    }
+    return result;
+}
+
+function trimTrailingSlash(input: string): string {
+    if (!input) return "";
+    let result = input.trim();
+    while (
+        result.length > 1 &&
+        (result.endsWith("/") || result.endsWith("\\"))
+    ) {
+        result = result.slice(0, -1);
+    }
+    return result;
+}
+
+function getLastPathSegment(path: string): string | null {
+    if (!path) return null;
+    const normalized = path.replace(/\\/g, "/");
+    const segments = normalized.split("/").filter(Boolean);
+    if (segments.length === 0) return path;
+    return segments[segments.length - 1];
+}
+
+function isAbsolutePath(path: string): boolean {
+    return (
+        /^[A-Za-z]:/.test(path) || path.startsWith("/") || path.includes("://")
+    );
+}
+
+function formatErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+        return error.message;
+    }
+    if (typeof error === "string") {
+        return error;
+    }
+    return "未知错误";
+}
+
+function formatDateTime(timestamp?: number): string {
+    if (!timestamp) return "--";
+    try {
+        return new Date(timestamp).toLocaleString();
+    } catch {
+        return String(timestamp);
+    }
+}
+
+function translateTaskState(state: TaskState): string {
+    switch (state) {
+        case TaskState.RUNNING:
+            return "运行中";
+        case TaskState.PENDING:
+            return "排队中";
+        case TaskState.PAUSED:
+            return "已暂停";
+        case TaskState.DONE:
+            return "已完成";
+        case TaskState.FAILED:
+            return "失败";
+        default:
+            return state;
+    }
 }

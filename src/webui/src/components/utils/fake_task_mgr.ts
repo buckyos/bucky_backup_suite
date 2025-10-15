@@ -325,7 +325,15 @@ export class FakeTaskManager extends BackupTaskManager {
     async listFilesInTask(
         taskId: string,
         subDir: string | null
-    ): Promise<string[]> {
+    ): Promise<
+        Array<{
+            name: string;
+            len: number;
+            create_time: number;
+            update_time: number;
+            is_dir: boolean;
+        }>
+    > {
         const task = this.task_list.tasks.find((t) => t.taskid === taskId)!;
         if (!task) return [];
         if (!subDir) {
@@ -342,7 +350,13 @@ export class FakeTaskManager extends BackupTaskManager {
             found = next;
         }
         return found.children
-            ? found.children.map((c) => c.name + (c.isDirectory ? "/" : ""))
+            ? found.children.map((c) => ({
+                  name: c.name,
+                  len: c.size || 0,
+                  create_time: c.modifiedTime || 0,
+                  update_time: c.modifiedTime || 0,
+                  is_dir: c.isDirectory,
+              }))
             : [];
     }
 

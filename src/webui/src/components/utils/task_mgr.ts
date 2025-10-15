@@ -490,7 +490,15 @@ export class BackupTaskManager {
     async listFilesInTask(
         taskId: string,
         subDir: string | null
-    ): Promise<string[]> {
+    ): Promise<
+        Array<{
+            name: string;
+            len: number;
+            create_time: number;
+            update_time: number;
+            is_dir: boolean;
+        }>
+    > {
         const result = await this.rpc_client.call("list_files_in_task", {
             taskid: taskId,
             subdir: subDir,
