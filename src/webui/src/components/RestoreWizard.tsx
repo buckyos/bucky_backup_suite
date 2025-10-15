@@ -1,19 +1,10 @@
-import React, { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import React, { useEffect, useState } from "react";
+import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
-import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Checkbox } from "./ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "./ui/select";
 import { DirectorySelector } from "./DirectorySelector";
-import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
 import { toast } from "sonner";
 import {
@@ -21,10 +12,17 @@ import {
     ChevronLeft,
     ChevronRight,
     Folder,
-    FileText,
-    HardDrive,
     Check,
 } from "lucide-react";
+import {
+    BackupPlanInfo,
+    ListOrder,
+    ListTaskOrderBy,
+    TaskInfo,
+    TaskState,
+    TaskType,
+} from "./utils/task_mgr";
+import { taskManager } from "./utils/fake_task_mgr";
 
 interface RestoreWizardProps {
     onBack: () => void;
@@ -32,151 +30,306 @@ interface RestoreWizardProps {
     data?: { planId?: string; taskId?: string };
 }
 
+interface BackupTask {
+    id: string;
+    executedAt: string;
+    size: string;
+    files: string[];
+    status: string;
+}
+
+interface BackupPlan {
+    id: string;
+    name: string;
+    description: string;
+    tasks: BackupTask[];
+}
+
+const AVAILABLE_PLANS: BackupPlan[] = [
+    {
+        id: "plan-system",
+        name: "系统文件备份",
+        description: "系统核心文件每日备份",
+        tasks: [
+            {
+                id: "task-system-20240115",
+                executedAt: "2024-01-15 23:30:00",
+                size: "2.1 GB",
+                files: [
+                    "C:\\Windows\\System32\\config",
+                    "C:\\Windows\\System32\\drivers",
+                ],
+                status: "completed",
+            },
+            {
+                id: "task-system-20240108",
+                executedAt: "2024-01-08 23:30:00",
+                size: "2.0 GB",
+                files: [
+                    "C:\\Windows\\System32\\config",
+                    "C:\\Windows\\System32\\drivers",
+                ],
+                status: "completed",
+            },
+        ],
+    },
+    {
+        id: "plan-projects",
+        name: "项目文件备份",
+        description: "研发项目差异备份",
+        tasks: [
+            {
+                id: "task-project-20240115",
+                executedAt: "2024-01-15 02:45:00",
+                size: "856 MB",
+                files: ["D:\\Projects\\WebApp", "D:\\Projects\\Mobile"],
+                status: "completed",
+            },
+            {
+                id: "task-project-20240112",
+                executedAt: "2024-01-12 02:45:00",
+                size: "852 MB",
+                files: ["D:\\Projects\\WebApp"],
+                status: "completed",
+            },
+        ],
+    },
+    {
+        id: "plan-documents",
+        name: "文档备份",
+        description: "办公文档定时备份",
+        tasks: [
+            {
+                id: "task-docs-20240114",
+                executedAt: "2024-01-14 01:00:00",
+                size: "1.2 GB",
+                files: ["C:\\Users\\Documents", "C:\\Users\\Desktop"],
+                status: "completed",
+            },
+            {
+                id: "task-docs-20240107",
+                executedAt: "2024-01-07 01:00:00",
+                size: "1.1 GB",
+                files: ["C:\\Users\\Documents"],
+                status: "completed",
+            },
+        ],
+    },
+];
+
+const STEPS = [
+    { number: 1, title: "选择备份计划", description: "选择要恢复的备份计划" },
+    { number: 2, title: "选择备份任务", description: "确定要恢复的备份任务" },
+    { number: 3, title: "选择备份文件", description: "勾选需要恢复的文件" },
+    { number: 4, title: "选择恢复目标", description: "设置恢复目标与策略" },
+    { number: 5, title: "确认与完成", description: "检查信息并创建任务" },
+];
+
 export function RestoreWizard({
     onBack,
     onComplete,
     data,
 }: RestoreWizardProps) {
-    const { t } = useLanguage();
     const isMobile = useMobile();
-    const [currentStep, setCurrentStep] = useState(1);
-    const [selectedBackup, setSelectedBackup] = useState("");
+    const [currentStep, setCurrentStep] = useState(
+        (data && (data.taskId ? 3 : data.planId ? 2 : 1)) || 1
+    );
+    const [planList, setPlanList] = useState<BackupPlanInfo[] | null>(null);
+    const [selectedPlanId, setSelectedPlanId] = useState(
+        () => data?.planId ?? ""
+    );
+    const [taskList, setTaskList] = useState<TaskInfo[] | null>(null);
+    const [selectedTaskId, setSelectedTaskId] = useState(
+        () => data?.taskId ?? ""
+    );
+    const [viewDirectory, setViewDirectory] = useState<string | null>(null);
+    const [fileList, setFileList] = useState<string[] | null>(null);
     const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-    const [restoreType, setRestoreType] = useState("original");
+    const [restoreType, setRestoreType] = useState<"original" | "custom">(
+        "original"
+    );
     const [customPath, setCustomPath] = useState("");
-    const [overwriteMode, setOverwriteMode] = useState("skip");
+    const [overwriteMode, setOverwriteMode] = useState<
+        "skip" | "overwrite" | "rename"
+    >("skip");
 
-    // 模拟备份数据
-    const availableBackups = [
-        {
-            id: "1",
-            planName: "系统文件备份",
-            date: "2024-01-15 23:30:00",
-            size: "2.1 GB",
-            files: [
-                "C:\\Windows\\System32\\config",
-                "C:\\Windows\\System32\\drivers",
-            ],
-            status: "completed",
-        },
-        {
-            id: "2",
-            planName: "项目文件备份",
-            date: "2024-01-15 02:45:00",
-            size: "856 MB",
-            files: ["D:\\Projects\\WebApp", "D:\\Projects\\Mobile"],
-            status: "completed",
-        },
-        {
-            id: "3",
-            planName: "文档备份",
-            date: "2024-01-14 01:00:00",
-            size: "1.2 GB",
-            files: ["C:\\Users\\Documents", "C:\\Users\\Desktop"],
-            status: "completed",
-        },
-    ];
-
-    const steps = [
-        { number: 1, title: "选择备份", description: "选择要恢复的备份" },
-        { number: 2, title: "选择文件", description: "选择要恢复的文件" },
-        { number: 3, title: "恢复设置", description: "配置恢复选项" },
-        { number: 4, title: "确认恢复", description: "确认恢复设置" },
-    ];
-
-    const selectedBackupData = availableBackups.find(
-        (b) => b.id === selectedBackup
+    const selectedPlan = AVAILABLE_PLANS.find(
+        (plan) => plan.id === selectedPlanId
+    );
+    const selectedTask = selectedPlan?.tasks.find(
+        (task) => task.id === selectedTaskId
     );
 
-    const handleNext = () => {
-        if (currentStep < 4) {
-            setCurrentStep(currentStep + 1);
+    const loadPlanList = async () => {
+        if (data?.planId) {
+            setSelectedPlanId(data.planId);
+            const plan = await taskManager.getBackupPlan(data.planId);
+            if (plan) {
+                setPlanList([plan]);
+            }
+        } else {
+            const planIds = await taskManager.listBackupPlans();
+            const plans = await Promise.all(
+                planIds.map((id) => taskManager.getBackupPlan(id))
+            );
+            setPlanList(plans.filter((p): p is BackupPlanInfo => p !== null));
+            if (data?.taskId) {
+                const plan = plans.find((p) => p.plan_id === data.taskId);
+                if (plan) {
+                    setSelectedPlanId(plan.plan_id);
+                    setPlanList([plan]);
+                }
+            }
         }
     };
 
-    const handlePrevious = () => {
-        if (currentStep > 1) {
-            setCurrentStep(currentStep - 1);
+    const loadTaskList = async () => {
+        if (data?.taskId) {
+            setSelectedTaskId(data.taskId);
+            const task = await taskManager.getTaskInfo(data.taskId);
+            if (task) {
+                setTaskList([task]);
+                if (planList) {
+                    const plan = planList.find(
+                        (p) => p.plan_id === task.owner_plan_id
+                    );
+                    if (plan) {
+                        setSelectedPlanId(plan.plan_id);
+                        setPlanList([plan]);
+                    }
+                }
+            }
+        } else if (selectedPlanId) {
+            const taskIds = await taskManager.listBackupTasks(
+                {
+                    type: [TaskType.BACKUP],
+                    owner_plan_id: [selectedPlanId],
+                    state: [TaskState.DONE],
+                },
+                0,
+                undefined,
+                [[ListTaskOrderBy.CREATE_TIME, ListOrder.DESC]]
+            );
+            const tasks = await Promise.all(
+                taskIds.task_ids.map((id) => taskManager.getTaskInfo(id))
+            );
+            setTaskList(tasks.filter((t): t is TaskInfo => t !== null));
         }
     };
 
-    const handleComplete = () => {
-        toast.success("恢复任务已创建");
-        onComplete();
+    const loadFiles = async () => {
+        const files = await taskManager.listFilesInTask(
+            selectedTaskId,
+            viewDirectory
+        );
+        setFileList(files);
     };
+
+    const init = async () => {
+        Promise.all([loadPlanList(), loadTaskList()]).catch((err) => {
+            console.error("Failed to initialize RestoreWizard:", err);
+        });
+    };
+
+    useEffect(() => {
+        init();
+    }, []);
+
+    useEffect(() => {
+        if (!data?.taskId) {
+            setSelectedTaskId("");
+            setTaskList(null);
+            setSelectedFiles([]);
+            setViewDirectory(null);
+            loadTaskList();
+        }
+    }, [selectedPlanId]);
+
+    useEffect(() => {
+        setSelectedFiles([]);
+        setViewDirectory(null);
+    }, [selectedTaskId]);
+    
+    useEffect(() => {
+        loadFiles();
+    }, [viewDirectory, selectedTaskId]);
 
     const canProceed = () => {
         switch (currentStep) {
             case 1:
-                return selectedBackup !== "";
+                return selectedPlanId !== "";
             case 2:
-                return selectedFiles.length > 0;
+                return selectedTaskId !== "";
             case 3:
-                return restoreType === "original" || customPath !== "";
+                return selectedFiles.length > 0;
             case 4:
-                return true;
+                return (
+                    restoreType === "original" || customPath.trim().length > 0
+                );
             default:
-                return false;
+                return true;
         }
     };
 
-    const renderStepContent = () => {
+    const statusLabel = (status: string) => {
+        switch (status) {
+            case "completed":
+                return "已完成";
+            case "running":
+                return "进行中";
+            case "failed":
+                return "失败";
+            default:
+                return status;
+        }
+    };
+
+    const overwriteModeLabel =
+        overwriteMode === "skip"
+            ? "跳过已存在文件"
+            : overwriteMode === "overwrite"
+            ? "覆盖已存在文件"
+            : "重命名新文件";
+
+    const renderStep = () => {
         switch (currentStep) {
             case 1:
                 return (
                     <div className="space-y-4">
                         <div>
-                            <Label className="text-base">
-                                选择要恢复的备份
-                            </Label>
-                            <p className="text-sm text-muted-foreground mb-4">
-                                从可用的备份中选择一个进行恢复
+                            <Label className="text-base">选择备份计划</Label>
+                            <p className="text-sm text-muted-foreground">
+                                请选择需要恢复的备份计划。
                             </p>
                         </div>
-
                         <div className="space-y-3">
-                            {availableBackups.map((backup) => (
+                            {AVAILABLE_PLANS.map((plan) => (
                                 <Card
-                                    key={backup.id}
+                                    key={plan.id}
                                     className={`cursor-pointer transition-all ${
-                                        selectedBackup === backup.id
+                                        plan.id === selectedPlanId
                                             ? "ring-2 ring-primary"
                                             : ""
                                     }`}
-                                    onClick={() => setSelectedBackup(backup.id)}
+                                    onClick={() => setSelectedPlanId(plan.id)}
                                 >
-                                    <CardContent className="p-4">
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-3">
-                                                <div
-                                                    className={`w-4 h-4 rounded-full border-2 ${
-                                                        selectedBackup ===
-                                                        backup.id
-                                                            ? "border-primary bg-primary"
-                                                            : "border-muted-foreground"
-                                                    }`}
-                                                >
-                                                    {selectedBackup ===
-                                                        backup.id && (
-                                                        <Check className="w-2 h-2 text-primary-foreground m-auto" />
-                                                    )}
-                                                </div>
-                                                <div>
-                                                    <p className="font-medium">
-                                                        {backup.planName}
-                                                    </p>
-                                                    <p className="text-sm text-muted-foreground">
-                                                        {backup.date}
-                                                    </p>
-                                                </div>
+                                    <CardContent className="p-4 flex items-center justify-between gap-4">
+                                        <div>
+                                            <p className="font-medium">
+                                                {plan.name}
+                                            </p>
+                                            <p className="text-xs text-muted-foreground">
+                                                {plan.description}
+                                            </p>
+                                        </div>
+                                        <div className="text-xs text-muted-foreground text-right">
+                                            <div>
+                                                {plan.tasks.length} 个任务
                                             </div>
-                                            <div className="text-right">
-                                                <p className="text-sm font-medium">
-                                                    {backup.size}
-                                                </p>
-                                                <p className="text-xs text-muted-foreground">
-                                                    {backup.files.length} 个目录
-                                                </p>
+                                            <div>
+                                                最近：
+                                                {plan.tasks[0]?.executedAt ??
+                                                    "-"}
                                             </div>
                                         </div>
                                     </CardContent>
@@ -190,27 +343,77 @@ export function RestoreWizard({
                 return (
                     <div className="space-y-4">
                         <div>
-                            <Label className="text-base">
-                                选择要恢复的文件
-                            </Label>
-                            <p className="text-sm text-muted-foreground mb-4">
-                                选择要从备份中恢复的文件和目录
+                            <Label className="text-base">选择备份任务</Label>
+                            <p className="text-sm text-muted-foreground">
+                                请选择要恢复的具体备份任务。
                             </p>
                         </div>
-
-                        {selectedBackupData && (
+                        {!selectedPlan ? (
+                            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                                请先选择备份计划。
+                            </div>
+                        ) : (
                             <div className="space-y-3">
+                                {selectedPlan.tasks.map((task) => (
+                                    <Card
+                                        key={task.id}
+                                        className={`cursor-pointer transition-all ${
+                                            task.id === selectedTaskId
+                                                ? "ring-2 ring-primary"
+                                                : ""
+                                        }`}
+                                        onClick={() =>
+                                            setSelectedTaskId(task.id)
+                                        }
+                                    >
+                                        <CardContent className="p-4 flex items-center justify-between gap-4">
+                                            <div>
+                                                <p className="font-medium">
+                                                    {task.executedAt}
+                                                </p>
+                                                <p className="text-xs text-muted-foreground">
+                                                    {task.files.length} 项内容 ·{" "}
+                                                    {task.size}
+                                                </p>
+                                            </div>
+                                            <div className="text-xs text-muted-foreground text-right">
+                                                {statusLabel(task.status)}
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                );
+
+            case 3:
+                return (
+                    <div className="space-y-4">
+                        <div>
+                            <Label className="text-base">选择备份文件</Label>
+                            <p className="text-sm text-muted-foreground">
+                                勾选需要恢复的文件或目录。
+                            </p>
+                        </div>
+                        {!selectedTask ? (
+                            <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                                请先选择备份任务。
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
                                 <div className="flex items-center space-x-2">
                                     <Checkbox
                                         id="select-all"
                                         checked={
+                                            selectedTask.files.length > 0 &&
                                             selectedFiles.length ===
-                                            selectedBackupData.files.length
+                                                selectedTask.files.length
                                         }
                                         onCheckedChange={(checked) => {
-                                            if (checked) {
+                                            if (checked === true) {
                                                 setSelectedFiles(
-                                                    selectedBackupData.files
+                                                    selectedTask.files
                                                 );
                                             } else {
                                                 setSelectedFiles([]);
@@ -224,11 +427,10 @@ export function RestoreWizard({
                                         全选
                                     </Label>
                                 </div>
-
-                                {selectedBackupData.files.map((file, index) => (
+                                {selectedTask.files.map((file, index) => (
                                     <div
-                                        key={index}
-                                        className="flex items-center space-x-2 p-3 border rounded-lg"
+                                        key={file}
+                                        className="flex items-center gap-2 rounded-lg border p-3"
                                     >
                                         <Checkbox
                                             id={`file-${index}`}
@@ -236,15 +438,17 @@ export function RestoreWizard({
                                                 file
                                             )}
                                             onCheckedChange={(checked) => {
-                                                if (checked) {
-                                                    setSelectedFiles([
-                                                        ...selectedFiles,
-                                                        file,
-                                                    ]);
+                                                if (checked === true) {
+                                                    setSelectedFiles((prev) =>
+                                                        prev.includes(file)
+                                                            ? prev
+                                                            : [...prev, file]
+                                                    );
                                                 } else {
-                                                    setSelectedFiles(
-                                                        selectedFiles.filter(
-                                                            (f) => f !== file
+                                                    setSelectedFiles((prev) =>
+                                                        prev.filter(
+                                                            (item) =>
+                                                                item !== file
                                                         )
                                                     );
                                                 }
@@ -264,55 +468,74 @@ export function RestoreWizard({
                     </div>
                 );
 
-            case 3:
+            case 4:
                 return (
-                    <div className="space-y-6">
+                    <div className="space-y-4">
                         <div>
-                            <Label className="text-base">恢复目标</Label>
-                            <p className="text-sm text-muted-foreground mb-4">
-                                选择文件的恢复位置
+                            <Label className="text-base">选择恢复目标</Label>
+                            <p className="text-sm text-muted-foreground">
+                                设置恢复路径与文件冲突处理策略。
                             </p>
                         </div>
-
-                        <RadioGroup
-                            value={restoreType}
-                            onValueChange={setRestoreType}
-                        >
-                            <div className="flex items-center space-x-2">
-                                <RadioGroupItem
-                                    value="original"
-                                    id="original"
-                                />
-                                <Label htmlFor="original">恢复到原始位置</Label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <RadioGroupItem value="custom" id="custom" />
-                                <Label htmlFor="custom">恢复到自定义位置</Label>
-                            </div>
-                        </RadioGroup>
-
+                        <div className="space-y-3">
+                            <Label className="text-sm font-medium">
+                                恢复位置
+                            </Label>
+                            <RadioGroup
+                                value={restoreType}
+                                onValueChange={(value) =>
+                                    setRestoreType(
+                                        value as "original" | "custom"
+                                    )
+                                }
+                            >
+                                <div className="flex items-center space-x-2">
+                                    <RadioGroupItem
+                                        value="original"
+                                        id="restore-original"
+                                    />
+                                    <Label htmlFor="restore-original">
+                                        恢复到原始位置
+                                    </Label>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                    <RadioGroupItem
+                                        value="custom"
+                                        id="restore-custom"
+                                    />
+                                    <Label htmlFor="restore-custom">
+                                        恢复到自定义位置
+                                    </Label>
+                                </div>
+                            </RadioGroup>
+                        </div>
                         {restoreType === "custom" && (
                             <div className="space-y-2">
-                                <Label>目标路径</Label>
+                                <Label className="text-sm font-medium">
+                                    选择目标路径
+                                </Label>
                                 <DirectorySelector
                                     value={customPath}
                                     onChange={setCustomPath}
-                                    placeholder="选择恢复目标路径"
+                                    placeholder="请选择恢复目标路径"
                                 />
                             </div>
                         )}
-
                         <div className="space-y-3">
-                            <Label className="text-base">文件冲突处理</Label>
+                            <Label className="text-sm font-medium">
+                                文件冲突处理
+                            </Label>
                             <RadioGroup
                                 value={overwriteMode}
-                                onValueChange={setOverwriteMode}
+                                onValueChange={(value) =>
+                                    setOverwriteMode(
+                                        value as "skip" | "overwrite" | "rename"
+                                    )
+                                }
                             >
                                 <div className="flex items-center space-x-2">
                                     <RadioGroupItem value="skip" id="skip" />
-                                    <Label htmlFor="skip">
-                                        跳过已存在的文件
-                                    </Label>
+                                    <Label htmlFor="skip">跳过已存在文件</Label>
                                 </div>
                                 <div className="flex items-center space-x-2">
                                     <RadioGroupItem
@@ -320,7 +543,7 @@ export function RestoreWizard({
                                         id="overwrite"
                                     />
                                     <Label htmlFor="overwrite">
-                                        覆盖已存在的文件
+                                        覆盖已存在文件
                                     </Label>
                                 </div>
                                 <div className="flex items-center space-x-2">
@@ -335,76 +558,76 @@ export function RestoreWizard({
                     </div>
                 );
 
-            case 4:
+            case 5:
                 return (
-                    <div className="space-y-6">
+                    <div className="space-y-4">
                         <div>
-                            <Label className="text-base">确认恢复设置</Label>
-                            <p className="text-sm text-muted-foreground mb-6">
-                                请确认以下恢复设置无误
+                            <Label className="text-base">确认与完成</Label>
+                            <p className="text-sm text-muted-foreground">
+                                检查信息后创建恢复任务。
                             </p>
                         </div>
-
-                        <div className="space-y-4">
+                        <Card>
+                            <CardContent className="p-4 space-y-2 text-sm">
+                                <div className="flex justify-between">
+                                    <span className="text-muted-foreground">
+                                        备份计划
+                                    </span>
+                                    <span>
+                                        {selectedPlan?.name ?? "未选择"}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-muted-foreground">
+                                        备份任务
+                                    </span>
+                                    <span>
+                                        {selectedTask?.executedAt ?? "未选择"}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-muted-foreground">
+                                        文件数量
+                                    </span>
+                                    <span>{selectedFiles.length} 项</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-muted-foreground">
+                                        恢复路径
+                                    </span>
+                                    <span>
+                                        {restoreType === "original"
+                                            ? "原始位置"
+                                            : customPath || "未设置"}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-muted-foreground">
+                                        冲突策略
+                                    </span>
+                                    <span>{overwriteModeLabel}</span>
+                                </div>
+                            </CardContent>
+                        </Card>
+                        {selectedFiles.length > 0 && (
                             <Card>
-                                <CardContent className="p-4">
-                                    <div className="space-y-3">
-                                        <div className="flex justify-between">
-                                            <span className="text-sm text-muted-foreground">
-                                                备份来源:
-                                            </span>
-                                            <span className="text-sm font-medium">
-                                                {selectedBackupData?.planName}
-                                            </span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-sm text-muted-foreground">
-                                                备份时间:
-                                            </span>
-                                            <span className="text-sm font-medium">
-                                                {selectedBackupData?.date}
+                                <CardContent className="p-4 space-y-2 text-sm text-muted-foreground">
+                                    {selectedFiles.map((file) => (
+                                        <div
+                                            key={file}
+                                            className="flex items-center gap-2"
+                                        >
+                                            <Folder className="w-4 h-4 text-muted-foreground" />
+                                            <span className="truncate">
+                                                {file}
                                             </span>
                                         </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-sm text-muted-foreground">
-                                                选择文件:
-                                            </span>
-                                            <span className="text-sm font-medium">
-                                                {selectedFiles.length} 个项目
-                                            </span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-sm text-muted-foreground">
-                                                恢复到:
-                                            </span>
-                                            <span className="text-sm font-medium">
-                                                {restoreType === "original"
-                                                    ? "原始位置"
-                                                    : customPath}
-                                            </span>
-                                        </div>
-                                        <div className="flex justify-between">
-                                            <span className="text-sm text-muted-foreground">
-                                                冲突处理:
-                                            </span>
-                                            <span className="text-sm font-medium">
-                                                {overwriteMode === "skip"
-                                                    ? "跳过已存在文件"
-                                                    : overwriteMode ===
-                                                      "overwrite"
-                                                    ? "覆盖已存在文件"
-                                                    : "重命名新文件"}
-                                            </span>
-                                        </div>
-                                    </div>
+                                    ))}
                                 </CardContent>
                             </Card>
-
-                            <div className="p-4 bg-blue-50 rounded-lg dark:bg-blue-950">
-                                <p className="text-sm text-blue-800 dark:text-blue-200">
-                                    恢复任务将在后台执行，您可以在任务列表中查看进度。
-                                </p>
-                            </div>
+                        )}
+                        <div className="rounded-lg bg-blue-50 p-4 text-sm text-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                            恢复任务将在后台执行，可在任务列表查看进度。
                         </div>
                     </div>
                 );
@@ -414,9 +637,25 @@ export function RestoreWizard({
         }
     };
 
+    const handleNext = () => {
+        if (currentStep < STEPS.length) {
+            setCurrentStep((prev) => prev + 1);
+        }
+    };
+
+    const handlePrevious = () => {
+        if (currentStep > 1) {
+            setCurrentStep((prev) => prev - 1);
+        }
+    };
+
+    const handleComplete = () => {
+        toast.success("恢复任务已创建");
+        onComplete();
+    };
+
     return (
         <div className={`${isMobile ? "p-4" : "p-6"} space-y-6`}>
-            {/* 头部导航 */}
             <div className="flex items-center gap-4">
                 <Button variant="ghost" size="sm" onClick={onBack}>
                     <ArrowLeft className="w-4 h-4" />
@@ -425,24 +664,23 @@ export function RestoreWizard({
                 <div>
                     <h1 className="text-xl font-semibold">创建恢复任务</h1>
                     <p className="text-sm text-muted-foreground">
-                        从备份中恢复文件和目录
+                        按顺序完成恢复配置
                     </p>
                 </div>
             </div>
 
-            {/* 步骤指示器 */}
             <div className="flex items-center justify-between">
-                {steps.map((step, index) => (
+                {STEPS.map((step, index) => (
                     <div key={step.number} className="flex items-center">
                         <div
-                            className={`flex items-center justify-center w-8 h-8 rounded-full text-sm font-medium ${
+                            className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium ${
                                 currentStep >= step.number
                                     ? "bg-primary text-primary-foreground"
                                     : "bg-muted text-muted-foreground"
                             }`}
                         >
                             {currentStep > step.number ? (
-                                <Check className="w-4 h-4" />
+                                <Check className="h-4 w-4" />
                             ) : (
                                 step.number
                             )}
@@ -463,9 +701,9 @@ export function RestoreWizard({
                                 </p>
                             </div>
                         )}
-                        {index < steps.length - 1 && (
+                        {index < STEPS.length - 1 && (
                             <div
-                                className={`w-8 h-px mx-4 ${
+                                className={`mx-4 h-px w-8 ${
                                     currentStep > step.number
                                         ? "bg-primary"
                                         : "bg-muted"
@@ -476,30 +714,27 @@ export function RestoreWizard({
                 ))}
             </div>
 
-            {/* 步骤内容 */}
             <Card>
-                <CardContent className="p-6">{renderStepContent()}</CardContent>
+                <CardContent className="p-6">{renderStep()}</CardContent>
             </Card>
 
-            {/* 底部按钮 */}
             <div className="flex items-center justify-between">
                 <Button
                     variant="outline"
                     onClick={handlePrevious}
                     disabled={currentStep === 1}
                 >
-                    <ChevronLeft className="w-4 h-4 mr-2" />
+                    <ChevronLeft className="mr-2 h-4 w-4" />
                     上一步
                 </Button>
-
                 <div className="flex gap-3">
                     <Button variant="outline" onClick={onBack}>
                         取消
                     </Button>
-                    {currentStep < 4 ? (
+                    {currentStep < STEPS.length ? (
                         <Button onClick={handleNext} disabled={!canProceed()}>
                             下一步
-                            <ChevronRight className="w-4 h-4 ml-2" />
+                            <ChevronRight className="ml-2 h-4 w-4" />
                         </Button>
                     ) : (
                         <Button

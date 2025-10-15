@@ -32,6 +32,11 @@ export interface TaskInfo {
     speed: number; // B/s todo
 }
 
+export interface RestoreTaskInfo extends TaskInfo {
+    restore_location_url: string;
+    is_clean_restore: boolean;
+}
+
 export type PlanPolicyPeriod = {
     minutes: number; // 0-60*24
 } & ({} | { week: number } | { date: number });
@@ -480,6 +485,17 @@ export class BackupTaskManager {
             this.pauseBackupTask(taskid);
             await this.emitTaskEvent(TaskEventType.PAUSE_TASK, taskid);
         }
+    }
+
+    async listFilesInTask(
+        taskId: string,
+        subDir: string | null
+    ): Promise<string[]> {
+        const result = await this.rpc_client.call("list_files_in_task", {
+            taskid: taskId,
+            subdir: subDir,
+        });
+        return result.files;
     }
 
     async createBackupTarget(

@@ -18,6 +18,14 @@ import {
     TaskType,
 } from "./task_mgr";
 
+interface TaskFile {
+    name: string;
+    isDirectory: boolean;
+    size?: number;
+    modifiedTime?: number;
+    children?: TaskFile[];
+}
+
 export class FakeTaskManager extends BackupTaskManager {
     private plan_list = {
         next_plan_id: 1,
@@ -25,13 +33,24 @@ export class FakeTaskManager extends BackupTaskManager {
     };
     private task_list = {
         next_task_id: 1,
-        tasks: new Array<TaskInfo>(),
+        tasks: new Array<TaskInfo & { root: string }>(),
     };
     private target_list = {
         next_target_id: 1,
         targets: new Array<BackupTargetInfo>(),
     };
+    private files_system_tree: TaskFile = {
+        name: "/",
+        isDirectory: true,
+        children: [],
+    };
     private logs: BackupLog[] = [];
+
+    constructor() {
+        super();
+        // 初始化一些模拟数据
+        // TODO: 从MOCK_DIR_TREE构造files_system_tree
+    }
 
     async createBackupPlan(params: {
         type_str: string;
@@ -92,7 +111,7 @@ export class FakeTaskManager extends BackupTaskManager {
         let plan = this.plan_list.plans.find((p) => p.plan_id === planId)!;
         plan.last_run_time = Date.now();
         const checkpoint_id = plan.last_checkpoint_index++;
-        const result: TaskInfo = {
+        const result = {
             taskid: `task_${this.task_list.next_task_id++}`,
             owner_plan_id: planId,
             checkpoint_id: `checkpoint_${checkpoint_id}`,
@@ -108,6 +127,7 @@ export class FakeTaskManager extends BackupTaskManager {
             last_log_content: null,
             name: `${plan.title}-BACKUP-${checkpoint_id}`,
             speed: 0,
+            root: plan.source,
         };
         this.task_list.tasks.push(result);
         await this.emitTaskEvent(TaskEventType.CREATE_TASK, result);
@@ -118,13 +138,14 @@ export class FakeTaskManager extends BackupTaskManager {
         planId: string,
         checkpointId: string,
         targetLocationUrl: string,
-        is_clean_folder?: boolean
+        is_clean_folder?: boolean,
+        subPath?: string
     ) {
         const plan = this.plan_list.plans.find((p) => p.plan_id === planId)!;
         const backup_task = this.task_list.tasks
             .filter((t) => t.owner_plan_id === planId)
             .find((t) => t.checkpoint_id === checkpointId);
-        const result: TaskInfo = {
+        const result = {
             taskid: `task_${this.task_list.next_task_id++}`,
             owner_plan_id: planId,
             checkpoint_id: checkpointId,
@@ -140,6 +161,9 @@ export class FakeTaskManager extends BackupTaskManager {
             last_log_content: null,
             name: `${plan.title}-RESTORE-${checkpointId}`,
             speed: 0,
+            restore_location_url: targetLocationUrl,
+            is_clean_restore: is_clean_folder,
+            root: subPath || backup_task!.root,
         };
         this.task_list.tasks.push(result);
         await this.emitTaskEvent(TaskEventType.CREATE_TASK, result);
@@ -296,6 +320,30 @@ export class FakeTaskManager extends BackupTaskManager {
         this.task_list.tasks.splice(idx, 1);
         await this.emitTaskEvent(TaskEventType.REMOVE_TASK, taskId);
         return true;
+    }
+
+    async listFilesInTask(
+        taskId: string,
+        subDir: string | null
+    ): Promise<string[]> {
+        const task = this.task_list.tasks.find((t) => t.taskid === taskId)!;
+        if (!task) return [];
+        if (!subDir) {
+            subDir = task.root;
+        }
+
+        // find subDir under files_system_tree
+        const subPaths = subDir.split("/").filter((s) => s.length > 0);
+        let found = this.files_system_tree;
+        for (const part of subPaths) {
+            if (!found.children) return [];
+            const next = found.children.find((c) => c.name === part);
+            if (!next) return [];
+            found = next;
+        }
+        return found.children
+            ? found.children.map((c) => c.name + (c.isDirectory ? "/" : ""))
+            : [];
     }
 
     async createBackupTarget(
