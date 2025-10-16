@@ -506,6 +506,24 @@ export class BackupTaskManager {
         return result.files;
     }
 
+    async listChunksInFile(
+        taskId: string,
+        filePath: string
+    ): Promise<
+        Array<{
+            chunkid: string;
+            seq: string;
+            size: number;
+            status: string;
+        }>
+    > {
+        const result = await this.rpc_client.call("list_chunks_in_file", {
+            taskid: taskId,
+            filepath: filePath,
+        });
+        return result.chunks;
+    }
+
     async createBackupTarget(
         target_type: TargetType,
         target_url: string,

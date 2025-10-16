@@ -23,7 +23,15 @@ interface TaskFile {
     isDirectory: boolean;
     size?: number;
     modifiedTime?: number;
-    children?: TaskFile[];
+    children?: Array<
+        | TaskFile
+        | {
+              chunkid: string;
+              seq: string;
+              size: number;
+              status: string;
+          }
+    >;
 }
 
 export class FakeTaskManager extends BackupTaskManager {
@@ -344,19 +352,60 @@ export class FakeTaskManager extends BackupTaskManager {
         const subPaths = subDir.split("/").filter((s) => s.length > 0);
         let found = this.files_system_tree;
         for (const part of subPaths) {
-            if (!found.children) return [];
-            const next = found.children.find((c) => c.name === part);
+            if (!found.isDirectory) return [];
+            const next = found.children!.find(
+                (c) => (c as TaskFile).name === part
+            );
             if (!next) return [];
-            found = next;
+            found = next as TaskFile;
         }
         return found.children
-            ? found.children.map((c) => ({
-                  name: c.name,
-                  len: c.size || 0,
-                  create_time: c.modifiedTime || 0,
-                  update_time: c.modifiedTime || 0,
-                  is_dir: c.isDirectory,
-              }))
+            ? found.children.map((c) => {
+                  const f = c as TaskFile;
+                  return {
+                      name: f.name,
+                      len: f.size || 0,
+                      create_time: f.modifiedTime || 0,
+                      update_time: f.modifiedTime || 0,
+                      is_dir: f.isDirectory,
+                  };
+              })
+            : [];
+    }
+
+    async listChunksInFile(
+        taskId: string,
+        filePath: string
+    ): Promise<
+        Array<{
+            chunkid: string;
+            seq: string;
+            size: number;
+            status: string;
+        }>
+    > {
+        const task = this.task_list.tasks.find((t) => t.taskid === taskId)!;
+        if (!task) return [];
+
+        // find subDir under files_system_tree
+        const subPaths = filePath.split("/").filter((s) => s.length > 0);
+        let found = this.files_system_tree;
+        for (const part of subPaths) {
+            if (!found.isDirectory) return [];
+            const next = found.children!.find(
+                (c) => (c as TaskFile).name === part
+            );
+            if (!next) return [];
+            found = next as TaskFile;
+        }
+        if (found.isDirectory) return [];
+        return found.children
+            ? (found.children as Array<{
+                  chunkid: string;
+                  seq: string;
+                  size: number;
+                  status: string;
+              }>)
             : [];
     }
 

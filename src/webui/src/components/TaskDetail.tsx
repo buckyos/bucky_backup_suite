@@ -26,9 +26,10 @@ import {
     File,
     Hash,
 } from "lucide-react";
+import { TaskInfo } from "./utils/task_mgr";
 
 interface TaskDetailProps {
-    task: any;
+    task: TaskInfo;
     onBack: () => void;
 }
 
