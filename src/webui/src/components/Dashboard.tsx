@@ -703,24 +703,42 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         className="h-1.5"
                                                     />
                                                     <div className="flex justify-between text-xs text-muted-foreground">
-                                                        <span>
-                                                            {TaskMgrHelper.taskCompletedStr(
-                                                                task
-                                                            )}
-                                                            % •{" "}
-                                                            {TaskMgrHelper.taskSpeedStr(
-                                                                task
-                                                            )}
-                                                        </span>
-                                                        <span>
-                                                            {TaskMgrHelper.taskRemainingStr(
-                                                                task
-                                                            )}{" "}
-                                                            • ETA{" "}
-                                                            {TaskMgrHelper.taskETA(
-                                                                task
-                                                            )}
-                                                        </span>
+                                                        {task.state ===
+                                                        TaskState.RUNNING ? (
+                                                            <>
+                                                                <span>
+                                                                    {TaskMgrHelper.taskProgress(
+                                                                        task
+                                                                    )}{" "}
+                                                                    • ETA{" "}
+                                                                    {TaskMgrHelper.taskSpeedStr(
+                                                                        task
+                                                                    )}
+                                                                </span>
+                                                                <span>
+                                                                    {TaskMgrHelper.taskRemainingStr(
+                                                                        task
+                                                                    )}{" "}
+                                                                    • ETA{" "}
+                                                                    {TaskMgrHelper.taskETA(
+                                                                        task
+                                                                    )}
+                                                                </span>
+                                                            </>
+                                                        ) : (
+                                                            <>
+                                                                <span>
+                                                                    {TaskMgrHelper.taskProgress(
+                                                                        task
+                                                                    )}
+                                                                </span>
+                                                                <span>
+                                                                    {TaskMgrHelper.taskRemainingStr(
+                                                                        task
+                                                                    )}{" "}
+                                                                </span>
+                                                            </>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </div>
@@ -813,7 +831,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         </div>
                                                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                                             <span>
-                                                                {service.used}
+                                                                {TaskMgrHelper.formatSize(
+                                                                    service.used
+                                                                )}
                                                             </span>
                                                             {service.used >
                                                                 0 && (
@@ -881,8 +901,13 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                     </div>
                                                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                                                         <span>
-                                                            {service.used} /{" "}
-                                                            {service.total}
+                                                            {TaskMgrHelper.formatSize(
+                                                                service.used
+                                                            )}{" "}
+                                                            /{" "}
+                                                            {TaskMgrHelper.formatSize(
+                                                                service.total
+                                                            )}
                                                         </span>
                                                         {usagePercent > 0 && (
                                                             <>
@@ -1107,8 +1132,13 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                     {task.name}
                                                 </p>
                                                 <p className="text-xs text-muted-foreground">
-                                                    {task.update_time} •{" "}
-                                                    {task.total_size}
+                                                    {TaskMgrHelper.formatTime(
+                                                        task.update_time
+                                                    )}{" "}
+                                                    •{" "}
+                                                    {TaskMgrHelper.formatSize(
+                                                        task.total_size
+                                                    )}
                                                 </p>
                                             </div>
                                         </div>

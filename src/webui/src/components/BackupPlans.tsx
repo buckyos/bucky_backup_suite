@@ -261,344 +261,368 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                         </CardContent>
                     </Card>
                 ) : (
-                    plans.map((plan) => (
-                        <Card
-                            key={plan.plan_id}
-                            className={`transition-all ${
-                                plan.policy_disabled || plan.policy.length === 0
-                                    ? "opacity-60"
-                                    : ""
-                            }`}
-                        >
-                            <CardHeader>
-                                <div className="flex items-start justify-between">
-                                    <div className="flex-1">
-                                        <div className="flex items-center gap-3 mb-2">
-                                            <CardTitle
-                                                className={`${
-                                                    isMobile
-                                                        ? "text-base"
-                                                        : "text-lg"
-                                                }`}
-                                            >
-                                                {plan.title}
-                                            </CardTitle>
-                                            {getStatusBadge(plan)}
+                    plans.map((plan) => {
+                        const policies = TaskMgrHelper.formatPlanPolicy(plan);
+                        return (
+                            <Card
+                                key={plan.plan_id}
+                                className={`transition-all ${
+                                    plan.policy_disabled ||
+                                    plan.policy.length === 0
+                                        ? "opacity-60"
+                                        : ""
+                                }`}
+                            >
+                                <CardHeader>
+                                    <div className="flex items-start justify-between">
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-3 mb-2">
+                                                <CardTitle
+                                                    className={`${
+                                                        isMobile
+                                                            ? "text-base"
+                                                            : "text-lg"
+                                                    }`}
+                                                >
+                                                    {plan.title}
+                                                </CardTitle>
+                                                {getStatusBadge(plan)}
+                                            </div>
+                                            {!isMobile && (
+                                                <CardDescription>
+                                                    {plan.description}
+                                                </CardDescription>
+                                            )}
                                         </div>
-                                        {!isMobile && (
-                                            <CardDescription>
-                                                {plan.description}
-                                            </CardDescription>
-                                        )}
-                                    </div>
-                                    <div className="flex items-center gap-3">
-                                        <Switch
-                                            disabled={plan.policy.length === 0}
-                                            checked={
-                                                !(
-                                                    plan.policy_disabled ||
+                                        <div className="flex items-center gap-3">
+                                            <Switch
+                                                disabled={
                                                     plan.policy.length === 0
-                                                )
-                                            }
-                                            onCheckedChange={() =>
-                                                togglePlan(plan)
-                                            }
-                                        />
-                                    </div>
-                                </div>
-                            </CardHeader>
-                            <CardContent>
-                                <div
-                                    className={`grid ${
-                                        isMobile
-                                            ? "grid-cols-1"
-                                            : "grid-cols-1 lg:grid-cols-4"
-                                    } gap-4 mb-4`}
-                                >
-                                    <div className="flex items-center gap-2">
-                                        <Folder className="w-4 h-4 text-muted-foreground" />
-                                        <div>
-                                            <p className="text-sm text-muted-foreground">
-                                                {t.plans.source}
-                                            </p>
-                                            <p
-                                                className={`font-medium truncate ${
-                                                    isMobile ? "text-sm" : ""
-                                                }`}
-                                            >
-                                                {plan.source}
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <Server className="w-4 h-4 text-muted-foreground" />
-                                        <div>
-                                            <p className="text-sm text-muted-foreground">
-                                                {t.plans.destination}
-                                            </p>
-                                            <p
-                                                className={`font-medium ${
-                                                    isMobile ? "text-sm" : ""
-                                                }`}
-                                            >
-                                                {
-                                                    services.find(
-                                                        (s) =>
-                                                            s.target_id ===
-                                                            plan.target
-                                                    )?.name
                                                 }
-                                            </p>
+                                                checked={
+                                                    !(
+                                                        plan.policy_disabled ||
+                                                        plan.policy.length === 0
+                                                    )
+                                                }
+                                                onCheckedChange={() =>
+                                                    togglePlan(plan)
+                                                }
+                                            />
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-2">
-                                        <Calendar className="w-4 h-4 text-muted-foreground" />
+                                </CardHeader>
+                                <CardContent>
+                                    <div
+                                        className={`grid ${
+                                            isMobile
+                                                ? "grid-cols-1"
+                                                : "grid-cols-1 lg:grid-cols-4"
+                                        } gap-4 mb-4`}
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <Folder className="w-4 h-4 text-muted-foreground" />
+                                            <div>
+                                                <p className="text-sm text-muted-foreground">
+                                                    {t.plans.source}
+                                                </p>
+                                                <p
+                                                    className={`font-medium truncate ${
+                                                        isMobile
+                                                            ? "text-sm"
+                                                            : ""
+                                                    }`}
+                                                >
+                                                    {plan.source}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Server className="w-4 h-4 text-muted-foreground" />
+                                            <div>
+                                                <p className="text-sm text-muted-foreground">
+                                                    {t.plans.destination}
+                                                </p>
+                                                <p
+                                                    className={`font-medium ${
+                                                        isMobile
+                                                            ? "text-sm"
+                                                            : ""
+                                                    }`}
+                                                >
+                                                    {
+                                                        services.find(
+                                                            (s) =>
+                                                                s.target_id ===
+                                                                plan.target
+                                                        )?.name
+                                                    }
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <Calendar className="w-4 h-4 text-muted-foreground" />
+                                            <div>
+                                                <p className="text-sm text-muted-foreground">
+                                                    {t.plans.schedule}
+                                                </p>
+                                                <p
+                                                    className={`font-medium ${
+                                                        isMobile
+                                                            ? "text-sm"
+                                                            : ""
+                                                    }`}
+                                                >
+                                                    {policies.map((s, idx) => (
+                                                        <span key={idx}>
+                                                            {idx ===
+                                                            policies.length - 1
+                                                                ? `${s}`
+                                                                : `${s}|`}
+                                                        </span>
+                                                    ))}
+                                                </p>
+                                            </div>
+                                        </div>
                                         <div>
                                             <p className="text-sm text-muted-foreground">
-                                                {t.plans.schedule}
+                                                {t.plans.nextRun}
                                             </p>
                                             <p
                                                 className={`font-medium ${
                                                     isMobile ? "text-sm" : ""
                                                 }`}
                                             >
-                                                {TaskMgrHelper.formatPlanPolicy(
-                                                    plan
-                                                ).map((s, idx) => (
-                                                    <span
-                                                        key={idx}
-                                                    >{`${s}|`}</span>
-                                                ))}
+                                                {TaskMgrHelper.formatTime(
+                                                    TaskMgrHelper.planNextRunTime(
+                                                        plan
+                                                    ),
+                                                    "--"
+                                                )}
                                             </p>
                                         </div>
                                     </div>
-                                    <div>
-                                        <p className="text-sm text-muted-foreground">
-                                            {t.plans.nextRun}
-                                        </p>
-                                        <p
-                                            className={`font-medium ${
-                                                isMobile ? "text-sm" : ""
+
+                                    <div className="flex items-center justify-between pt-4 border-t">
+                                        <div
+                                            className={`text-muted-foreground ${
+                                                isMobile ? "text-xs" : "text-sm"
                                             }`}
                                         >
+                                            {t.plans.lastRun}:{" "}
                                             {TaskMgrHelper.formatTime(
-                                                TaskMgrHelper.planNextRunTime(
-                                                    plan
-                                                ),
+                                                plan.last_run_time,
                                                 "--"
                                             )}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <div className="flex items-center justify-between pt-4 border-t">
-                                    <div
-                                        className={`text-muted-foreground ${
-                                            isMobile ? "text-xs" : "text-sm"
-                                        }`}
-                                    >
-                                        {t.plans.lastRun}:{" "}
-                                        {TaskMgrHelper.formatTime(
-                                            plan.last_run_time,
-                                            "--"
-                                        )}
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        {isMobile ? (
-                                            <>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="p-2"
-                                                    onClick={() =>
-                                                        runPlan(plan)
-                                                    }
-                                                >
-                                                    <Play className="w-3 h-3" />
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="p-2"
-                                                    onClick={() =>
-                                                        onNavigate?.(
-                                                            "restore",
-                                                            {
-                                                                planId: plan.plan_id,
-                                                            }
-                                                        )
-                                                    }
-                                                >
-                                                    <Undo2 className="w-3 h-3" />
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="p-2"
-                                                    onClick={() =>
-                                                        onNavigate?.(
-                                                            "edit-plan",
-                                                            plan
-                                                        )
-                                                    }
-                                                >
-                                                    <Edit className="w-3 h-3" />
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="p-2"
-                                                    onClick={() =>
-                                                        onNavigate?.(
-                                                            "plan-details",
-                                                            plan
-                                                        )
-                                                    }
-                                                >
-                                                    <Eye className="w-3 h-3" />
-                                                </Button>
-                                                <AlertDialog>
-                                                    <AlertDialogTrigger asChild>
-                                                        <Button
-                                                            variant="outline"
-                                                            size="sm"
-                                                            className="p-2 text-destructive hover:text-destructive-foreground hover:bg-destructive"
-                                                        >
-                                                            <Trash2 className="w-3 h-3" />
-                                                        </Button>
-                                                    </AlertDialogTrigger>
-                                                    <AlertDialogContent>
-                                                        <AlertDialogHeader>
-                                                            <AlertDialogTitle>
-                                                                删除备份计划
-                                                            </AlertDialogTitle>
-                                                            <AlertDialogDescription>
-                                                                确定要删除备份计划
-                                                                "{plan.title}"
-                                                                吗？此操作不可撤销。
-                                                            </AlertDialogDescription>
-                                                        </AlertDialogHeader>
-                                                        <AlertDialogFooter>
-                                                            <AlertDialogCancel>
-                                                                取消
-                                                            </AlertDialogCancel>
-                                                            <AlertDialogAction
-                                                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                                                onClick={() =>
-                                                                    deletePlan(
-                                                                        plan.plan_id
-                                                                    )
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            {isMobile ? (
+                                                <>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="p-2"
+                                                        onClick={() =>
+                                                            runPlan(plan)
+                                                        }
+                                                    >
+                                                        <Play className="w-3 h-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="p-2"
+                                                        onClick={() =>
+                                                            onNavigate?.(
+                                                                "restore",
+                                                                {
+                                                                    planId: plan.plan_id,
                                                                 }
-                                                            >
-                                                                删除
-                                                            </AlertDialogAction>
-                                                        </AlertDialogFooter>
-                                                    </AlertDialogContent>
-                                                </AlertDialog>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="gap-1"
-                                                    onClick={() =>
-                                                        runPlan(plan)
-                                                    }
-                                                >
-                                                    <Play className="w-3 h-3" />
-                                                    {t.plans.runNow}
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="gap-1"
-                                                    onClick={() =>
-                                                        onNavigate?.(
-                                                            "restore",
-                                                            {
-                                                                planId: plan.plan_id,
-                                                            }
-                                                        )
-                                                    }
-                                                >
-                                                    <Undo2 className="w-3 h-3" />
-                                                    {t.common.restore}
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="gap-1"
-                                                    onClick={() =>
-                                                        onNavigate?.(
-                                                            "edit-plan",
-                                                            plan
-                                                        )
-                                                    }
-                                                >
-                                                    <Edit className="w-3 h-3" />
-                                                    {t.common.edit}
-                                                </Button>
-                                                <Button
-                                                    variant="outline"
-                                                    size="sm"
-                                                    className="gap-1"
-                                                    onClick={() =>
-                                                        onNavigate?.(
-                                                            "plan-details",
-                                                            plan
-                                                        )
-                                                    }
-                                                >
-                                                    <Eye className="w-3 h-3" />
-                                                    详情
-                                                </Button>
-                                                <AlertDialog>
-                                                    <AlertDialogTrigger asChild>
-                                                        <Button
-                                                            variant="outline"
-                                                            size="sm"
-                                                            className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                                                            )
+                                                        }
+                                                    >
+                                                        <Undo2 className="w-3 h-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="p-2"
+                                                        onClick={() =>
+                                                            onNavigate?.(
+                                                                "edit-plan",
+                                                                plan
+                                                            )
+                                                        }
+                                                    >
+                                                        <Edit className="w-3 h-3" />
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="p-2"
+                                                        onClick={() =>
+                                                            onNavigate?.(
+                                                                "plan-details",
+                                                                plan
+                                                            )
+                                                        }
+                                                    >
+                                                        <Eye className="w-3 h-3" />
+                                                    </Button>
+                                                    <AlertDialog>
+                                                        <AlertDialogTrigger
+                                                            asChild
                                                         >
-                                                            <Trash2 className="w-3 h-3" />
-                                                            {t.common.delete}
-                                                        </Button>
-                                                    </AlertDialogTrigger>
-                                                    <AlertDialogContent>
-                                                        <AlertDialogHeader>
-                                                            <AlertDialogTitle>
-                                                                删除备份计划
-                                                            </AlertDialogTitle>
-                                                            <AlertDialogDescription>
-                                                                确定要删除备份计划
-                                                                "{plan.title}"
-                                                                吗？此操作不可撤销。
-                                                            </AlertDialogDescription>
-                                                        </AlertDialogHeader>
-                                                        <AlertDialogFooter>
-                                                            <AlertDialogCancel>
-                                                                取消
-                                                            </AlertDialogCancel>
-                                                            <AlertDialogAction
-                                                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                                                onClick={() =>
-                                                                    deletePlan(
-                                                                        plan.plan_id
-                                                                    )
-                                                                }
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                className="p-2 text-destructive hover:text-destructive-foreground hover:bg-destructive"
                                                             >
-                                                                删除
-                                                            </AlertDialogAction>
-                                                        </AlertDialogFooter>
-                                                    </AlertDialogContent>
-                                                </AlertDialog>
-                                            </>
-                                        )}
+                                                                <Trash2 className="w-3 h-3" />
+                                                            </Button>
+                                                        </AlertDialogTrigger>
+                                                        <AlertDialogContent>
+                                                            <AlertDialogHeader>
+                                                                <AlertDialogTitle>
+                                                                    删除备份计划
+                                                                </AlertDialogTitle>
+                                                                <AlertDialogDescription>
+                                                                    确定要删除备份计划
+                                                                    "
+                                                                    {plan.title}
+                                                                    "
+                                                                    吗？此操作不可撤销。
+                                                                </AlertDialogDescription>
+                                                            </AlertDialogHeader>
+                                                            <AlertDialogFooter>
+                                                                <AlertDialogCancel>
+                                                                    取消
+                                                                </AlertDialogCancel>
+                                                                <AlertDialogAction
+                                                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                                                    onClick={() =>
+                                                                        deletePlan(
+                                                                            plan.plan_id
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    删除
+                                                                </AlertDialogAction>
+                                                            </AlertDialogFooter>
+                                                        </AlertDialogContent>
+                                                    </AlertDialog>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="gap-1"
+                                                        onClick={() =>
+                                                            runPlan(plan)
+                                                        }
+                                                    >
+                                                        <Play className="w-3 h-3" />
+                                                        {t.plans.runNow}
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="gap-1"
+                                                        onClick={() =>
+                                                            onNavigate?.(
+                                                                "restore",
+                                                                {
+                                                                    planId: plan.plan_id,
+                                                                }
+                                                            )
+                                                        }
+                                                    >
+                                                        <Undo2 className="w-3 h-3" />
+                                                        {t.common.restore}
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="gap-1"
+                                                        onClick={() =>
+                                                            onNavigate?.(
+                                                                "edit-plan",
+                                                                plan
+                                                            )
+                                                        }
+                                                    >
+                                                        <Edit className="w-3 h-3" />
+                                                        {t.common.edit}
+                                                    </Button>
+                                                    <Button
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="gap-1"
+                                                        onClick={() =>
+                                                            onNavigate?.(
+                                                                "plan-details",
+                                                                plan
+                                                            )
+                                                        }
+                                                    >
+                                                        <Eye className="w-3 h-3" />
+                                                        详情
+                                                    </Button>
+                                                    <AlertDialog>
+                                                        <AlertDialogTrigger
+                                                            asChild
+                                                        >
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                                                            >
+                                                                <Trash2 className="w-3 h-3" />
+                                                                {
+                                                                    t.common
+                                                                        .delete
+                                                                }
+                                                            </Button>
+                                                        </AlertDialogTrigger>
+                                                        <AlertDialogContent>
+                                                            <AlertDialogHeader>
+                                                                <AlertDialogTitle>
+                                                                    删除备份计划
+                                                                </AlertDialogTitle>
+                                                                <AlertDialogDescription>
+                                                                    确定要删除备份计划
+                                                                    "
+                                                                    {plan.title}
+                                                                    "
+                                                                    吗？此操作不可撤销。
+                                                                </AlertDialogDescription>
+                                                            </AlertDialogHeader>
+                                                            <AlertDialogFooter>
+                                                                <AlertDialogCancel>
+                                                                    取消
+                                                                </AlertDialogCancel>
+                                                                <AlertDialogAction
+                                                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                                                    onClick={() =>
+                                                                        deletePlan(
+                                                                            plan.plan_id
+                                                                        )
+                                                                    }
+                                                                >
+                                                                    删除
+                                                                </AlertDialogAction>
+                                                            </AlertDialogFooter>
+                                                        </AlertDialogContent>
+                                                    </AlertDialog>
+                                                </>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            </CardContent>
-                        </Card>
-                    ))
+                                </CardContent>
+                            </Card>
+                        );
+                    })
                 )}
             </div>
 

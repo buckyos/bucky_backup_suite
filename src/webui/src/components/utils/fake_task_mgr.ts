@@ -1215,7 +1215,20 @@ export class FakeTaskManager extends BackupTaskManager {
         const plan = this.plan_list.plans.find((p) => p.plan_id === planId)!;
         const backup_task = this.task_list.tasks
             .filter((t) => t.owner_plan_id === planId)
-            .find((t) => t.checkpoint_id === checkpointId);
+            .find((t) => t.taskid === checkpointId);
+        console.log(
+            "Create restore task for plan:",
+            planId,
+            "checkpoint:",
+            checkpointId,
+            "based on backup task:",
+            backup_task,
+            "plans:",
+            this.plan_list.plans,
+            "tasks:",
+            this.task_list.tasks
+        );
+
         const result = {
             taskid: `task_${this.task_list.next_task_id++}`,
             owner_plan_id: planId,

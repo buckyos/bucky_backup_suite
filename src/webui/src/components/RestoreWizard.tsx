@@ -292,6 +292,7 @@ export function RestoreWizard({
             ? "覆盖已存在文件"
             : "重命名新文件";
     const canProceed = () => {
+        console.log("canProceed check for step", currentStep);
         switch (currentStep) {
             case 1:
                 return selectedPlanId !== "" && !plansLoading;
@@ -325,6 +326,7 @@ export function RestoreWizard({
     };
 
     const handleComplete = async () => {
+        console.log("handleComplete");
         try {
             await taskManager.createRestoreTask(
                 selectedPlanId,
@@ -333,9 +335,12 @@ export function RestoreWizard({
                 overwriteMode === "overwrite",
                 selectedFiles[0]
             );
-            toast.success("恢复任务已创建");
             onComplete();
+
+            console.log("handleComplete return");
+            // toast.success("恢复任务已创建");
         } catch (error) {
+            console.log("handleComplete error", error);
             toast.error("创建恢复任务失败：" + formatErrorMessage(error));
             return;
         }
@@ -479,7 +484,7 @@ export function RestoreWizard({
                 <div className="rounded-lg border border-destructive/60 bg-destructive/5 p-4 text-sm text-destructive">
                     加载备份任务失败：{tasksError}
                 </div>
-            ) : taskList!.length === 0 ? (
+            ) : !taskList || taskList.length === 0 ? (
                 <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
                     当前备份计划尚无可用任务。
                 </div>

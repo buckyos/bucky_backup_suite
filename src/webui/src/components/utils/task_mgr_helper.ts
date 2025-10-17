@@ -54,11 +54,11 @@ export class TaskMgrHelper {
     }
 
     static taskSpeedStr(task: TaskInfo): string {
-        return this.formatSize(task.speed) + "/s";
+        return this.formatSize(task.speed || 0) + "/s";
     }
 
     static taskETA(task: TaskInfo): string {
-        if (task.speed === 0) return "∞";
+        if (!task.speed) return "∞";
         const remainingSeconds = Math.floor(
             this.taskRemaining(task) / task.speed
         );
