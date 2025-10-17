@@ -8,3 +8,4 @@ src/webui/src/dist/index.d.ts
 src/webui/src/dist/
 src/webui/node_modules/
 src/rootfs/bin/backup_suite/
+/src/webui/src/node_modules
