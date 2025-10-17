@@ -601,14 +601,24 @@ function RunningTaskTabContent({
                                         <span>
                                             {t.tasks.progress}: {taskProgress}%
                                         </span>
-                                        <span>{task.speed}</span>
+                                        <span>
+                                            {task.state === TaskState.RUNNING
+                                                ? TaskMgrHelper.taskSpeedStr(
+                                                      task
+                                                  )
+                                                : "--"}
+                                        </span>
                                     </div>
                                     <Progress
                                         value={taskProgress}
                                         className="h-2"
                                     />
                                     <div className="flex justify-between text-sm text-muted-foreground mt-1">
-                                        <span>taskProgress</span>
+                                        <span>
+                                            {TaskMgrHelper.formatSize(
+                                                task.completed_size
+                                            )}
+                                        </span>
                                         <span>{taskRemainStr}</span>
                                     </div>
                                 </div>
@@ -761,7 +771,9 @@ function HistoryTaskTabContent({
                                             placeholder="搜索计划名称..."
                                             value={searchPlanFilter}
                                             onChange={(e) =>
-                                                setSearchPlanFilter(e.target.value)
+                                                setSearchPlanFilter(
+                                                    e.target.value
+                                                )
                                             }
                                             className="pl-10"
                                         />
@@ -773,7 +785,9 @@ function HistoryTaskTabContent({
                                     </label>
                                     <Select
                                         value={typeFilter ?? "all"}
-                                        onValueChange={(taskType: TaskType | "all") =>
+                                        onValueChange={(
+                                            taskType: TaskType | "all"
+                                        ) =>
                                             taskType === "all"
                                                 ? setTypeFilter(null)
                                                 : setTypeFilter(taskType)
@@ -789,7 +803,9 @@ function HistoryTaskTabContent({
                                             <SelectItem value={TaskType.BACKUP}>
                                                 {t.tasks.backup}任务
                                             </SelectItem>
-                                            <SelectItem value={TaskType.RESTORE}>
+                                            <SelectItem
+                                                value={TaskType.RESTORE}
+                                            >
                                                 {t.tasks.restore}任务
                                             </SelectItem>
                                         </SelectContent>
@@ -798,28 +814,30 @@ function HistoryTaskTabContent({
                             </div>
                         </CardContent>
                     </Card>
-                    <Card>
-                        <CardContent className="py-3">
-                            <div className="flex items-center gap-4">
-                                <div className="grid grid-cols-6 gap-4 flex-1 items-center">
-                                    <div className="font-medium">任务名称</div>
-                                    <div className="font-medium">
-                                        {t.common.type}
-                                    </div>
-                                    <div className="font-medium">
+                    {!isMobile && (
+                        <Card>
+                            <CardContent className="py-3">
+                                <div className="flex items-center gap-4">
+                                    <div className="grid grid-cols-5 gap-4 flex-1 items-center">
+                                        <div className="font-medium">
+                                            任务名称
+                                        </div>
+                                        <div className="font-medium">
+                                            {t.common.type}
+                                        </div>
+                                        {/* <div className="font-medium">
                                         {t.common.status}
-                                    </div>
-                                    <div className="font-medium">
-                                        {t.tasks.progress}
-                                    </div>
-                                    <div className="font-medium">时间</div>
-                                    <div className="font-medium text-right">
-                                        {t.common.actions}
+                                    </div> */}
+                                        <div className="font-medium">大小</div>
+                                        <div className="font-medium">时间</div>
+                                        <div className="font-medium text-right">
+                                            {t.common.actions}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        </CardContent>
-                    </Card>
+                            </CardContent>
+                        </Card>
+                    )}
                 </>
             }
 
@@ -835,9 +853,6 @@ function HistoryTaskTabContent({
                 <>
                     {/* 任务列表 */}
                     {filterTasks.map((task) => {
-                        const taskProgress = TaskMgrHelper.taskProgress(task);
-                        const taskRemainStr =
-                            TaskMgrHelper.taskRemainingStr(task);
                         return (
                             <Card
                                 key={task.taskid}
@@ -855,10 +870,6 @@ function HistoryTaskTabContent({
                                                     <span className="font-medium text-sm truncate">
                                                         {task.name}
                                                     </span>
-                                                    {getStatusBadge(
-                                                        task.state,
-                                                        t
-                                                    )}
                                                     {getTypeBadge(
                                                         task.task_type,
                                                         t
@@ -891,7 +902,7 @@ function HistoryTaskTabContent({
                                                             <Eye className="w-4 h-4 mr-2" />
                                                             {t.common.details}
                                                         </DropdownMenuItem>
-                                                        {(task.state ===
+                                                        {/* {(task.state ===
                                                             TaskState.RUNNING ||
                                                             task.state ===
                                                                 TaskState.PENDING) && (
@@ -914,7 +925,7 @@ function HistoryTaskTabContent({
                                                                 <Play className="w-4 h-4 mr-2" />
                                                                 {t.tasks.resume}
                                                             </DropdownMenuItem>
-                                                        )}
+                                                        )} */}
                                                         {task.state ===
                                                             TaskState.DONE &&
                                                             task.task_type ===
@@ -955,7 +966,7 @@ function HistoryTaskTabContent({
                                                 </DropdownMenu>
                                             </div>
 
-                                            {task.state !== TaskState.DONE && (
+                                            {/* {task.state !== TaskState.DONE && (
                                                 <div className="space-y-1">
                                                     <Progress
                                                         value={taskProgress}
@@ -975,7 +986,7 @@ function HistoryTaskTabContent({
                                                         </span>
                                                     </div>
                                                 </div>
-                                            )}
+                                            )} */}
 
                                             <div className="flex justify-between text-xs text-muted-foreground">
                                                 <span>
@@ -988,22 +999,17 @@ function HistoryTaskTabContent({
                                                     }
                                                 </span>
                                                 <span>
-                                                    {task.create_time
-                                                        ? new Date(
-                                                              task.create_time
-                                                          ).toLocaleDateString()
-                                                        : task.update_time
-                                                        ? new Date(
-                                                              task.update_time
-                                                          ).toLocaleDateString()
-                                                        : "--"}
+                                                    {TaskMgrHelper.formatTime(
+                                                        task.create_time ||
+                                                            task.update_time
+                                                    )}
                                                 </span>
                                             </div>
                                         </div>
                                     ) : (
                                         // 桌面端详细布局
                                         <div className="flex items-center gap-4">
-                                            <div className="grid grid-cols-6 gap-4 flex-1 items-center">
+                                            <div className="grid grid-cols-5 gap-4 flex-1 items-center">
                                                 <div>
                                                     <p className="font-medium">
                                                         {task.name}
@@ -1022,13 +1028,13 @@ function HistoryTaskTabContent({
                                                         t
                                                     )}
                                                 </div>
-                                                <div>
+                                                {/* <div>
                                                     {getStatusBadge(
                                                         task.state,
                                                         t
                                                     )}
-                                                </div>
-                                                <div>
+                                                </div> */}
+                                                {/* <div>
                                                     {task.state ===
                                                         TaskState.RUNNING && (
                                                         <>
@@ -1086,23 +1092,21 @@ function HistoryTaskTabContent({
                                                             等待执行
                                                         </div>
                                                     )}
+                                                </div> */}
+                                                <div className="text-sm">
+                                                    <div className="text-muted-foreground">
+                                                        {TaskMgrHelper.formatSize(
+                                                            task.total_size
+                                                        )}
+                                                    </div>
                                                 </div>
                                                 <div className="text-sm">
                                                     <div className="flex items-center gap-1 mb-1">
                                                         <Clock className="w-3 h-3" />
-                                                        {task.create_time
-                                                            ? new Date(
-                                                                  task.create_time
-                                                              ).toLocaleString()
-                                                            : task.update_time
-                                                            ? `计划: ${new Date(
-                                                                  task.update_time
-                                                              ).toLocaleString()}`
-                                                            : "-"}
-                                                    </div>
-                                                    <div className="text-muted-foreground">
-                                                        {task.completed_size} /{" "}
-                                                        {task.total_size}
+                                                        {TaskMgrHelper.formatTime(
+                                                            task.create_time ||
+                                                                task.update_time
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <div

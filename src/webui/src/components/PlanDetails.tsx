@@ -62,6 +62,7 @@ export function PlanDetails({ onBack, onNavigate, plan }: PlanDetailsProps) {
                     TaskState.RUNNING,
                     TaskState.PENDING,
                 ],
+                owner_plan_id: [plan.plan_id],
             })
             .then(async ({ task_ids }) => {
                 const uncompleteTasks = await Promise.all(
@@ -484,7 +485,10 @@ function taskHistoryTabContent(
                                                         创建时间
                                                     </p>
                                                     <p className="font-medium">
-                                                        {task.create_time}
+                                                        {TaskMgrHelper.formatTime(
+                                                            task.create_time,
+                                                            "未知"
+                                                        )}
                                                     </p>
                                                 </div>
                                                 <div>

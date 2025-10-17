@@ -330,7 +330,13 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                                 存储使用
                                             </p>
                                             <p className="font-medium">
-                                                {service.used} / {service.total}
+                                                {TaskMgrHelper.formatSize(
+                                                    service.used
+                                                )}{" "}
+                                                /{" "}
+                                                {TaskMgrHelper.formatSize(
+                                                    service.total
+                                                )}
                                             </p>
                                             {service.total >= 0 && (
                                                 <div className="mt-2">
