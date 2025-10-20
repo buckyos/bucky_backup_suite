@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import {
     Card,
     CardContent,
@@ -709,8 +709,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                 <span>
                                                                     {TaskMgrHelper.taskProgress(
                                                                         task
-                                                                    )}{" "}
-                                                                    • ETA{" "}
+                                                                    )}
+                                                                    {"% "}• ETA{" "}
                                                                     {TaskMgrHelper.taskSpeedStr(
                                                                         task
                                                                     )}
@@ -731,6 +731,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                     {TaskMgrHelper.taskProgress(
                                                                         task
                                                                     )}
+                                                                    %{" "}
                                                                 </span>
                                                                 <span>
                                                                     {TaskMgrHelper.taskRemainingStr(
