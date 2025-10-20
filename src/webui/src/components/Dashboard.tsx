@@ -561,8 +561,14 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 {plans!.length}
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                {plans!.filter((plan) => plan.policy).length}
-                                个已启用
+                                {
+                                    plans!.filter(
+                                        (plan) =>
+                                            plan.policy &&
+                                            plan.policy.length > 0
+                                    ).length
+                                }
+                                {"\u4e2a\u5df2\u751f\u6548\u8ba1\u5212"}
                             </p>
                         </CardContent>
                     </Card>
@@ -617,9 +623,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                             </Button>
                         </CardHeader>
                         <CardContent>
-                            {uncompleteTask!.length === 0 &&
-                            services!.length > 0 &&
-                            plans!.length > 0 ? (
+                            {uncompleteTask!.length === 0 ? (
                                 <div
                                     className={`flex ${
                                         isMobile
@@ -627,27 +631,46 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                             : "items-center gap-3"
                                     } justify-center`}
                                 >
-                                    <Button
-                                        onClick={() => onNavigate?.("plans")}
-                                        className="gap-2"
-                                    >
-                                        <Plus className="w-4 h-4" />
-                                        前往计划列表执行一次备份
-                                    </Button>
+                                    {services!.length > 0 &&
+                                    plans!.length > 0 ? (
+                                        <Button
+                                            onClick={() =>
+                                                onNavigate?.("plans")
+                                            }
+                                            className="gap-2"
+                                        >
+                                            <Plus className="w-4 h-4" />
+                                            {t.dashboard.backupNow}
+                                        </Button>
+                                    ) : (
+                                        <p className="text-sm text-muted-foreground">
+                                            {
+                                                "\u6682\u65e0\u6b63\u5728\u6267\u884c\u7684\u4efb\u52a1"
+                                            }
+                                        </p>
+                                    )}
                                 </div>
                             ) : isMobile ? (
-                                <ScrollArea className="h-20">
-                                    <div className="grid grid-cols-2 gap-3">
-                                        {uncompleteTask!.map((task) => (
+                                <div className="space-y-2">
+                                    {uncompleteTask!.map((task) => {
+                                        const progress =
+                                            TaskMgrHelper.taskProgress(task);
+                                        const planTitle =
+                                            plans?.find(
+                                                (plan) =>
+                                                    plan.plan_id ===
+                                                    task.owner_plan_id
+                                            )?.title ?? "";
+                                        return (
                                             <div
                                                 key={task.taskid}
-                                                className="flex items-center gap-2 text-sm cursor-pointer"
+                                                className="rounded-md border px-3 py-2 active:bg-accent/40 cursor-pointer"
                                                 onClick={() =>
                                                     onNavigate?.("tasks")
                                                 }
                                             >
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center gap-2 mb-1">
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="flex items-center gap-2 min-w-0">
                                                         <span className="font-medium truncate">
                                                             {task.name}
                                                         </span>
@@ -655,96 +678,149 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                             task.state
                                                         )}
                                                     </div>
-                                                    <div className="space-y-1">
-                                                        <Progress
-                                                            value={TaskMgrHelper.taskProgress(
-                                                                task
-                                                            )}
-                                                            className="h-1"
-                                                        />
-                                                        <div className="flex justify-between text-xs text-muted-foreground">
-                                                            <span>
-                                                                {TaskMgrHelper.taskProgress(
-                                                                    task
-                                                                )}
-                                                                %
-                                                            </span>
-                                                            <span>
-                                                                {TaskMgrHelper.taskRemainingStr(
-                                                                    task
-                                                                )}
-                                                            </span>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </ScrollArea>
-                            ) : (
-                                <div className="grid grid-cols-3 gap-3">
-                                    {uncompleteTask!.map((task) => (
-                                        <div
-                                            key={task.taskid}
-                                            className="flex items-center gap-3"
-                                        >
-                                            <div className="flex-1 min-w-0">
-                                                <div className="flex items-center gap-2 mb-1">
-                                                    <span className="font-medium truncate">
-                                                        {task.name}
+                                                    <span className="text-xs text-muted-foreground">
+                                                        {TaskMgrHelper.formatTime(
+                                                            task.update_time
+                                                        )}
                                                     </span>
-                                                    {getStatusBadge(task.state)}
                                                 </div>
-                                                <div className="space-y-1">
-                                                    <Progress
-                                                        value={TaskMgrHelper.taskProgress(
+                                                {planTitle && (
+                                                    <div className="text-xs text-muted-foreground truncate mt-1">
+                                                        {planTitle}
+                                                    </div>
+                                                )}
+                                                <Progress
+                                                    value={progress}
+                                                    className="h-1.5 mt-2"
+                                                />
+                                                <div className="flex justify-between text-xs text-muted-foreground mt-2">
+                                                    <span>
+                                                        {TaskMgrHelper.taskCompletedStr(
+                                                            task
+                                                        )}{" "}
+                                                        /{" "}
+                                                        {TaskMgrHelper.taskTotalStr(
                                                             task
                                                         )}
-                                                        className="h-1.5"
-                                                    />
-                                                    <div className="flex justify-between text-xs text-muted-foreground">
-                                                        {task.state ===
-                                                        TaskState.RUNNING ? (
-                                                            <>
+                                                    </span>
+                                                    <span>
+                                                        {TaskMgrHelper.taskRemainingStr(
+                                                            task
+                                                        )}
+                                                    </span>
+                                                </div>
+                                                {task.state ===
+                                                    TaskState.RUNNING && (
+                                                    <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                                                        <span>
+                                                            {TaskMgrHelper.taskSpeedStr(
+                                                                task
+                                                            )}
+                                                        </span>
+                                                        <span>
+                                                            ETA{" "}
+                                                            {TaskMgrHelper.taskETA(
+                                                                task
+                                                            )}
+                                                        </span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="rounded-lg border overflow-hidden">
+                                    <div className="divide-y">
+                                        {uncompleteTask!.map((task) => {
+                                            const progress =
+                                                TaskMgrHelper.taskProgress(
+                                                    task
+                                                );
+                                            const planTitle =
+                                                plans?.find(
+                                                    (plan) =>
+                                                        plan.plan_id ===
+                                                        task.owner_plan_id
+                                                )?.title ?? "--";
+                                            return (
+                                                <div
+                                                    key={task.taskid}
+                                                    className="px-4 py-3 hover:bg-accent/40 cursor-pointer"
+                                                    onClick={() =>
+                                                        onNavigate?.("tasks")
+                                                    }
+                                                >
+                                                    <div className="grid grid-cols-[minmax(0,2.2fr)_minmax(0,1.5fr)_minmax(0,1.6fr)_minmax(0,1fr)] gap-4 items-center">
+                                                        <div className="min-w-0 space-y-1">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="font-medium truncate">
+                                                                    {task.name}
+                                                                </span>
+                                                                {getStatusBadge(
+                                                                    task.state
+                                                                )}
+                                                            </div>
+                                                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                                                <span className="truncate">
+                                                                    {TaskMgrHelper.taskCompletedStr(
+                                                                        task
+                                                                    )}{" "}
+                                                                    /{" "}
+                                                                    {TaskMgrHelper.taskTotalStr(
+                                                                        task
+                                                                    )}
+                                                                </span>
+                                                                {task.state ===
+                                                                    TaskState.RUNNING && (
+                                                                    <span>
+                                                                        {TaskMgrHelper.taskSpeedStr(
+                                                                            task
+                                                                        )}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-sm text-muted-foreground truncate">
+                                                            {planTitle}
+                                                        </div>
+                                                        <div>
+                                                            <Progress
+                                                                value={progress}
+                                                                className="h-1.5 mb-1"
+                                                            />
+                                                            <div className="flex justify-between text-xs text-muted-foreground">
                                                                 <span>
-                                                                    {TaskMgrHelper.taskProgress(
-                                                                        task
-                                                                    )}
-                                                                    {"% "}• ETA{" "}
-                                                                    {TaskMgrHelper.taskSpeedStr(
-                                                                        task
-                                                                    )}
+                                                                    {progress}%
                                                                 </span>
                                                                 <span>
                                                                     {TaskMgrHelper.taskRemainingStr(
                                                                         task
-                                                                    )}{" "}
-                                                                    • ETA{" "}
+                                                                    )}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                        <div className="text-xs text-muted-foreground text-right space-y-1">
+                                                            <div>
+                                                                {TaskMgrHelper.formatTime(
+                                                                    task.update_time
+                                                                )}
+                                                            </div>
+                                                            {task.state ===
+                                                                TaskState.RUNNING && (
+                                                                <div>
+                                                                    ETA{" "}
                                                                     {TaskMgrHelper.taskETA(
                                                                         task
                                                                     )}
-                                                                </span>
-                                                            </>
-                                                        ) : (
-                                                            <>
-                                                                <span>
-                                                                    {TaskMgrHelper.taskProgress(
-                                                                        task
-                                                                    )}
-                                                                    %{" "}
-                                                                </span>
-                                                                <span>
-                                                                    {TaskMgrHelper.taskRemainingStr(
-                                                                        task
-                                                                    )}{" "}
-                                                                </span>
-                                                            </>
-                                                        )}
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        </div>
-                                    ))}
+                                            );
+                                        })}
+                                    </div>
                                 </div>
                             )}
                         </CardContent>
@@ -998,13 +1074,13 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                             className="gap-2"
                                         >
                                             <Plus className="w-4 h-4" />
-                                            新建备份计划
+                                            {t.dashboard.createNewPlan}
                                         </Button>
                                     )}
                                 </div>
                             ) : isMobile ? (
                                 <ScrollArea className="h-24">
-                                    <div className="grid grid-cols-2 gap-3">
+                                    <div className="space-y-2">
                                         {plans!.map((plan) => {
                                             const state =
                                                 TaskMgrHelper.planState(
@@ -1019,8 +1095,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         onNavigate?.("plans")
                                                     }
                                                 >
-                                                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                        <div className="flex-1">
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div className="flex-1 min-w-0">
                                                             <div className="flex items-center gap-2 mb-1">
                                                                 <span className="font-medium truncate">
                                                                     {plan.title}
@@ -1035,73 +1111,84 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                 )}
                                                             </div>
                                                         </div>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-7 w-7 flex-shrink-0"
+                                                            disabled={
+                                                                !plan.policy
+                                                            }
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                toast.success(
+                                                                    `Plan triggered: ${plan.title}`
+                                                                );
+                                                            }}
+                                                        >
+                                                            <Play className="w-3 h-3" />
+                                                        </Button>
                                                     </div>
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="sm"
-                                                        className="p-1 h-6 w-6 flex-shrink-0"
-                                                        disabled={!plan.policy}
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            toast.success(
-                                                                `正在启动计划: ${plan.title}`
-                                                            );
-                                                        }}
-                                                    >
-                                                        <Play className="w-3 h-3" />
-                                                    </Button>
                                                 </div>
                                             );
                                         })}
                                     </div>
                                 </ScrollArea>
                             ) : (
-                                <div className="space-y-3">
-                                    {plans!.map((plan) => (
-                                        <div
-                                            key={plan.plan_id}
-                                            className="flex flex-col gap-2 border rounded-lg p-3 hover:bg-accent/30"
-                                        >
-                                            <div className="flex items-center gap-3 flex-1 min-w-0">
-                                                <div className="flex-1">
-                                                    <div className="flex items-center gap-2 mb-1">
-                                                        <span className="font-medium truncate">
-                                                            {plan.title}
-                                                        </span>
-                                                        {getPlanStatusBadge(
-                                                            TaskMgrHelper.planState(
-                                                                plan,
-                                                                uncompleteTask!
+                                <div className="grid grid-cols-3 gap-3">
+                                    {plans!.map((plan) => {
+                                        const state = TaskMgrHelper.planState(
+                                            plan,
+                                            uncompleteTask!
+                                        );
+                                        const policyLabels =
+                                            TaskMgrHelper.formatPlanPolicy(
+                                                plan
+                                            );
+                                        return (
+                                            <div
+                                                key={plan.plan_id}
+                                                className="flex flex-col gap-3 border rounded-lg p-3 hover:bg-accent/30"
+                                            >
+                                                <div className="flex items-start justify-between gap-2">
+                                                    <div className="flex-1 min-w-0">
+                                                        <div className="flex items-center gap-2 mb-1">
+                                                            <span className="font-medium truncate">
+                                                                {plan.title}
+                                                            </span>
+                                                            {getPlanStatusBadge(
+                                                                state
+                                                            )}
+                                                        </div>
+                                                        <div className="text-xs text-muted-foreground">
+                                                            {t.plans.nextRun}:{" "}
+                                                            {TaskMgrHelper.formatTime(
+                                                                TaskMgrHelper.planNextRunTime(
+                                                                    plan
+                                                                ),
+                                                                "--"
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-8 w-8 flex-shrink-0"
+                                                        disabled={!plan.policy}
+                                                        onClick={() =>
+                                                            toast.success(
+                                                                `Plan triggered: ${plan.title}`
                                                             )
-                                                        )}
-                                                    </div>
-                                                    <div className="text-xs text-muted-foreground">
-                                                        下次执行:{" "}
-                                                        {TaskMgrHelper.formatTime(
-                                                            TaskMgrHelper.planNextRunTime(
-                                                                plan
-                                                            ),
-                                                            "--"
-                                                        )}
-                                                    </div>
+                                                        }
+                                                    >
+                                                        <Play className="w-4 h-4" />
+                                                    </Button>
+                                                </div>
+                                                <div className="text-xs text-muted-foreground">
+                                                    {policyLabels.join(" / ")}
                                                 </div>
                                             </div>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                className="gap-1 text-xs flex-shrink-0"
-                                                disabled={!plan.policy}
-                                                onClick={() =>
-                                                    toast.success(
-                                                        `正在启动计划: ${plan.title}`
-                                                    )
-                                                }
-                                            >
-                                                <Play className="w-3 h-3" />
-                                                执行
-                                            </Button>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
                         </CardContent>
