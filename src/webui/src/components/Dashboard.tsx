@@ -650,7 +650,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     )}
                                 </div>
                             ) : isMobile ? (
-                                <div className="overflow-hidden rounded-lg border divide-y">
+                                <div className="space-y-3">
                                     {uncompleteTask!.map((task) => {
                                         const progress =
                                             TaskMgrHelper.taskProgress(task);
@@ -660,10 +660,14 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                     plan.plan_id ===
                                                     task.owner_plan_id
                                             )?.title ?? "";
+                                        const progressDisplay = Math.round(
+                                            progress
+                                        );
                                         return (
-                                            <div
+                                            <button
                                                 key={task.taskid}
-                                                className="px-3 py-2 active:bg-accent/30 cursor-pointer"
+                                                type="button"
+                                                className="w-full text-left space-y-2 px-3 py-2 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
                                                 onClick={() =>
                                                     onNavigate?.("tasks")
                                                 }
@@ -684,15 +688,15 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                     </span>
                                                 </div>
                                                 {planTitle && (
-                                                    <div className="text-xs text-muted-foreground truncate mt-1">
+                                                    <div className="text-xs text-muted-foreground truncate">
                                                         {planTitle}
                                                     </div>
                                                 )}
                                                 <Progress
                                                     value={progress}
-                                                    className="h-1.5 mt-2"
+                                                    className="h-1.5"
                                                 />
-                                                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                                                <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-muted-foreground">
                                                     <span>
                                                         {TaskMgrHelper.taskCompletedStr(
                                                             task
@@ -710,7 +714,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 </div>
                                                 {task.state ===
                                                     TaskState.RUNNING && (
-                                                    <div className="flex items-center justify-between text-xs text-muted-foreground mt-1">
+                                                    <div className="flex items-center justify-between text-xs text-muted-foreground">
                                                         <span>
                                                             {TaskMgrHelper.taskSpeedStr(
                                                                 task
@@ -724,34 +728,55 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         </span>
                                                     </div>
                                                 )}
-                                            </div>
+                                                <div className="text-xs text-muted-foreground text-right">
+                                                    {progressDisplay}%
+                                                </div>
+                                            </button>
                                         );
                                     })}
                                 </div>
                             ) : (
-                                <div className="rounded-lg border overflow-hidden">
-                                    <div className="divide-y">
-                                        {uncompleteTask!.map((task) => {
-                                            const progress =
-                                                TaskMgrHelper.taskProgress(
-                                                    task
-                                                );
-                                            const planTitle =
-                                                plans?.find(
-                                                    (plan) =>
-                                                        plan.plan_id ===
-                                                        task.owner_plan_id
-                                                )?.title ?? "--";
-                                            return (
-                                                <div
-                                                    key={task.taskid}
-                                                    className="px-4 py-3 hover:bg-accent/40 cursor-pointer"
-                                                    onClick={() =>
-                                                        onNavigate?.("tasks")
-                                                    }
-                                                >
-                                                    <div className="grid grid-cols-[minmax(0,2.2fr)_minmax(0,1.5fr)_minmax(0,1.6fr)_minmax(0,1fr)] gap-4 items-center">
-                                                        <div className="min-w-0 space-y-1">
+                                <div className="overflow-x-auto">
+                                    <table className="w-full border-collapse text-sm">
+                                        <thead>
+                                            <tr className="bg-muted/50 text-xs uppercase text-muted-foreground">
+                                                <th className="px-4 py-2 text-left font-medium">
+                                                    {t.dashboard.taskColumn}
+                                                </th>
+                                                <th className="px-4 py-2 text-left font-medium">
+                                                    {t.dashboard.planColumn}
+                                                </th>
+                                                <th className="px-4 py-2 text-left font-medium">
+                                                    {t.dashboard.progressColumn}
+                                                </th>
+                                                <th className="px-4 py-2 text-left font-medium">
+                                                    {t.dashboard.updatedColumn}
+                                                </th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {uncompleteTask!.map((task) => {
+                                                const progress =
+                                                    TaskMgrHelper.taskProgress(
+                                                        task
+                                                    );
+                                                const planTitle =
+                                                    plans?.find(
+                                                        (plan) =>
+                                                            plan.plan_id ===
+                                                            task.owner_plan_id
+                                                    )?.title ?? "--";
+                                                const progressDisplay =
+                                                    Math.round(progress);
+                                                return (
+                                                    <tr
+                                                        key={task.taskid}
+                                                        className="border-b border-border last:border-b-0 hover:bg-accent/40 cursor-pointer"
+                                                        onClick={() =>
+                                                            onNavigate?.("tasks")
+                                                        }
+                                                    >
+                                                        <td className="px-4 py-3 align-top">
                                                             <div className="flex items-center gap-2">
                                                                 <span className="font-medium truncate">
                                                                     {task.name}
@@ -760,8 +785,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                     task.state
                                                                 )}
                                                             </div>
-                                                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                                                <span className="truncate">
+                                                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                                                <span>
                                                                     {TaskMgrHelper.taskCompletedStr(
                                                                         task
                                                                     )}{" "}
@@ -779,27 +804,29 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                     </span>
                                                                 )}
                                                             </div>
-                                                        </div>
-                                                        <div className="text-sm text-muted-foreground truncate">
+                                                        </td>
+                                                        <td className="px-4 py-3 align-top text-muted-foreground">
                                                             {planTitle}
-                                                        </div>
-                                                        <div>
-                                                            <Progress
-                                                                value={progress}
-                                                                className="h-1.5 mb-1"
-                                                            />
-                                                            <div className="flex justify-between text-xs text-muted-foreground">
-                                                                <span>
-                                                                    {progress}%
-                                                                </span>
-                                                                <span>
-                                                                    {TaskMgrHelper.taskRemainingStr(
-                                                                        task
-                                                                    )}
+                                                        </td>
+                                                        <td className="px-4 py-3 align-top">
+                                                            <div className="flex items-center gap-3">
+                                                                <Progress
+                                                                    value={
+                                                                        progress
+                                                                    }
+                                                                    className="h-1.5 w-full"
+                                                                />
+                                                                <span className="text-xs text-muted-foreground">
+                                                                    {progressDisplay}%
                                                                 </span>
                                                             </div>
-                                                        </div>
-                                                        <div className="text-xs text-muted-foreground text-right space-y-1">
+                                                            <div className="mt-1 text-xs text-muted-foreground">
+                                                                {TaskMgrHelper.taskRemainingStr(
+                                                                    task
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-4 py-3 align-top text-xs text-muted-foreground">
                                                             <div>
                                                                 {TaskMgrHelper.formatTime(
                                                                     task.update_time
@@ -814,12 +841,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                     )}
                                                                 </div>
                                                             )}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
                                 </div>
                             )}
                         </CardContent>

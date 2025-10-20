@@ -64,6 +64,10 @@ export interface Translations {
     backupNow: string;
     addService: string;
     viewAll: string;
+    taskColumn: string;
+    planColumn: string;
+    progressColumn: string;
+    updatedColumn: string;
   };
   plans: {
     title: string;
@@ -259,6 +263,10 @@ const zhTranslations: Translations = {
     backupNow: '立即备份',
     addService: '添加服务',
     viewAll: '查看全部',
+    taskColumn: '任务名称',
+    planColumn: '所属计划',
+    progressColumn: '进度',
+    updatedColumn: '最近更新',
   },
   plans: {
     title: '备份计划',
@@ -454,6 +462,10 @@ const enTranslations: Translations = {
     backupNow: 'Backup Now',
     addService: 'Add Service',
     viewAll: 'View All',
+    taskColumn: 'Task',
+    planColumn: 'Plan',
+    progressColumn: 'Progress',
+    updatedColumn: 'Last Updated',
   },
   plans: {
     title: 'Backup Plans',
