@@ -9,7 +9,6 @@ import {
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
 import { Badge } from "./ui/badge";
-import { ScrollArea } from "./ui/scroll-area";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
 import {
@@ -651,7 +650,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     )}
                                 </div>
                             ) : isMobile ? (
-                                <div className="space-y-2">
+                                <div className="overflow-hidden rounded-lg border divide-y">
                                     {uncompleteTask!.map((task) => {
                                         const progress =
                                             TaskMgrHelper.taskProgress(task);
@@ -664,7 +663,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                         return (
                                             <div
                                                 key={task.taskid}
-                                                className="rounded-md border px-3 py-2 active:bg-accent/40 cursor-pointer"
+                                                className="px-3 py-2 active:bg-accent/30 cursor-pointer"
                                                 onClick={() =>
                                                     onNavigate?.("tasks")
                                                 }
@@ -693,7 +692,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                     value={progress}
                                                     className="h-1.5 mt-2"
                                                 />
-                                                <div className="flex justify-between text-xs text-muted-foreground mt-2">
+                                                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs text-muted-foreground">
                                                     <span>
                                                         {TaskMgrHelper.taskCompletedStr(
                                                             task
@@ -711,7 +710,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 </div>
                                                 {task.state ===
                                                     TaskState.RUNNING && (
-                                                    <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                                                    <div className="flex items-center justify-between text-xs text-muted-foreground mt-1">
                                                         <span>
                                                             {TaskMgrHelper.taskSpeedStr(
                                                                 task
@@ -878,9 +877,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     </Button>
                                 </div>
                             ) : isMobile ? (
-                                <ScrollArea className="h-20">
-                                    <div className="space-y-2">
-                                        {services!.map((service) => {
+                                <div className="max-h-60 space-y-2 overflow-y-auto pr-1">
+                                    {services!.map((service) => {
                                             const ServiceIcon = getServiceIcon(
                                                 service.target_type
                                             );
@@ -949,8 +947,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 </div>
                                             );
                                         })}
-                                    </div>
-                                </ScrollArea>
+                                </div>
                             ) : (
                                 <div className="grid grid-cols-3 gap-3">
                                     {services!.map((service) => {
@@ -1079,9 +1076,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     )}
                                 </div>
                             ) : isMobile ? (
-                                <ScrollArea className="h-24">
-                                    <div className="space-y-2">
-                                        {plans!.map((plan) => {
+                                <div className="max-h-60 space-y-2 overflow-y-auto pr-1">
+                                    {plans!.map((plan) => {
                                             const state =
                                                 TaskMgrHelper.planState(
                                                     plan,
@@ -1105,11 +1101,14 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                     state
                                                                 )}
                                                             </div>
-                                                            <div className="text-xs text-muted-foreground">
-                                                                {TaskMgrHelper.planNextRunTime(
+                                                        <div className="text-xs text-muted-foreground">
+                                                            {TaskMgrHelper.formatTime(
+                                                                TaskMgrHelper.planNextRunTime(
                                                                     plan
-                                                                )}
-                                                            </div>
+                                                                ),
+                                                                "--"
+                                                            )}
+                                                        </div>
                                                         </div>
                                                         <Button
                                                             variant="ghost"
@@ -1121,7 +1120,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                             onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 toast.success(
-                                                                    `Plan triggered: ${plan.title}`
+                                                                    `正在启动计划: ${plan.title}`
                                                                 );
                                                             }}
                                                         >
@@ -1131,8 +1130,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 </div>
                                             );
                                         })}
-                                    </div>
-                                </ScrollArea>
+                                </div>
                             ) : (
                                 <div className="grid grid-cols-3 gap-3">
                                     {plans!.map((plan) => {
@@ -1176,7 +1174,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         disabled={!plan.policy}
                                                         onClick={() =>
                                                             toast.success(
-                                                                `Plan triggered: ${plan.title}`
+                                                                `正在启动计划: ${plan.title}`
                                                             )
                                                         }
                                                     >
@@ -1305,3 +1303,4 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         </>
     );
 }
+
