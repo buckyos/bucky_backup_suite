@@ -64,7 +64,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
             );
             setPlans(planDetails);
 
-            if (planDetails.length === 0) {
+            if (planDetails.length > 0) {
                 const targetIds = await taskManager.listBackupTargets();
                 const targetDetails = await Promise.all(
                     targetIds.map((id) => taskManager.getBackupTarget(id))
@@ -92,7 +92,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
         return () => {
             taskManager.stopRefreshUncompleteTaskStateTimer(timerId);
         };
-    }, [t]);
+    }, []);
 
     if (loading) {
         return (
@@ -263,6 +263,9 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                 ) : (
                     plans.map((plan) => {
                         const policies = TaskMgrHelper.formatPlanPolicy(plan);
+                        const service = services.find(
+                            (s) => s.target_id === plan.target
+                        );
                         return (
                             <Card
                                 key={plan.plan_id}
@@ -350,13 +353,10 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                                             : ""
                                                     }`}
                                                 >
-                                                    {
-                                                        services.find(
-                                                            (s) =>
-                                                                s.target_id ===
-                                                                plan.target
-                                                        )?.name
-                                                    }
+                                                    {service
+                                                        ? service.name ||
+                                                          service.url
+                                                        : "未知服务"}
                                                 </p>
                                             </div>
                                         </div>
