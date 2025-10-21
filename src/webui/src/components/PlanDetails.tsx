@@ -123,12 +123,22 @@ export function PlanDetails({ onBack, onNavigate, plan }: PlanDetailsProps) {
 
                 {/* 概览 */}
                 <TabsContent value="overview" className="space-y-6">
-                    {overviewTabContent(plan, t, isMobile, uncompleteTasks)}
+                    <OverviewTabContent
+                        plan={plan}
+                        t={t}
+                        isMobile={isMobile}
+                        uncompleteTasks={uncompleteTasks}
+                    />
                 </TabsContent>
 
                 {/* 任务历史 */}
                 <TabsContent value="tasks" className="space-y-4">
-                    {taskHistoryTabContent(plan, isMobile, t, onNavigate)}
+                    <TaskHistoryTabContent
+                        plan={plan}
+                        isMobile={isMobile}
+                        t={t}
+                        onNavigate={onNavigate}
+                    />
                 </TabsContent>
 
                 {/* 操作日志 */}
@@ -138,13 +148,19 @@ export function PlanDetails({ onBack, onNavigate, plan }: PlanDetailsProps) {
     );
 }
 
-function overviewTabContent(
-    plan: BackupPlanInfo,
-    t: Translations,
-    isMobile: boolean,
-    uncompleteTasks: TaskInfo[]
-) {
+function OverviewTabContent({
+    plan,
+    t,
+    isMobile,
+    uncompleteTasks,
+}: {
+    plan: BackupPlanInfo;
+    t: Translations;
+    isMobile: boolean;
+    uncompleteTasks: TaskInfo[];
+}) {
     const [service, setService] = useState<BackupTargetInfo | null>(null);
+    const policies = TaskMgrHelper.formatPlanPolicy(plan);
 
     useEffect(() => {
         taskManager.getBackupTarget(plan.target).then((target) => {
@@ -249,10 +265,12 @@ function overviewTabContent(
                                         执行计划
                                     </p>
                                     <p className="text-sm font-medium">
-                                        {TaskMgrHelper.formatPlanPolicy(
-                                            plan
-                                        ).map((s, idx) => (
-                                            <span key={idx}>{`${s}|`}</span>
+                                        {policies.map((s, idx) => (
+                                            <span key={idx}>
+                                                {idx === policies.length - 1
+                                                    ? `${s}`
+                                                    : `${s}|`}
+                                            </span>
                                         ))}
                                     </p>
                                 </div>
@@ -351,12 +369,17 @@ function overviewTabContent(
     );
 }
 
-function taskHistoryTabContent(
-    plan: BackupPlanInfo,
-    isMobile: boolean,
-    t: Translations,
-    onNavigate: (page: string, data?: any) => void
-) {
+function TaskHistoryTabContent({
+    plan,
+    isMobile,
+    t,
+    onNavigate,
+}: {
+    plan: BackupPlanInfo;
+    isMobile: boolean;
+    t: Translations;
+    onNavigate: (page: string, data?: any) => void;
+}) {
     const [taskHistory, setTaskHistory] = useState<TaskInfo[] | null>(null);
 
     useEffect(() => {

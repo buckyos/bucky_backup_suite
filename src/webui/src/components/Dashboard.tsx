@@ -737,19 +737,19 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 </div>
                             ) : (
                                 <div className="overflow-x-auto">
-                                    <table className="w-full border-collapse text-sm">
+                                    <table className="w-full table-fixed border-collapse text-sm">
                                         <thead>
                                             <tr className="bg-muted/50 text-xs uppercase text-muted-foreground">
-                                                <th className="px-4 py-2 text-left font-medium">
+                                                <th className="px-4 py-2 text-left font-medium w-[36%]">
                                                     {t.dashboard.taskColumn}
                                                 </th>
-                                                <th className="px-4 py-2 text-left font-medium">
+                                                <th className="px-4 py-2 text-left font-medium w-[24%]">
                                                     {t.dashboard.planColumn}
                                                 </th>
-                                                <th className="px-4 py-2 text-left font-medium">
+                                                <th className="px-4 py-2 text-left font-medium w-[24%]">
                                                     {t.dashboard.progressColumn}
                                                 </th>
-                                                <th className="px-4 py-2 text-left font-medium">
+                                                <th className="px-4 py-2 text-left font-medium w-[16%]">
                                                     {t.dashboard.updatedColumn}
                                                 </th>
                                             </tr>
@@ -776,8 +776,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                             onNavigate?.("tasks")
                                                         }
                                                     >
-                                                        <td className="px-4 py-3 align-top">
-                                                            <div className="flex items-center gap-2">
+                                                        <td className="px-4 py-3 align-top w-[36%]">
+                                                            <div className="flex items-center gap-2 min-w-0">
                                                                 <span className="font-medium truncate">
                                                                     {task.name}
                                                                 </span>
@@ -805,11 +805,13 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                 )}
                                                             </div>
                                                         </td>
-                                                        <td className="px-4 py-3 align-top text-muted-foreground">
-                                                            {planTitle}
+                                                        <td className="px-4 py-3 align-top text-muted-foreground w-[24%]">
+                                                            <span className="block truncate">
+                                                                {planTitle}
+                                                            </span>
                                                         </td>
-                                                        <td className="px-4 py-3 align-top">
-                                                            <div className="flex items-center gap-3">
+                                                        <td className="px-4 py-3 align-top w-[24%]">
+                                                            <div className="flex items-center gap-3 min-w-0">
                                                                 <Progress
                                                                     value={
                                                                         progress
@@ -826,7 +828,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                                 )}
                                                             </div>
                                                         </td>
-                                                        <td className="px-4 py-3 align-top text-xs text-muted-foreground">
+                                                        <td className="px-4 py-3 align-top text-xs text-muted-foreground w-[16%]">
                                                             <div>
                                                                 {TaskMgrHelper.formatTime(
                                                                     task.update_time
