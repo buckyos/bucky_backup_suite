@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import {
     Card,
     CardContent,
@@ -197,7 +197,11 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
             {/* 计划列表 */}
             <div className="grid gap-4">
                 {plans.length === 0 ? (
-                    <Card>
+                    <Card
+                        className={`w-full ${
+                            isMobile ? "" : "max-w-2xl"
+                        } text-center m-auto`}
+                    >
                         <CardHeader>
                             <CardTitle>
                                 {services.length === 0
@@ -215,7 +219,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                                 className={`flex ${
                                     isMobile
                                         ? "flex-col gap-2"
-                                        : "items-center gap-3"
+                                        : "items-center justify-center gap-3"
                                 }`}
                             >
                                 {services.length === 0 ? (
