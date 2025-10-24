@@ -45,6 +45,7 @@ import {
 } from "./utils/task_mgr";
 import { taskManager } from "./utils/fake_task_mgr";
 import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
+import { Translations } from "./i18n";
 
 interface BackupPlansProps {
     onNavigate?: (page: string, data?: any) => void;
@@ -149,28 +150,6 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
         toast.success(`正在启动备份计划: ${plan.title}`);
     };
 
-    const getStatusBadge = (plan: BackupPlanInfo) => {
-        const status = TaskMgrHelper.planState(plan, uncompleteTasks);
-        switch (status) {
-            case PlanState.ACTIVE:
-                return (
-                    <Badge className="bg-green-100 text-green-800">正常</Badge>
-                );
-            case PlanState.WARNING:
-                return (
-                    <Badge className="bg-yellow-100 text-yellow-800">
-                        警告
-                    </Badge>
-                );
-            case PlanState.DISABLED:
-                return <Badge variant="secondary">已禁用</Badge>;
-            case PlanState.ERROR:
-                return <Badge className="bg-red-100 text-red-800">错误</Badge>;
-            default:
-                return <Badge variant="outline">未知</Badge>;
-        }
-    };
-
     return (
         <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-6`}>
             {/* 头部 */}
@@ -264,369 +243,28 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
                             </div>
                         </CardContent>
                     </Card>
+                ) : isMobile ? (
+                    <PlanListMobile
+                        plans={plans}
+                        services={services}
+                        uncompleteTasks={uncompleteTasks}
+                        t={t}
+                        togglePlan={togglePlan}
+                        runPlan={runPlan}
+                        deletePlan={deletePlan}
+                        onNavigate={onNavigate}
+                    />
                 ) : (
-                    plans.map((plan) => {
-                        const policies = TaskMgrHelper.formatPlanPolicy(plan);
-                        const service = services.find(
-                            (s) => s.target_id === plan.target
-                        );
-                        return (
-                            <Card
-                                key={plan.plan_id}
-                                className={`transition-all ${
-                                    plan.policy_disabled ||
-                                    plan.policy.length === 0
-                                        ? "opacity-60"
-                                        : ""
-                                }`}
-                            >
-                                <CardHeader>
-                                    <div className="flex items-start justify-between">
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-3 mb-2">
-                                                <CardTitle
-                                                    className={`${
-                                                        isMobile
-                                                            ? "text-base"
-                                                            : "text-lg"
-                                                    }`}
-                                                >
-                                                    {plan.title}
-                                                </CardTitle>
-                                                {getStatusBadge(plan)}
-                                            </div>
-                                            {!isMobile && (
-                                                <CardDescription>
-                                                    {plan.description}
-                                                </CardDescription>
-                                            )}
-                                        </div>
-                                        <div className="flex items-center gap-3">
-                                            <Switch
-                                                disabled={
-                                                    plan.policy.length === 0
-                                                }
-                                                checked={
-                                                    !(
-                                                        plan.policy_disabled ||
-                                                        plan.policy.length === 0
-                                                    )
-                                                }
-                                                onCheckedChange={() =>
-                                                    togglePlan(plan)
-                                                }
-                                            />
-                                        </div>
-                                    </div>
-                                </CardHeader>
-                                <CardContent>
-                                    <div
-                                        className={`grid ${
-                                            isMobile
-                                                ? "grid-cols-1"
-                                                : "grid-cols-1 lg:grid-cols-4"
-                                        } gap-4 mb-4`}
-                                    >
-                                        <div className="flex items-center gap-2">
-                                            <Folder className="w-4 h-4 text-muted-foreground" />
-                                            <div>
-                                                <p className="text-sm text-muted-foreground">
-                                                    {t.plans.source}
-                                                </p>
-                                                <p
-                                                    className={`font-medium truncate ${
-                                                        isMobile
-                                                            ? "text-sm"
-                                                            : ""
-                                                    }`}
-                                                >
-                                                    {plan.source}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <Server className="w-4 h-4 text-muted-foreground" />
-                                            <div>
-                                                <p className="text-sm text-muted-foreground">
-                                                    {t.plans.destination}
-                                                </p>
-                                                <p
-                                                    className={`font-medium ${
-                                                        isMobile
-                                                            ? "text-sm"
-                                                            : ""
-                                                    }`}
-                                                >
-                                                    {service
-                                                        ? service.name ||
-                                                          service.url
-                                                        : "未知服务"}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <Calendar className="w-4 h-4 text-muted-foreground" />
-                                            <div>
-                                                <p className="text-sm text-muted-foreground">
-                                                    {t.plans.schedule}
-                                                </p>
-                                                <p
-                                                    className={`font-medium ${
-                                                        isMobile
-                                                            ? "text-sm"
-                                                            : ""
-                                                    }`}
-                                                >
-                                                    {policies.map((s, idx) => (
-                                                        <span key={idx}>
-                                                            {idx ===
-                                                            policies.length - 1
-                                                                ? `${s}`
-                                                                : `${s}|`}
-                                                        </span>
-                                                    ))}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <div>
-                                            <p className="text-sm text-muted-foreground">
-                                                {t.plans.nextRun}
-                                            </p>
-                                            <p
-                                                className={`font-medium ${
-                                                    isMobile ? "text-sm" : ""
-                                                }`}
-                                            >
-                                                {TaskMgrHelper.formatTime(
-                                                    TaskMgrHelper.planNextRunTime(
-                                                        plan
-                                                    ),
-                                                    "--"
-                                                )}
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex items-center justify-between pt-4 border-t">
-                                        <div
-                                            className={`text-muted-foreground ${
-                                                isMobile ? "text-xs" : "text-sm"
-                                            }`}
-                                        >
-                                            {t.plans.lastRun}:{" "}
-                                            {TaskMgrHelper.formatTime(
-                                                plan.last_run_time,
-                                                "--"
-                                            )}
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            {isMobile ? (
-                                                <>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="p-2"
-                                                        onClick={() =>
-                                                            runPlan(plan)
-                                                        }
-                                                    >
-                                                        <Play className="w-3 h-3" />
-                                                    </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="p-2"
-                                                        onClick={() =>
-                                                            onNavigate?.(
-                                                                "restore",
-                                                                {
-                                                                    planId: plan.plan_id,
-                                                                }
-                                                            )
-                                                        }
-                                                    >
-                                                        <Undo2 className="w-3 h-3" />
-                                                    </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="p-2"
-                                                        onClick={() =>
-                                                            onNavigate?.(
-                                                                "edit-plan",
-                                                                plan
-                                                            )
-                                                        }
-                                                    >
-                                                        <Edit className="w-3 h-3" />
-                                                    </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="p-2"
-                                                        onClick={() =>
-                                                            onNavigate?.(
-                                                                "plan-details",
-                                                                plan
-                                                            )
-                                                        }
-                                                    >
-                                                        <Eye className="w-3 h-3" />
-                                                    </Button>
-                                                    <AlertDialog>
-                                                        <AlertDialogTrigger
-                                                            asChild
-                                                        >
-                                                            <Button
-                                                                variant="outline"
-                                                                size="sm"
-                                                                className="p-2 text-destructive hover:text-destructive-foreground hover:bg-destructive"
-                                                            >
-                                                                <Trash2 className="w-3 h-3" />
-                                                            </Button>
-                                                        </AlertDialogTrigger>
-                                                        <AlertDialogContent>
-                                                            <AlertDialogHeader>
-                                                                <AlertDialogTitle>
-                                                                    删除备份计划
-                                                                </AlertDialogTitle>
-                                                                <AlertDialogDescription>
-                                                                    确定要删除备份计划
-                                                                    "
-                                                                    {plan.title}
-                                                                    "
-                                                                    吗？此操作不可撤销。
-                                                                </AlertDialogDescription>
-                                                            </AlertDialogHeader>
-                                                            <AlertDialogFooter>
-                                                                <AlertDialogCancel>
-                                                                    取消
-                                                                </AlertDialogCancel>
-                                                                <AlertDialogAction
-                                                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                                                    onClick={() =>
-                                                                        deletePlan(
-                                                                            plan.plan_id
-                                                                        )
-                                                                    }
-                                                                >
-                                                                    删除
-                                                                </AlertDialogAction>
-                                                            </AlertDialogFooter>
-                                                        </AlertDialogContent>
-                                                    </AlertDialog>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="gap-1"
-                                                        onClick={() =>
-                                                            runPlan(plan)
-                                                        }
-                                                    >
-                                                        <Play className="w-3 h-3" />
-                                                        {t.plans.runNow}
-                                                    </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="gap-1"
-                                                        onClick={() =>
-                                                            onNavigate?.(
-                                                                "restore",
-                                                                {
-                                                                    planId: plan.plan_id,
-                                                                }
-                                                            )
-                                                        }
-                                                    >
-                                                        <Undo2 className="w-3 h-3" />
-                                                        {t.common.restore}
-                                                    </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="gap-1"
-                                                        onClick={() =>
-                                                            onNavigate?.(
-                                                                "edit-plan",
-                                                                plan
-                                                            )
-                                                        }
-                                                    >
-                                                        <Edit className="w-3 h-3" />
-                                                        {t.common.edit}
-                                                    </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        className="gap-1"
-                                                        onClick={() =>
-                                                            onNavigate?.(
-                                                                "plan-details",
-                                                                plan
-                                                            )
-                                                        }
-                                                    >
-                                                        <Eye className="w-3 h-3" />
-                                                        详情
-                                                    </Button>
-                                                    <AlertDialog>
-                                                        <AlertDialogTrigger
-                                                            asChild
-                                                        >
-                                                            <Button
-                                                                variant="outline"
-                                                                size="sm"
-                                                                className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
-                                                            >
-                                                                <Trash2 className="w-3 h-3" />
-                                                                {
-                                                                    t.common
-                                                                        .delete
-                                                                }
-                                                            </Button>
-                                                        </AlertDialogTrigger>
-                                                        <AlertDialogContent>
-                                                            <AlertDialogHeader>
-                                                                <AlertDialogTitle>
-                                                                    删除备份计划
-                                                                </AlertDialogTitle>
-                                                                <AlertDialogDescription>
-                                                                    确定要删除备份计划
-                                                                    "
-                                                                    {plan.title}
-                                                                    "
-                                                                    吗？此操作不可撤销。
-                                                                </AlertDialogDescription>
-                                                            </AlertDialogHeader>
-                                                            <AlertDialogFooter>
-                                                                <AlertDialogCancel>
-                                                                    取消
-                                                                </AlertDialogCancel>
-                                                                <AlertDialogAction
-                                                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                                                    onClick={() =>
-                                                                        deletePlan(
-                                                                            plan.plan_id
-                                                                        )
-                                                                    }
-                                                                >
-                                                                    删除
-                                                                </AlertDialogAction>
-                                                            </AlertDialogFooter>
-                                                        </AlertDialogContent>
-                                                    </AlertDialog>
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        );
-                    })
+                    <PlanListDesktop
+                        plans={plans}
+                        services={services}
+                        uncompleteTasks={uncompleteTasks}
+                        t={t}
+                        togglePlan={togglePlan}
+                        runPlan={runPlan}
+                        deletePlan={deletePlan}
+                        onNavigate={onNavigate}
+                    />
                 )}
             </div>
 
@@ -690,4 +328,426 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
             )}
         </div>
     );
+}
+
+function PlanListMobile({
+    plans,
+    services,
+    uncompleteTasks,
+    t,
+    togglePlan,
+    runPlan,
+    deletePlan,
+    onNavigate,
+}: {
+    plans: Array<BackupPlanInfo>;
+    services: Array<BackupTargetInfo>;
+    uncompleteTasks: TaskInfo[];
+    t: Translations;
+    togglePlan: (plan: BackupPlanInfo) => void;
+    runPlan: (plan: BackupPlanInfo) => void;
+    deletePlan: (planId: string) => void;
+    onNavigate?: (page: string, data?: any) => void;
+}) {
+    return plans.map((plan) => {
+        const policies = TaskMgrHelper.formatPlanPolicy(plan);
+        const service = services.find((s) => s.target_id === plan.target);
+        return (
+            <Card
+                key={plan.plan_id}
+                className={`transition-all ${
+                    plan.policy_disabled || plan.policy.length === 0
+                        ? "opacity-60"
+                        : ""
+                }`}
+            >
+                <CardHeader>
+                    <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                            <div className="flex items-center gap-3 mb-2">
+                                <CardTitle className="text-base">
+                                    {plan.title}
+                                </CardTitle>
+                                {getStatusBadge(plan, uncompleteTasks)}
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <Switch
+                                disabled={plan.policy.length === 0}
+                                checked={
+                                    !(
+                                        plan.policy_disabled ||
+                                        plan.policy.length === 0
+                                    )
+                                }
+                                onCheckedChange={() => togglePlan(plan)}
+                            />
+                        </div>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div className="grid grid-cols-1 gap-4 mb-4">
+                        <div className="flex items-center gap-2">
+                            <Folder className="w-4 h-4 text-muted-foreground" />
+                            <div>
+                                <p className="text-sm text-muted-foreground">
+                                    {t.plans.source}
+                                </p>
+                                <p className="font-medium truncate text-sm">
+                                    {plan.source}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Server className="w-4 h-4 text-muted-foreground" />
+                            <div>
+                                <p className="text-sm text-muted-foreground">
+                                    {t.plans.destination}
+                                </p>
+                                <p className="font-medium text-sm">
+                                    {service
+                                        ? service.name || service.url
+                                        : "未知服务"}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Calendar className="w-4 h-4 text-muted-foreground" />
+                            <div>
+                                <p className="text-sm text-muted-foreground">
+                                    {t.plans.schedule}
+                                </p>
+                                <p className="font-medium text-sm">
+                                    {policies.map((s, idx) => (
+                                        <span key={idx}>
+                                            {idx === policies.length - 1
+                                                ? `${s}`
+                                                : `${s}|`}
+                                        </span>
+                                    ))}
+                                </p>
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-sm text-muted-foreground">
+                                {t.plans.nextRun}
+                            </p>
+                            <p className="font-medium text-sm">
+                                {TaskMgrHelper.formatTime(
+                                    TaskMgrHelper.planNextRunTime(plan),
+                                    "--"
+                                )}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-4 border-t">
+                        <div className="text-muted-foreground text-xs">
+                            {t.plans.lastRun}:{" "}
+                            {TaskMgrHelper.formatTime(plan.last_run_time, "--")}
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="p-2"
+                                onClick={() => runPlan(plan)}
+                            >
+                                <Play className="w-3 h-3" />
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="p-2"
+                                onClick={() =>
+                                    onNavigate?.("restore", {
+                                        planId: plan.plan_id,
+                                    })
+                                }
+                            >
+                                <Undo2 className="w-3 h-3" />
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="p-2"
+                                onClick={() => onNavigate?.("edit-plan", plan)}
+                            >
+                                <Edit className="w-3 h-3" />
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="p-2"
+                                onClick={() =>
+                                    onNavigate?.("plan-details", plan)
+                                }
+                            >
+                                <Eye className="w-3 h-3" />
+                            </Button>
+                            <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="p-2 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                                    >
+                                        <Trash2 className="w-3 h-3" />
+                                    </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                        <AlertDialogTitle>
+                                            删除备份计划
+                                        </AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                            确定要删除备份计划 "{plan.title}"
+                                            吗？此操作不可撤销。
+                                        </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                        <AlertDialogCancel>
+                                            取消
+                                        </AlertDialogCancel>
+                                        <AlertDialogAction
+                                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                            onClick={() =>
+                                                deletePlan(plan.plan_id)
+                                            }
+                                        >
+                                            删除
+                                        </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                </AlertDialogContent>
+                            </AlertDialog>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+        );
+    });
+}
+
+function PlanListDesktop({
+    plans,
+    services,
+    uncompleteTasks,
+    t,
+    togglePlan,
+    runPlan,
+    deletePlan,
+    onNavigate,
+}: {
+    plans: Array<BackupPlanInfo>;
+    services: Array<BackupTargetInfo>;
+    uncompleteTasks: TaskInfo[];
+    t: Translations;
+    togglePlan: (plan: BackupPlanInfo) => void;
+    runPlan: (plan: BackupPlanInfo) => void;
+    deletePlan: (planId: string) => void;
+    onNavigate?: (page: string, data?: any) => void;
+}) {
+    return plans.map((plan) => {
+        const policies = TaskMgrHelper.formatPlanPolicy(plan);
+        const service = services.find((s) => s.target_id === plan.target);
+        return (
+            <Card
+                key={plan.plan_id}
+                className={`transition-all ${
+                    plan.policy_disabled || plan.policy.length === 0
+                        ? "opacity-60"
+                        : ""
+                }`}
+            >
+                <CardHeader>
+                    <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                            <div className="flex items-center gap-3 mb-2">
+                                <CardTitle className="text-lg">
+                                    {plan.title}
+                                </CardTitle>
+                                {getStatusBadge(plan, uncompleteTasks)}
+                            </div>
+                            <CardDescription>
+                                {plan.description}
+                            </CardDescription>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <Switch
+                                disabled={plan.policy.length === 0}
+                                checked={
+                                    !(
+                                        plan.policy_disabled ||
+                                        plan.policy.length === 0
+                                    )
+                                }
+                                onCheckedChange={() => togglePlan(plan)}
+                            />
+                        </div>
+                    </div>
+                </CardHeader>
+                <CardContent>
+                    <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
+                        <div className="flex items-center gap-2">
+                            <Folder className="w-4 h-4 text-muted-foreground" />
+                            <div>
+                                <p className="text-sm text-muted-foreground">
+                                    {t.plans.source}
+                                </p>
+                                <p className="font-medium truncate">
+                                    {plan.source}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Server className="w-4 h-4 text-muted-foreground" />
+                            <div>
+                                <p className="text-sm text-muted-foreground">
+                                    {t.plans.destination}
+                                </p>
+                                <p className="font-medium">
+                                    {service
+                                        ? service.name || service.url
+                                        : "未知服务"}
+                                </p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Calendar className="w-4 h-4 text-muted-foreground" />
+                            <div>
+                                <p className="text-sm text-muted-foreground">
+                                    {t.plans.schedule}
+                                </p>
+                                <p className="font-medium">
+                                    {policies.map((s, idx) => (
+                                        <span key={idx}>
+                                            {idx === policies.length - 1
+                                                ? `${s}`
+                                                : `${s}|`}
+                                        </span>
+                                    ))}
+                                </p>
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-sm text-muted-foreground">
+                                {t.plans.nextRun}
+                            </p>
+                            <p className="font-medium">
+                                {TaskMgrHelper.formatTime(
+                                    TaskMgrHelper.planNextRunTime(plan),
+                                    "--"
+                                )}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-4 border-t">
+                        <div className="text-muted-foreground text-sm">
+                            {t.plans.lastRun}:{" "}
+                            {TaskMgrHelper.formatTime(plan.last_run_time, "--")}
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-1"
+                                onClick={() => runPlan(plan)}
+                            >
+                                <Play className="w-3 h-3" />
+                                {t.plans.runNow}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-1"
+                                onClick={() =>
+                                    onNavigate?.("restore", {
+                                        planId: plan.plan_id,
+                                    })
+                                }
+                            >
+                                <Undo2 className="w-3 h-3" />
+                                {t.common.restore}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-1"
+                                onClick={() => onNavigate?.("edit-plan", plan)}
+                            >
+                                <Edit className="w-3 h-3" />
+                                {t.common.edit}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-1"
+                                onClick={() =>
+                                    onNavigate?.("plan-details", plan)
+                                }
+                            >
+                                <Eye className="w-3 h-3" />
+                                详情
+                            </Button>
+                            <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                                    >
+                                        <Trash2 className="w-3 h-3" />
+                                        {t.common.delete}
+                                    </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                        <AlertDialogTitle>
+                                            删除备份计划
+                                        </AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                            确定要删除备份计划 "{plan.title}"
+                                            吗？此操作不可撤销。
+                                        </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                        <AlertDialogCancel>
+                                            取消
+                                        </AlertDialogCancel>
+                                        <AlertDialogAction
+                                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                            onClick={() =>
+                                                deletePlan(plan.plan_id)
+                                            }
+                                        >
+                                            删除
+                                        </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                </AlertDialogContent>
+                            </AlertDialog>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+        );
+    });
+}
+
+function getStatusBadge(plan: BackupPlanInfo, uncompleteTasks: TaskInfo[]) {
+    const status = TaskMgrHelper.planState(plan, uncompleteTasks);
+    switch (status) {
+        case PlanState.ACTIVE:
+            return <Badge className="bg-green-100 text-green-800">正常</Badge>;
+        case PlanState.WARNING:
+            return (
+                <Badge className="bg-yellow-100 text-yellow-800">警告</Badge>
+            );
+        case PlanState.DISABLED:
+            return <Badge variant="secondary">已禁用</Badge>;
+        case PlanState.ERROR:
+            return <Badge className="bg-red-100 text-red-800">错误</Badge>;
+        default:
+            return <Badge variant="outline">未知</Badge>;
+    }
 }
