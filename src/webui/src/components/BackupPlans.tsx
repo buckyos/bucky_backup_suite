@@ -360,6 +360,7 @@ function PlanListMobile({
                         ? "opacity-60"
                         : ""
                 }`}
+                onClick={() => onNavigate?.("plan-details", plan)}
             >
                 <CardHeader>
                     <div className="flex items-start justify-between">
@@ -475,16 +476,6 @@ function PlanListMobile({
                             >
                                 <Edit className="w-3 h-3" />
                             </Button>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="p-2"
-                                onClick={() =>
-                                    onNavigate?.("plan-details", plan)
-                                }
-                            >
-                                <Eye className="w-3 h-3" />
-                            </Button>
                             <AlertDialog>
                                 <AlertDialogTrigger asChild>
                                     <Button
@@ -529,6 +520,189 @@ function PlanListMobile({
 }
 
 function PlanListDesktop({
+    plans,
+    services,
+    uncompleteTasks,
+    t,
+    togglePlan,
+    runPlan,
+    deletePlan,
+    onNavigate,
+}: {
+    plans: Array<BackupPlanInfo>;
+    services: Array<BackupTargetInfo>;
+    uncompleteTasks: TaskInfo[];
+    t: Translations;
+    togglePlan: (plan: BackupPlanInfo) => void;
+    runPlan: (plan: BackupPlanInfo) => void;
+    deletePlan: (planId: string) => void;
+    onNavigate?: (page: string, data?: any) => void;
+}) {
+    return (
+        <>
+            <Card>
+                <CardContent className="py-3">
+                    <div className="flex items-center gap-4">
+                        <div className="grid grid-cols-7 gap-4 flex-1 items-center">
+                            <div className="font-medium">
+                                {t.plans.planName}
+                            </div>
+                            <div className="font-medium">{t.plans.source}</div>
+                            <div className="font-medium">
+                                {t.plans.destination}
+                            </div>
+                            <div className="font-medium">
+                                {t.plans.schedule}
+                            </div>
+                            <div className="font-medium">{t.common.status}</div>
+                            <div className="font-medium">{t.plans.nextRun}</div>
+                            <div className="font-medium text-right">
+                                {t.common.actions}
+                            </div>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+
+            {plans.map((plan) => {
+                const policies = TaskMgrHelper.formatPlanPolicy(plan);
+                const service = services.find(
+                    (s) => s.target_id === plan.target
+                );
+                return (
+                    <Card
+                        key={plan.title}
+                        className="cursor-pointer hover:bg-accent/50"
+                        onClick={() => onNavigate?.("plan-details", plan)}
+                    >
+                        <CardContent className="py-4">
+                            // 桌面端详细布局
+                            <div className="flex items-center gap-4">
+                                <div className="grid grid-cols-7 gap-4 flex-1 items-center">
+                                    <div>
+                                        <p className="font-medium">
+                                            {plan.title}
+                                        </p>
+                                        <p className="font-medium">
+                                            {plan.source}
+                                        </p>
+                                        <p className="font-medium">
+                                            {service
+                                                ? service.name || service.url
+                                                : "未知服务"}
+                                        </p>
+                                        <p className="font-medium">
+                                            <p className="font-medium">
+                                                {policies.map((s, idx) => (
+                                                    <span key={idx}>
+                                                        {idx ===
+                                                        policies.length - 1
+                                                            ? `${s}`
+                                                            : `${s}|`}
+                                                    </span>
+                                                ))}
+                                            </p>
+                                        </p>
+                                        <p className="font-medium">
+                                            {getStatusBadge(
+                                                plan,
+                                                uncompleteTasks
+                                            )}
+                                        </p>
+                                        <p className="font-medium">
+                                            {TaskMgrHelper.formatTime(
+                                                TaskMgrHelper.planNextRunTime(
+                                                    plan
+                                                ),
+                                                "--"
+                                            )}
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="gap-1"
+                                            onClick={() => runPlan(plan)}
+                                        >
+                                            <Play className="w-3 h-3" />
+                                            {t.plans.runNow}
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="gap-1"
+                                            onClick={() =>
+                                                onNavigate?.("restore", {
+                                                    planId: plan.plan_id,
+                                                })
+                                            }
+                                        >
+                                            <Undo2 className="w-3 h-3" />
+                                            {t.common.restore}
+                                        </Button>
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="gap-1"
+                                            onClick={() =>
+                                                onNavigate?.("edit-plan", plan)
+                                            }
+                                        >
+                                            <Edit className="w-3 h-3" />
+                                            {t.common.edit}
+                                        </Button>
+                                        <AlertDialog>
+                                            <AlertDialogTrigger asChild>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                                                >
+                                                    <Trash2 className="w-3 h-3" />
+                                                    {t.common.delete}
+                                                </Button>
+                                            </AlertDialogTrigger>
+                                            <AlertDialogContent>
+                                                <AlertDialogHeader>
+                                                    <AlertDialogTitle>
+                                                        删除备份计划
+                                                    </AlertDialogTitle>
+                                                    <AlertDialogDescription>
+                                                        确定要删除备份计划 "
+                                                        {plan.title}"
+                                                        吗？此操作不可撤销。
+                                                    </AlertDialogDescription>
+                                                </AlertDialogHeader>
+                                                <AlertDialogFooter>
+                                                    <AlertDialogCancel>
+                                                        取消
+                                                    </AlertDialogCancel>
+                                                    <AlertDialogAction
+                                                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                                        onClick={() =>
+                                                            deletePlan(
+                                                                plan.plan_id
+                                                            )
+                                                        }
+                                                    >
+                                                        删除
+                                                    </AlertDialogAction>
+                                                </AlertDialogFooter>
+                                            </AlertDialogContent>
+                                        </AlertDialog>
+                                    </div>
+                                </div>
+                            </div>
+                        </CardContent>
+                    </Card>
+                );
+            })}
+        </>
+    );
+}
+
+function PlanListDesktopCard({
     plans,
     services,
     uncompleteTasks,
