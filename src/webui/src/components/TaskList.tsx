@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import {
     Card,
     CardContent,
@@ -751,95 +751,81 @@ function HistoryTaskTabContent({
 
     return (
         <>
-            {
-                <>
-                    <Card>
-                        <CardHeader>
-                            <CardTitle className="text-lg">
-                                筛选和搜索
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="flex flex-wrap items-end gap-4">
-                                <div className="flex-1 min-w-[240px] space-y-2">
-                                    <label className="text-sm font-medium">
-                                        {t.common.search}
-                                    </label>
-                                    <div className="relative">
-                                        <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
-                                        <Input
-                                            placeholder="搜索计划名称..."
-                                            value={searchPlanFilter}
-                                            onChange={(e) =>
-                                                setSearchPlanFilter(
-                                                    e.target.value
-                                                )
-                                            }
-                                            className="pl-10"
-                                        />
-                                    </div>
-                                </div>
-                                <div className="flex-none min-w-[200px] space-y-2">
-                                    <label className="text-sm font-medium">
-                                        {t.common.type}
-                                    </label>
-                                    <Select
-                                        value={typeFilter ?? "all"}
-                                        onValueChange={(
-                                            taskType: TaskType | "all"
-                                        ) =>
-                                            taskType === "all"
-                                                ? setTypeFilter(null)
-                                                : setTypeFilter(taskType)
-                                        }
-                                    >
-                                        <SelectTrigger className="w-full">
-                                            <SelectValue placeholder="全部类型" />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="all">
-                                                全部类型
-                                            </SelectItem>
-                                            <SelectItem value={TaskType.BACKUP}>
-                                                {t.tasks.backup}任务
-                                            </SelectItem>
-                                            <SelectItem
-                                                value={TaskType.RESTORE}
-                                            >
-                                                {t.tasks.restore}任务
-                                            </SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                </div>
+            <Card>
+                <CardHeader>
+                    <CardTitle className="text-lg">筛选和搜索</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <div className="flex flex-wrap items-end gap-4">
+                        <div className="flex-1 min-w-[240px] space-y-2">
+                            <label className="text-sm font-medium">
+                                {t.common.search}
+                            </label>
+                            <div className="relative">
+                                <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                                <Input
+                                    placeholder="搜索计划名称..."
+                                    value={searchPlanFilter}
+                                    onChange={(e) =>
+                                        setSearchPlanFilter(e.target.value)
+                                    }
+                                    className="pl-10"
+                                />
                             </div>
-                        </CardContent>
-                    </Card>
-                    {!isMobile && (
-                        <Card>
-                            <CardContent className="py-3">
-                                <div className="flex items-center gap-4">
-                                    <div className="grid grid-cols-5 gap-4 flex-1 items-center">
-                                        <div className="font-medium">
-                                            任务名称
-                                        </div>
-                                        <div className="font-medium">
-                                            {t.common.type}
-                                        </div>
-                                        {/* <div className="font-medium">
+                        </div>
+                        <div className="flex-none min-w-[200px] space-y-2">
+                            <label className="text-sm font-medium">
+                                {t.common.type}
+                            </label>
+                            <Select
+                                value={typeFilter ?? "all"}
+                                onValueChange={(taskType: TaskType | "all") =>
+                                    taskType === "all"
+                                        ? setTypeFilter(null)
+                                        : setTypeFilter(taskType)
+                                }
+                            >
+                                <SelectTrigger className="w-full">
+                                    <SelectValue placeholder="全部类型" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">
+                                        全部类型
+                                    </SelectItem>
+                                    <SelectItem value={TaskType.BACKUP}>
+                                        {t.tasks.backup}任务
+                                    </SelectItem>
+                                    <SelectItem value={TaskType.RESTORE}>
+                                        {t.tasks.restore}任务
+                                    </SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+            {!isMobile && (
+                <Card>
+                    <CardContent className="py-3">
+                        <div className="flex items-center gap-4">
+                            <div className="grid grid-cols-5 gap-4 flex-1 items-center">
+                                <div className="font-medium">任务名称</div>
+                                <div className="font-medium">
+                                    {t.common.type}
+                                </div>
+                                {/* <div className="font-medium">
                                         {t.common.status}
                                     </div> */}
-                                        <div className="font-medium">大小</div>
-                                        <div className="font-medium">时间</div>
-                                        <div className="font-medium text-right">
-                                            {t.common.actions}
-                                        </div>
-                                    </div>
+                                <div className="font-medium">大小</div>
+                                <div className="font-medium">时间</div>
+                                <div className="font-medium text-right">
+                                    {t.common.actions}
                                 </div>
-                            </CardContent>
-                        </Card>
-                    )}
-                </>
-            }
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
 
             {filterTasks.length === 0 ? (
                 <Card>
