@@ -521,10 +521,10 @@ function RunningTaskTabContent({
                 return (
                     <Card
                         key={task.taskid}
-                        className="cursor-pointer hover:bg-accent/50"
+                        className="cursor-pointer hover:bg-accent/50 gap-1"
                         onClick={() => showDetailTask(task)}
                     >
-                        <CardHeader className={`${isMobile ? "pb-2" : "pb-4"}`}>
+                        <CardHeader className="pb-1">
                             <div className="flex items-center justify-between">
                                 <div className="flex-1 min-w-0">
                                     <CardTitle

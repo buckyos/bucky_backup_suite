@@ -192,15 +192,15 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                     <Card
                         className={`w-full ${
                             isMobile ? "" : "max-w-2xl"
-                        } text-center m-auto`}
+                        } text-center m-auto gap-4`}
                     >
-                        <CardHeader>
+                        <CardHeader className="pt-4">
                             <CardTitle>还没有可用的备份服务</CardTitle>
                             <CardDescription>
                                 创建备份计划前，请先配置一个备份服务
                             </CardDescription>
                         </CardHeader>
-                        <CardContent>
+                        <CardContent className="[&:last-child]:pb-4">
                             <div
                                 className={`flex ${
                                     isMobile
@@ -225,8 +225,8 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                             TaskMgrHelper.targetUsagePercent(service);
 
                         return (
-                            <Card key={service.target_id}>
-                                <CardHeader>
+                            <Card key={service.target_id} className="gap-0">
+                                <CardHeader className="pt-4">
                                     <div className="flex items-start justify-between">
                                         <div className="flex items-center gap-3">
                                             <ServiceIcon className="w-5 h-5 text-muted-foreground" />
@@ -317,7 +317,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <CardContent>
+                                <CardContent className="[&:last-child]:pb-4">
                                     <div
                                         className={`grid ${
                                             isMobile
