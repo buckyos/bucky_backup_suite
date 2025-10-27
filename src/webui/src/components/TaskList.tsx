@@ -49,6 +49,7 @@ import {
     FileText,
     MoreVertical,
     ChevronLeft,
+    Undo2,
 } from "lucide-react";
 import { Translations } from "./i18n";
 import {
@@ -142,6 +143,7 @@ enum TaskAction {
 function getTaskActions(
     task: TaskInfo,
     onShowDetail: (task: TaskInfo) => void,
+    onNavigate: (page: string, data?: any) => void,
     t: Translations
 ) {
     const actions = [
@@ -195,6 +197,23 @@ function getTaskActions(
                 >
                     <Play className="w-3 h-3" />
                     继续
+                </Button>
+            );
+        } else if (task.state === TaskState.DONE) {
+            actions.push(
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1"
+                    onClick={() =>
+                        onNavigate?.("restore", {
+                            planId: task.owner_plan_id,
+                            taskId: task.taskid,
+                        })
+                    }
+                >
+                    <Undo2 className="w-3 h-3" />
+                    {t.common.restore}
                 </Button>
             );
         }
@@ -637,6 +656,7 @@ function RunningTaskTabContent({
                                             {getTaskActions(
                                                 task,
                                                 showDetailTask,
+                                                onNavigate,
                                                 t
                                             )}
                                         </div>
@@ -1104,6 +1124,7 @@ function HistoryTaskTabContent({
                                                     {getTaskActions(
                                                         task,
                                                         showDetailTask,
+                                                        onNavigate,
                                                         t
                                                     )}
                                                 </div>
