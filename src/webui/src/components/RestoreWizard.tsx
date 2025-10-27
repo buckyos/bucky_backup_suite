@@ -4,7 +4,6 @@ import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { Checkbox } from "./ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
-import { DirectorySelector } from "./DirectorySelector";
 import { useMobile } from "./hooks/use_mobile";
 import { toast } from "sonner";
 import {
@@ -56,6 +55,17 @@ interface TaskFileEntry {
     isDirectory: boolean;
 }
 
+interface TargetDirectoryEntry {
+    id: string;
+    label: string;
+    path: string;
+}
+
+const TARGET_ROOT_BREADCRUMB: BreadcrumbNode = {
+    label: "目标目录",
+    path: null,
+};
+
 type RawTaskFileEntry = string | Record<string, any>;
 
 const ROOT_BREADCRUMB: BreadcrumbNode = { label: "备份内容", path: null };
@@ -94,6 +104,14 @@ export function RestoreWizard({
     const [breadcrumbs, setBreadcrumbs] = useState<BreadcrumbNode[]>([
         ROOT_BREADCRUMB,
     ]);
+    const [targetBreadcrumbs, setTargetBreadcrumbs] = useState<
+        BreadcrumbNode[]
+    >([TARGET_ROOT_BREADCRUMB]);
+    const [targetDirectories, setTargetDirectories] = useState<
+        TargetDirectoryEntry[]
+    >([]);
+    const [targetLoading, setTargetLoading] = useState(false);
+    const [targetError, setTargetError] = useState<string | null>(null);
 
     const [restoreType, setRestoreType] = useState<"original" | "custom">(
         "original"
@@ -121,6 +139,9 @@ export function RestoreWizard({
 
     const currentBreadcrumb = breadcrumbs[breadcrumbs.length - 1];
     const currentPath = currentBreadcrumb?.path ?? null;
+    const targetCurrentBreadcrumb =
+        targetBreadcrumbs[targetBreadcrumbs.length - 1];
+    const targetCurrentPath = targetCurrentBreadcrumb?.path ?? null;
 
     const selectedPlan = useMemo(
         () =>
@@ -273,6 +294,56 @@ export function RestoreWizard({
     }, [breadcrumbs, selectedTaskId]);
 
     useEffect(() => {
+        if (restoreType !== "custom") return;
+        let ignore = false;
+
+        const loadDirectories = async () => {
+            setTargetLoading(true);
+            setTargetError(null);
+            try {
+                const dirs = await taskManager.listDirChildren(
+                    DirectoryPurpose.RESTORE_TARGET,
+                    targetCurrentPath ?? undefined,
+                    { only_dirs: true }
+                );
+
+                if (ignore) return;
+
+                const entries = (Array.isArray(dirs) ? dirs : []).map(
+                    (dir, index) => {
+                        const label = dir.name || "未命名";
+                        const nextPath = buildRequestPath(
+                            targetCurrentPath,
+                            dir.name || label
+                        );
+                        const safePath = nextPath || label;
+                        return {
+                            id: `${safePath}-${index}`,
+                            label,
+                            path: safePath,
+                        };
+                    }
+                );
+                setTargetDirectories(entries);
+            } catch (error) {
+                if (ignore) return;
+                setTargetError(formatErrorMessage(error));
+                setTargetDirectories([]);
+            } finally {
+                if (!ignore) {
+                    setTargetLoading(false);
+                }
+            }
+        };
+
+        loadDirectories();
+
+        return () => {
+            ignore = true;
+        };
+    }, [restoreType, targetCurrentPath]);
+
+    useEffect(() => {
         if (
             !plansLoading &&
             selectedPlanId &&
@@ -379,6 +450,25 @@ export function RestoreWizard({
 
     const handleBreadcrumbClick = (index: number) => {
         setBreadcrumbs((prev) => prev.slice(0, index + 1));
+    };
+
+    const handleTargetBreadcrumbClick = (index: number) => {
+        setTargetBreadcrumbs((prev) => prev.slice(0, index + 1));
+    };
+
+    const handleTargetDirectoryNavigate = (
+        entry: TargetDirectoryEntry
+    ): void => {
+        if (entry.path === targetCurrentPath) return;
+        setTargetBreadcrumbs((prev) => [
+            ...prev,
+            { label: entry.label, path: entry.path },
+        ]);
+    };
+
+    const handleSelectTargetPath = (path: string | null) => {
+        if (!path) return;
+        setCustomPath(path);
     };
 
     const renderPlansStep = () => (
@@ -725,14 +815,89 @@ export function RestoreWizard({
             </div>
 
             {restoreType === "custom" && (
-                <div className="space-y-2">
-                    <Label className="text-sm font-medium">选择目标路径</Label>
-                    <DirectorySelector
-                        value={customPath}
-                        onChange={setCustomPath}
-                        placeholder="请选择恢复目标路径"
-                        purpose={DirectoryPurpose.RESTORE_TARGET}
-                    />
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                        <Label className="text-sm font-medium">选择目标路径</Label>
+                        <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleSelectTargetPath(targetCurrentPath)}
+                            disabled={!targetCurrentPath || customPath === targetCurrentPath}
+                        >
+                            使用当前路径
+                        </Button>
+                    </div>
+
+                    <div className="rounded-md border">
+                        <div className="border-b bg-muted/50 px-3 py-2">
+                            <Breadcrumb>
+                                <BreadcrumbList>
+                                    {targetBreadcrumbs.map((item, index) => (
+                                        <React.Fragment
+                                            key={`${item.label}-${index}`}
+                                        >
+                                            <BreadcrumbItem>
+                                                {index === targetBreadcrumbs.length - 1 ? (
+                                                    <BreadcrumbPage>
+                                                        {item.label}
+                                                    </BreadcrumbPage>
+                                                ) : (
+                                                    <BreadcrumbLink
+                                                        className="cursor-pointer"
+                                                        onClick={() =>
+                                                            handleTargetBreadcrumbClick(index)
+                                                        }
+                                                    >
+                                                        {item.label}
+                                                    </BreadcrumbLink>
+                                                )}
+                                            </BreadcrumbItem>
+                                            {index < targetBreadcrumbs.length - 1 && (
+                                                <BreadcrumbSeparator />
+                                            )}
+                                        </React.Fragment>
+                                    ))}
+                                </BreadcrumbList>
+                            </Breadcrumb>
+                        </div>
+
+                        <div className="p-3 space-y-2">
+                            {targetLoading ? (
+                                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    正在加载目录...
+                                </div>
+                            ) : targetError ? (
+                                <div className="text-sm text-destructive">
+                                    {targetError}
+                                </div>
+                            ) : targetDirectories.length === 0 ? (
+                                <div className="text-sm text-muted-foreground">
+                                    该目录暂无子目录
+                                </div>
+                            ) : (
+                                targetDirectories.map((entry) => (
+                                    <button
+                                        key={entry.id}
+                                        type="button"
+                                        onClick={() => handleTargetDirectoryNavigate(entry)}
+                                        className="flex w-full items-center justify-between rounded-md border border-transparent px-3 py-2 text-left text-sm transition-colors hover:border-accent hover:bg-accent/50"
+                                    >
+                                        <span className="flex items-center gap-2 overflow-hidden">
+                                            <Folder className="h-4 w-4 text-muted-foreground" />
+                                            <span className="truncate">{entry.label}</span>
+                                        </span>
+                                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                    </button>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    <div className="text-xs text-muted-foreground">
+                        当前选择：{customPath || "未选择"}
+                    </div>
                 </div>
             )}
 

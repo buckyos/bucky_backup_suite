@@ -13,7 +13,6 @@ import {
 } from "./ui/select";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
 import { Checkbox } from "./ui/checkbox";
-import { DirectorySelector } from "./DirectorySelector";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
 import { toast } from "sonner";

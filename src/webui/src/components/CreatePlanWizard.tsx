@@ -13,14 +13,29 @@ import {
 } from "./ui/select";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
 import { Checkbox } from "./ui/checkbox";
-import { DirectorySelector } from "./DirectorySelector";
+import {
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbList,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
+} from "./ui/breadcrumb";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronLeft, ChevronRight, Check } from "lucide-react";
+import {
+    ArrowLeft,
+    ChevronLeft,
+    ChevronRight,
+    Check,
+    Folder,
+    Loader2,
+} from "lucide-react";
 import {
     BackupPlanInfo,
     BackupTargetInfo,
+    DirectoryNode,
     DirectoryPurpose,
     SourceType,
 } from "./utils/task_mgr";
@@ -46,6 +61,29 @@ interface PlanData {
     backupType: "full" | "incremental";
     versions: string;
     priority: "high" | "medium" | "low";
+}
+
+interface BreadcrumbNode {
+    label: string;
+    path: string | null;
+}
+
+const ROOT_DIRECTORY_BREADCRUMB: BreadcrumbNode = {
+    label: "根目录",
+    path: null,
+};
+
+function joinDirectoryPath(
+    base: string | null | undefined,
+    segment: string
+): string {
+    if (!base || base.length === 0) {
+        return segment;
+    }
+    if (base.endsWith("/") || base.endsWith("\\")) {
+        return `${base}${segment}`;
+    }
+    return `${base}/${segment}`;
 }
 
 const STEPS = [
@@ -76,6 +114,43 @@ export function CreatePlanWizard({
         eventDelay: "5",
     });
 
+    const [directoryBreadcrumbs, setDirectoryBreadcrumbs] = useState<
+        BreadcrumbNode[]
+    >([ROOT_DIRECTORY_BREADCRUMB]);
+    const [directoryEntries, setDirectoryEntries] = useState<DirectoryNode[]>(
+        []
+    );
+    const [directoriesLoading, setDirectoriesLoading] = useState(false);
+    const [directoriesError, setDirectoriesError] = useState<string | null>(
+        null
+    );
+    const [directoryRequestId, setDirectoryRequestId] = useState(0);
+
+    const currentDirectoryBreadcrumb =
+        directoryBreadcrumbs[directoryBreadcrumbs.length - 1];
+    const currentDirectoryPath = currentDirectoryBreadcrumb?.path ?? undefined;
+
+    const reloadCurrentDirectory = () =>
+        setDirectoryRequestId((prev) => prev + 1);
+
+    const handleBreadcrumbNavigate = (index: number) => {
+        setDirectoryBreadcrumbs((prev) => prev.slice(0, index + 1));
+    };
+
+    const handleDirectoryOpen = (dirName: string) => {
+        setDirectoryBreadcrumbs((prev) => {
+            const nextPath = joinDirectoryPath(
+                currentDirectoryPath ?? null,
+                dirName
+            );
+            const last = prev[prev.length - 1];
+            if (last?.path === nextPath) {
+                return prev;
+            }
+            return [...prev, { label: dirName, path: nextPath }];
+        });
+    };
+
     const [errors, setErrors] = useState<Record<string, string>>({});
 
     const [services, setServices] = useState<BackupTargetInfo[]>([]); // Mocked available services
@@ -93,6 +168,59 @@ export function CreatePlanWizard({
             taskManager.stopRefreshTargetStateTimer(timerId);
         };
     }, []);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const fetchDirectories = async () => {
+            setDirectoriesLoading(true);
+            setDirectoriesError(null);
+            try {
+                const result = await taskManager.listDirChildren(
+                    DirectoryPurpose.BACKUP_SOURCE,
+                    currentDirectoryPath ?? undefined,
+                    { only_dirs: true }
+                );
+                if (!cancelled) {
+                    setDirectoryEntries(result);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setDirectoryEntries([]);
+                    setDirectoriesError(
+                        error instanceof Error
+                            ? error.message
+                            : String(error)
+                    );
+                }
+            } finally {
+                if (!cancelled) {
+                    setDirectoriesLoading(false);
+                }
+            }
+        };
+
+        fetchDirectories();
+        return () => {
+            cancelled = true;
+        };
+    }, [currentDirectoryPath, directoryRequestId]);
+
+    const updatePlanData = (updates: Partial<PlanData>) => {
+        setPlanData((prev) => ({ ...prev, ...updates }));
+        const newErrors = { ...errors };
+        Object.keys(updates).forEach((key) => {
+            delete newErrors[key];
+        });
+        setErrors(newErrors);
+    };
+
+    const handleSelectCurrentDirectory = () => {
+        if (!currentDirectoryPath) {
+            return;
+        }
+        updatePlanData({ directories: [currentDirectoryPath] });
+    };
 
     const validateStep = (
         step: number,
@@ -223,16 +351,6 @@ export function CreatePlanWizard({
         }
     };
 
-    const updatePlanData = (updates: Partial<PlanData>) => {
-        setPlanData((prev) => ({ ...prev, ...updates }));
-        // Clear related errors
-        const newErrors = { ...errors };
-        Object.keys(updates).forEach((key) => {
-            delete newErrors[key];
-        });
-        setErrors(newErrors);
-    };
-
     const renderStepContent = () => {
         switch (currentStep) {
             case 0:
@@ -278,33 +396,131 @@ export function CreatePlanWizard({
                         <div>
                             <Label>选择备份目录 *</Label>
                             <p className="text-sm text-muted-foreground mb-3">
-                                选择需要备份的文件夹
+                                通过浏览文件系统选择需要备份的文件夹。
                             </p>
-                            <DirectorySelector
-                                purpose={DirectoryPurpose.BACKUP_SOURCE}
-                                value={planData.directories}
-                                onChange={(dir) =>
-                                    updatePlanData({ directories: [dir] })
-                                }
-                            />
+                            <div className="space-y-3">
+                                <Breadcrumb>
+                                    <BreadcrumbList>
+                                        {directoryBreadcrumbs.map(
+                                            (crumb, index) => (
+                                                <React.Fragment
+                                                    key={`${crumb.label}-${index}`}
+                                                >
+                                                    <BreadcrumbItem>
+                                                        {index ===
+                                                        directoryBreadcrumbs.length -
+                                                            1 ? (
+                                                            <BreadcrumbPage>
+                                                                {crumb.label}
+                                                            </BreadcrumbPage>
+                                                        ) : (
+                                                            <BreadcrumbLink
+                                                                className="cursor-pointer"
+                                                                onClick={() =>
+                                                                    handleBreadcrumbNavigate(
+                                                                        index
+                                                                    )
+                                                                }
+                                                            >
+                                                                {crumb.label}
+                                                            </BreadcrumbLink>
+                                                        )}
+                                                    </BreadcrumbItem>
+                                                    {index <
+                                                        directoryBreadcrumbs.length -
+                                                            1 && (
+                                                        <BreadcrumbSeparator />
+                                                    )}
+                                                </React.Fragment>
+                                            )
+                                        )}
+                                    </BreadcrumbList>
+                                </Breadcrumb>
+
+                                <div className="rounded-md border">
+                                    {directoriesLoading ? (
+                                        <div className="flex h-24 items-center justify-center gap-2 text-sm text-muted-foreground">
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                            加载中...
+                                        </div>
+                                    ) : directoriesError ? (
+                                        <div className="flex h-24 flex-col items-center justify-center gap-2 p-4 text-center text-sm text-destructive">
+                                            <span>无法加载目录</span>
+                                            <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={reloadCurrentDirectory}
+                                            >
+                                                重试
+                                            </Button>
+                                        </div>
+                                    ) : directoryEntries.length === 0 ? (
+                                        <div className="flex h-24 items-center justify-center px-4 text-sm text-muted-foreground">
+                                            当前目录暂无可用子目录
+                                        </div>
+                                    ) : (
+                                        <div className="divide-y">
+                                            {directoryEntries.map((entry) => (
+                                                <button
+                                                    key={joinDirectoryPath(
+                                                        currentDirectoryPath ?? null,
+                                                        entry.name
+                                                    )}
+                                                    type="button"
+                                                    className="flex w-full items-center justify-between px-3 py-2 text-left transition-colors hover:bg-accent"
+                                                    onClick={() =>
+                                                        handleDirectoryOpen(
+                                                            entry.name
+                                                        )
+                                                    }
+                                                >
+                                                    <span className="flex items-center gap-2">
+                                                        <Folder className="h-4 w-4 text-muted-foreground" />
+                                                        <span className="truncate text-sm">
+                                                            {entry.name}
+                                                        </span>
+                                                    </span>
+                                                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={handleSelectCurrentDirectory}
+                                        disabled={!currentDirectoryPath}
+                                    >
+                                        选择当前目录
+                                    </Button>
+                                    <span className="text-sm text-muted-foreground">
+                                        当前路径:{" "}
+                                        {currentDirectoryPath ?? "根目录"}
+                                    </span>
+                                </div>
+                            </div>
                             {errors.directories && (
                                 <p className="text-sm text-red-500 mt-2">
                                     {errors.directories}
                                 </p>
                             )}
                         </div>
-                        {planData.directories && (
-                            <div className="bg-muted p-3 rounded-md">
+                        {planData.directories.length > 0 && (
+                            <div className="rounded-md bg-muted p-3">
                                 <p className="text-sm font-medium mb-2">
-                                    已选择的目录:
+                                    已选择的目录
                                 </p>
-                                <ul className="text-sm space-y-1">
+                                <ul className="space-y-1 text-sm">
                                     {planData.directories.map((dir) => (
                                         <li
                                             key={dir}
                                             className="text-muted-foreground"
                                         >
-                                            • {dir}
+                                            {dir}
                                         </li>
                                     ))}
                                 </ul>
