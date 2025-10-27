@@ -524,7 +524,7 @@ function RunningTaskTabContent({
                         className="cursor-pointer hover:bg-accent/50 gap-1"
                         onClick={() => showDetailTask(task)}
                     >
-                        <CardHeader className="pb-1">
+                        <CardHeader className="pt-4 pb-0">
                             <div className="flex items-center justify-between">
                                 <div className="flex-1 min-w-0">
                                     <CardTitle
@@ -594,7 +594,7 @@ function RunningTaskTabContent({
                                 </div>
                             </div>
                         </CardHeader>
-                        <CardContent>
+                        <CardContent className="pt-0 pb-2 [&:last-child]:pb-4">
                             <div className="space-y-3">
                                 <div>
                                     <div className="flex justify-between text-sm mb-2">

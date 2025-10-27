@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import {
     Card,
     CardContent,
@@ -226,7 +226,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
 
                         return (
                             <Card key={service.target_id} className="gap-0">
-                                <CardHeader className="pt-4">
+                                <CardHeader className="pt-4 pb-0">
                                     <div className="flex items-start justify-between">
                                         <div className="flex items-center gap-3">
                                             <ServiceIcon className="w-5 h-5 text-muted-foreground" />
@@ -317,7 +317,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <CardContent className="[&:last-child]:pb-4">
+                                <CardContent className="pt-0 pb-2 [&:last-child]:pb-4">
                                     <div
                                         className={`grid ${
                                             isMobile

@@ -577,7 +577,7 @@ function PlanListDesktop({
                         </div>
                     </div>
                 </CardHeader>
-                <CardContent className="pt-0 pb-1 [&:last-child]:pb-4">
+                <CardContent className="pt-0 pb-2 [&:last-child]:pb-4">
                     <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
                         <div className="flex items-center gap-2">
                             <Folder className="w-4 h-4 text-muted-foreground" />
