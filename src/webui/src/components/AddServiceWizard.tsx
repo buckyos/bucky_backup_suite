@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -11,7 +11,14 @@ import {
     SelectValue,
 } from "./ui/select";
 import { Switch } from "./ui/switch";
-import { DirectorySelector } from "./DirectorySelector";
+import {
+    Breadcrumb,
+    BreadcrumbItem,
+    BreadcrumbLink,
+    BreadcrumbList,
+    BreadcrumbPage,
+    BreadcrumbSeparator,
+} from "./ui/breadcrumb";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
 import { toast } from "sonner";
@@ -20,11 +27,33 @@ import {
     ChevronLeft,
     ChevronRight,
     Check,
+    Folder,
     HardDrive,
+    Loader2,
     Network,
 } from "lucide-react";
-import { DirectoryPurpose, TargetType } from "./utils/task_mgr";
+import { DirectoryNode, DirectoryPurpose, TargetType } from "./utils/task_mgr";
 import { taskManager } from "./utils/fake_task_mgr";
+
+interface BreadcrumbNode {
+    label: string;
+    path: string | null;
+}
+
+const ROOT_DIRECTORY_BREADCRUMB: BreadcrumbNode = {
+    label: "根目录",
+    path: null,
+};
+
+function joinDirectoryPath(base: string | null, segment: string): string {
+    if (!base || base.length === 0) {
+        return segment;
+    }
+    if (base.endsWith("/") || base.endsWith("\\")) {
+        return `${base}${segment}`;
+    }
+    return `${base}/${segment}`;
+}
 
 interface AddServiceWizardProps {
     onBack: () => void;
@@ -44,6 +73,88 @@ export function AddServiceWizard({
     const [serviceName, setServiceName] = useState("");
     const [localPath, setLocalPath] = useState("");
     const [ndnUrl, setNdnUrl] = useState("");
+
+    const [directoryBreadcrumbs, setDirectoryBreadcrumbs] = useState<
+        BreadcrumbNode[]
+    >([ROOT_DIRECTORY_BREADCRUMB]);
+    const [directoryEntries, setDirectoryEntries] = useState<DirectoryNode[]>(
+        []
+    );
+    const [directoriesLoading, setDirectoriesLoading] = useState(false);
+    const [directoriesError, setDirectoriesError] = useState<string | null>(
+        null
+    );
+    const [directoryRequestId, setDirectoryRequestId] = useState(0);
+
+    const currentDirectoryBreadcrumb =
+        directoryBreadcrumbs[directoryBreadcrumbs.length - 1];
+    const currentDirectoryPath = currentDirectoryBreadcrumb?.path ?? null;
+
+    const reloadCurrentDirectory = () =>
+        setDirectoryRequestId((prev) => prev + 1);
+
+    const handleBreadcrumbNavigate = (index: number) => {
+        setDirectoryBreadcrumbs((prev) => prev.slice(0, index + 1));
+    };
+
+    const handleDirectorySelect = (dirName: string) => {
+        const nextPath = joinDirectoryPath(currentDirectoryPath, dirName);
+        setDirectoryBreadcrumbs((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.path === nextPath) {
+                return prev;
+            }
+            return [...prev, { label: dirName, path: nextPath }];
+        });
+    };
+
+    useEffect(() => {
+        if (serviceType !== TargetType.LOCAL) {
+            return;
+        }
+
+        let cancelled = false;
+
+        const fetchDirectories = async () => {
+            setDirectoriesLoading(true);
+            setDirectoriesError(null);
+            try {
+                const result = await taskManager.listDirChildren(
+                    DirectoryPurpose.BACKUP_TARGET,
+                    currentDirectoryPath ?? undefined,
+                    { only_dirs: true }
+                );
+                if (!cancelled) {
+                    setDirectoryEntries(result);
+                }
+            } catch (error) {
+                if (!cancelled) {
+                    setDirectoryEntries([]);
+                    setDirectoriesError(
+                        error instanceof Error ? error.message : String(error)
+                    );
+                }
+            } finally {
+                if (!cancelled) {
+                    setDirectoriesLoading(false);
+                }
+            }
+        };
+
+        fetchDirectories();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [currentDirectoryPath, serviceType, directoryRequestId]);
+
+    useEffect(() => {
+        if (serviceType !== TargetType.LOCAL) {
+            return;
+        }
+        const nextPath = currentDirectoryPath ?? "";
+        setLocalPath((prev) => (prev === nextPath ? prev : nextPath));
+    }, [currentDirectoryPath, serviceType]);
 
     const steps = [
         { number: 1, title: "服务类型", description: "选择服务类型" },
@@ -185,14 +296,113 @@ export function AddServiceWizard({
                             </div>
 
                             {serviceType === TargetType.LOCAL && (
-                                <div className="space-y-2">
+                                <div className="space-y-3">
                                     <Label>目标路径 *</Label>
-                                    <DirectorySelector
-                                        purpose={DirectoryPurpose.BACKUP_TARGET}
-                                        value={localPath}
-                                        onChange={setLocalPath}
-                                        placeholder="选择本地存储路径"
-                                    />
+                                    <div className="space-y-2">
+                                        <Breadcrumb>
+                                            <BreadcrumbList>
+                                                {directoryBreadcrumbs.map(
+                                                    (crumb, index) => (
+                                                        <React.Fragment
+                                                            key={`${crumb.label}-${index}`}
+                                                        >
+                                                            <BreadcrumbItem>
+                                                                {index ===
+                                                                directoryBreadcrumbs.length -
+                                                                    1 ? (
+                                                                    <BreadcrumbPage>
+                                                                        {
+                                                                            crumb.label
+                                                                        }
+                                                                    </BreadcrumbPage>
+                                                                ) : (
+                                                                    <BreadcrumbLink
+                                                                        className="cursor-pointer"
+                                                                        onClick={() =>
+                                                                            handleBreadcrumbNavigate(
+                                                                                index
+                                                                            )
+                                                                        }
+                                                                    >
+                                                                        {
+                                                                            crumb.label
+                                                                        }
+                                                                    </BreadcrumbLink>
+                                                                )}
+                                                            </BreadcrumbItem>
+                                                            {index <
+                                                                directoryBreadcrumbs.length -
+                                                                    1 && (
+                                                                <BreadcrumbSeparator />
+                                                            )}
+                                                        </React.Fragment>
+                                                    )
+                                                )}
+                                            </BreadcrumbList>
+                                        </Breadcrumb>
+
+                                        <div className="rounded-md border">
+                                            {directoriesLoading ? (
+                                                <div className="flex h-24 items-center justify-center gap-2 text-sm text-muted-foreground">
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                    加载中...
+                                                </div>
+                                            ) : directoriesError ? (
+                                                <div className="flex h-24 flex-col items-center justify-center gap-2 p-4 text-center text-sm text-destructive">
+                                                    <span>无法加载目录</span>
+                                                    <Button
+                                                        type="button"
+                                                        size="sm"
+                                                        variant="outline"
+                                                        onClick={
+                                                            reloadCurrentDirectory
+                                                        }
+                                                    >
+                                                        重试
+                                                    </Button>
+                                                </div>
+                                            ) : directoryEntries.length ===
+                                              0 ? (
+                                                <div className="flex h-24 items-center justify-center px-4 text-sm text-muted-foreground">
+                                                    当前目录下没有可用子目录
+                                                </div>
+                                            ) : (
+                                                <div className="divide-y">
+                                                    {directoryEntries.map(
+                                                        (entry) => (
+                                                            <button
+                                                                key={joinDirectoryPath(
+                                                                    currentDirectoryPath,
+                                                                    entry.name
+                                                                )}
+                                                                type="button"
+                                                                className="flex w-full items-center justify-between px-3 py-2 text-left transition-colors hover:bg-accent"
+                                                                onClick={() =>
+                                                                    handleDirectorySelect(
+                                                                        entry.name
+                                                                    )
+                                                                }
+                                                            >
+                                                                <span className="flex items-center gap-2">
+                                                                    <Folder className="h-4 w-4 text-muted-foreground" />
+                                                                    <span className="truncate text-sm">
+                                                                        {
+                                                                            entry.name
+                                                                        }
+                                                                    </span>
+                                                                </span>
+                                                                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                                            </button>
+                                                        )
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                    <p className="text-sm text-muted-foreground">
+                                        当前选择:{" "}
+                                        {localPath || "未选择路径"}
+                                    </p>
                                 </div>
                             )}
 
