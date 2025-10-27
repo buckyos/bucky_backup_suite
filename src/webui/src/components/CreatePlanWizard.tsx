@@ -188,9 +188,7 @@ export function CreatePlanWizard({
                 if (!cancelled) {
                     setDirectoryEntries([]);
                     setDirectoriesError(
-                        error instanceof Error
-                            ? error.message
-                            : String(error)
+                        error instanceof Error ? error.message : String(error)
                     );
                 }
             } finally {
@@ -221,6 +219,38 @@ export function CreatePlanWizard({
         }
         updatePlanData({ directories: [currentDirectoryPath] });
     };
+
+    useEffect(() => {
+        let updated = false;
+        setPlanData((prev) => {
+            if (currentDirectoryPath) {
+                const shouldUpdate =
+                    prev.directories.length !== 1 ||
+                    prev.directories[0] !== currentDirectoryPath;
+                if (shouldUpdate) {
+                    updated = true;
+                    return {
+                        ...prev,
+                        directories: [currentDirectoryPath],
+                    };
+                }
+            } else if (prev.directories.length !== 0) {
+                updated = true;
+                return { ...prev, directories: [] };
+            }
+            return prev;
+        });
+        if (updated) {
+            setErrors((prev) => {
+                if (!prev.directories) {
+                    return prev;
+                }
+                const next = { ...prev };
+                delete next.directories;
+                return next;
+            });
+        }
+    }, [currentDirectoryPath]);
 
     const validateStep = (
         step: number,
@@ -309,7 +339,7 @@ export function CreatePlanWizard({
                 create_time: Date.now(),
                 update_time: Date.now(),
                 total_backup: 0,
-                total_size: 0
+                total_size: 0,
             };
             if (planData.triggerTypes.includes("scheduled")) {
                 console.log(
@@ -464,7 +494,8 @@ export function CreatePlanWizard({
                                             {directoryEntries.map((entry) => (
                                                 <button
                                                     key={joinDirectoryPath(
-                                                        currentDirectoryPath ?? null,
+                                                        currentDirectoryPath ??
+                                                            null,
                                                         entry.name
                                                     )}
                                                     type="button"
@@ -489,14 +520,14 @@ export function CreatePlanWizard({
                                 </div>
 
                                 <div className="flex flex-wrap items-center gap-3">
-                                    <Button
+                                    {/* <Button
                                         type="button"
                                         variant="outline"
                                         onClick={handleSelectCurrentDirectory}
                                         disabled={!currentDirectoryPath}
                                     >
                                         选择当前目录
-                                    </Button>
+                                    </Button> */}
                                     <span className="text-sm text-muted-foreground">
                                         当前路径:{" "}
                                         {currentDirectoryPath ?? "根目录"}
@@ -509,7 +540,7 @@ export function CreatePlanWizard({
                                 </p>
                             )}
                         </div>
-                        {planData.directories.length > 0 && (
+                        {/* {planData.directories.length > 0 && (
                             <div className="rounded-md bg-muted p-3">
                                 <p className="text-sm font-medium mb-2">
                                     已选择的目录
@@ -525,7 +556,7 @@ export function CreatePlanWizard({
                                     ))}
                                 </ul>
                             </div>
-                        )}
+                        )} */}
                     </div>
                 );
 

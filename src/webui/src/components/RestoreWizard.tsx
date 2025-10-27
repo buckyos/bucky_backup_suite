@@ -344,6 +344,13 @@ export function RestoreWizard({
     }, [restoreType, targetCurrentPath]);
 
     useEffect(() => {
+        if (restoreType !== "custom") return;
+        const nextPath = targetCurrentPath ?? "";
+        if (nextPath === customPath) return;
+        setCustomPath(nextPath);
+    }, [restoreType, targetCurrentPath, customPath]);
+
+    useEffect(() => {
         if (
             !plansLoading &&
             selectedPlanId &&
@@ -464,11 +471,6 @@ export function RestoreWizard({
             ...prev,
             { label: entry.label, path: entry.path },
         ]);
-    };
-
-    const handleSelectTargetPath = (path: string | null) => {
-        if (!path) return;
-        setCustomPath(path);
     };
 
     const renderPlansStep = () => (
@@ -817,16 +819,9 @@ export function RestoreWizard({
             {restoreType === "custom" && (
                 <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                        <Label className="text-sm font-medium">选择目标路径</Label>
-                        <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleSelectTargetPath(targetCurrentPath)}
-                            disabled={!targetCurrentPath || customPath === targetCurrentPath}
-                        >
-                            使用当前路径
-                        </Button>
+                        <Label className="text-sm font-medium">
+                            选择目标路径
+                        </Label>
                     </div>
 
                     <div className="rounded-md border">
@@ -838,7 +833,8 @@ export function RestoreWizard({
                                             key={`${item.label}-${index}`}
                                         >
                                             <BreadcrumbItem>
-                                                {index === targetBreadcrumbs.length - 1 ? (
+                                                {index ===
+                                                targetBreadcrumbs.length - 1 ? (
                                                     <BreadcrumbPage>
                                                         {item.label}
                                                     </BreadcrumbPage>
@@ -846,14 +842,18 @@ export function RestoreWizard({
                                                     <BreadcrumbLink
                                                         className="cursor-pointer"
                                                         onClick={() =>
-                                                            handleTargetBreadcrumbClick(index)
+                                                            handleTargetBreadcrumbClick(
+                                                                index
+                                                            )
                                                         }
                                                     >
                                                         {item.label}
                                                     </BreadcrumbLink>
                                                 )}
                                             </BreadcrumbItem>
-                                            {index < targetBreadcrumbs.length - 1 && (
+                                            {index <
+                                                targetBreadcrumbs.length -
+                                                    1 && (
                                                 <BreadcrumbSeparator />
                                             )}
                                         </React.Fragment>
@@ -881,12 +881,16 @@ export function RestoreWizard({
                                     <button
                                         key={entry.id}
                                         type="button"
-                                        onClick={() => handleTargetDirectoryNavigate(entry)}
+                                        onClick={() =>
+                                            handleTargetDirectoryNavigate(entry)
+                                        }
                                         className="flex w-full items-center justify-between rounded-md border border-transparent px-3 py-2 text-left text-sm transition-colors hover:border-accent hover:bg-accent/50"
                                     >
                                         <span className="flex items-center gap-2 overflow-hidden">
                                             <Folder className="h-4 w-4 text-muted-foreground" />
-                                            <span className="truncate">{entry.label}</span>
+                                            <span className="truncate">
+                                                {entry.label}
+                                            </span>
                                         </span>
                                         <ChevronRight className="h-4 w-4 text-muted-foreground" />
                                     </button>
