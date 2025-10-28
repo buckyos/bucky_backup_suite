@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState } from "react";
+﻿import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
     Card,
     CardContent,
@@ -32,6 +32,15 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
+import {
+    Pagination,
+    PaginationContent,
+    PaginationEllipsis,
+    PaginationItem,
+    PaginationLink,
+    PaginationNext,
+    PaginationPrevious,
+} from "./ui/pagination";
 import { TaskDetail } from "./TaskDetail";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
@@ -62,6 +71,47 @@ import {
 } from "./utils/task_mgr";
 import { taskManager } from "./utils/fake_task_mgr";
 import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
+
+const HISTORY_PAGE_SIZE = 10;
+
+type PaginationItemType = number | "ellipsis";
+
+function getPaginationRange(
+    current: number,
+    total: number
+): PaginationItemType[] {
+    if (total <= 0) {
+        return [];
+    }
+    const delta = 1;
+    const range: number[] = [];
+    for (let i = 1; i <= total; i++) {
+        if (
+            i === 1 ||
+            i === total ||
+            (i >= current - delta && i <= current + delta)
+        ) {
+            range.push(i);
+        }
+    }
+
+    const result: PaginationItemType[] = [];
+    let previous: number | null = null;
+
+    for (const pageNumber of range) {
+        if (previous !== null) {
+            if (pageNumber - previous === 2) {
+                result.push(previous + 1);
+            } else if (pageNumber - previous > 2) {
+                result.push("ellipsis");
+            }
+        }
+        result.push(pageNumber);
+        previous = pageNumber;
+    }
+
+    return result;
+}
 
 interface TaskListProps {
     onNavigate: (page: string, data?: any) => void;
@@ -227,13 +277,36 @@ export function TaskList({ onNavigate }: TaskListProps) {
     const isMobile = useMobile();
     const [runningTaskCount, setRunningTaskCount] = useState(0);
     const [filterTaskCount, setFilterTaskCount] = useState(0);
-    const [allTaskCount, setAllTaskCount] = useState(0);
+    const [allHistoryTaskCount, setAllHistoryTaskCount] = useState(0);
     const [showDetailTask, setShowDetailTask] = useState<TaskInfo | null>(null);
     const [plans, setPlans] = useState<BackupPlanInfo[]>([]);
 
+    const refreshAllHistoryTaskCount = async () => {
+        const { total } = await taskManager.listBackupTasks({
+            state: [TaskState.DONE],
+        });
+        setAllHistoryTaskCount(total);
+    };
+
     useEffect(() => {
+        refreshAllHistoryTaskCount();
+        const taskEventHandler = async (event: TaskEventType, data: any) => {
+            console.log("task event:", event, data);
+            switch (event) {
+                case TaskEventType.COMPLETE_TASK:
+                case TaskEventType.REMOVE_TASK:
+                    await refreshAllHistoryTaskCount();
+                    break;
+            }
+        };
+
+        taskManager.addTaskEventListener(taskEventHandler);
+
         const timerId = taskManager.startRefreshUncompleteTaskStateTimer();
-        return () => taskManager.stopRefreshUncompleteTaskStateTimer(timerId);
+        return () => {
+            taskManager.stopRefreshUncompleteTaskStateTimer(timerId);
+            taskManager.removeTaskEventListener(taskEventHandler);
+        };
     }, []);
 
     return (
@@ -254,10 +327,12 @@ export function TaskList({ onNavigate }: TaskListProps) {
                         </TabsTrigger>
                         <TabsTrigger value="history">
                             {"历史任务"} (
-                            {filterTaskCount
-                                ? `${filterTaskCount}/${allTaskCount}`
-                                : allTaskCount}{" "}
-                            )
+                            {!allHistoryTaskCount
+                                ? ""
+                                : filterTaskCount
+                                ? `${filterTaskCount}/${allHistoryTaskCount}`
+                                : allHistoryTaskCount}
+                            {""})
                         </TabsTrigger>
                     </TabsList>
                 </div>
@@ -267,7 +342,6 @@ export function TaskList({ onNavigate }: TaskListProps) {
                         t={t}
                         isMobile={isMobile}
                         setFilterTaskCount={setFilterTaskCount}
-                        setTaskCount={setAllTaskCount}
                         showDetailTask={setShowDetailTask}
                         plans={plans}
                         setPlans={setPlans}
@@ -280,7 +354,6 @@ export function TaskList({ onNavigate }: TaskListProps) {
                         t={t}
                         isMobile={isMobile}
                         setTaskCount={setRunningTaskCount}
-                        setAllTaskCount={setAllTaskCount}
                         showDetailTask={setShowDetailTask}
                         plans={plans}
                         setPlans={setPlans}
@@ -322,12 +395,16 @@ function refreshFilterTasks(
         setFilterTasks,
         setServiceCount,
         setAllTaskCount,
+        offset = 0,
+        limit,
     }: {
         plans: BackupPlanInfo[];
         setPlans: (plans: BackupPlanInfo[]) => void;
         setFilterTasks: (tasks: TaskInfo[]) => void;
         setServiceCount: (count: number) => void;
         setAllTaskCount: (count: number) => void;
+        offset?: number;
+        limit?: number;
     }
 ) {
     const refreshAllPlans = async () => {
@@ -345,24 +422,26 @@ function refreshFilterTasks(
         setServiceCount(serviceIds.length);
     };
 
-    taskManager.listBackupTasks(filter).then(async ({ task_ids, total }) => {
-        console.log("Filtered tasks:", task_ids, total, filter);
-        const taskInfos = await Promise.all(
-            task_ids.map((taskid) => taskManager.getTaskInfo(taskid))
-        );
-        for (const task of taskInfos) {
-            if (!plans.find((p) => task.owner_plan_id === p.plan_id)) {
-                await refreshAllPlans();
+    taskManager
+        .listBackupTasks(filter, offset, limit)
+        .then(async ({ task_ids, total }) => {
+            console.log("Filtered tasks:", task_ids, total, filter);
+            const taskInfos = await Promise.all(
+                task_ids.map((taskid) => taskManager.getTaskInfo(taskid))
+            );
+            for (const task of taskInfos) {
+                if (!plans.find((p) => task.owner_plan_id === p.plan_id)) {
+                    await refreshAllPlans();
+                }
             }
-        }
-        setFilterTasks(taskInfos);
-        setAllTaskCount(total);
+            setFilterTasks(taskInfos);
+            setAllTaskCount(total);
 
-        if (total === 0) {
-            await refreshAllPlans();
-            await refreshAllServices();
-        }
-    });
+            if (total === 0) {
+                await refreshAllPlans();
+                await refreshAllServices();
+            }
+        });
 }
 
 function CreateFirstTaskGuide({
@@ -446,7 +525,6 @@ function RunningTaskTabContent({
     isMobile,
     t,
     setTaskCount,
-    setAllTaskCount,
     showDetailTask,
     plans,
     setPlans,
@@ -455,7 +533,6 @@ function RunningTaskTabContent({
     isMobile: boolean;
     t: Translations;
     setTaskCount: (count: number) => void;
-    setAllTaskCount: (count: number) => void;
     showDetailTask: (task: TaskInfo | null) => void;
     plans: BackupPlanInfo[];
     setPlans: (plans: BackupPlanInfo[]) => void;
@@ -485,10 +562,7 @@ function RunningTaskTabContent({
                     setTaskCount(tasks.length);
                 },
                 setServiceCount,
-                setAllTaskCount: (count: number) => {
-                    setAllTaskCountInner(count);
-                    setAllTaskCount(count);
-                },
+                setAllTaskCount: setAllTaskCountInner,
             }
         );
     };
@@ -684,7 +758,6 @@ function HistoryTaskTabContent({
     isMobile,
     t,
     setFilterTaskCount,
-    setTaskCount,
     showDetailTask,
     plans,
     setPlans,
@@ -693,7 +766,6 @@ function HistoryTaskTabContent({
     isMobile?: boolean;
     t: Translations;
     setFilterTaskCount: (count: number) => void;
-    setTaskCount: (count: number) => void;
     showDetailTask: (task: TaskInfo | null) => void;
     plans: BackupPlanInfo[];
     setPlans: (plans: BackupPlanInfo[]) => void;
@@ -705,8 +777,9 @@ function HistoryTaskTabContent({
     const [filterTasks, setFilterTasks] = useState<TaskInfo[] | null>(null);
     const [serviceCount, setServiceCount] = useState(0);
     const [allTaskCount, setAllTaskCount] = useState(0);
+    const [page, setPage] = useState(1);
 
-    const refreshList = () => {
+    const fetchHistoryTasks = useCallback(() => {
         refreshFilterTasks(
             {
                 owner_plan_title: searchPlanFilter
@@ -723,36 +796,64 @@ function HistoryTaskTabContent({
                     setFilterTaskCount(tasks.length);
                 },
                 setServiceCount,
-                setAllTaskCount: (count: number) => {
-                    setAllTaskCount(count);
-                    setTaskCount(count);
-                },
+                setAllTaskCount,
+                offset: (page - 1) * HISTORY_PAGE_SIZE,
+                limit: HISTORY_PAGE_SIZE,
             }
         );
-    };
-    const taskEventHandler = async (event: TaskEventType, data: any) => {
-        console.log("task event:", event, data);
-        switch (event) {
-            case TaskEventType.COMPLETE_TASK:
-            case TaskEventType.REMOVE_TASK:
-            case TaskEventType.CREATE_TARGET:
-                refreshList();
-                break;
-        }
-    };
+    }, [
+        page,
+        plans,
+        searchPlanFilter,
+        setFilterTaskCount,
+        setPlans,
+        typeFilter,
+    ]);
 
     useEffect(() => {
-        refreshList();
+        fetchHistoryTasks();
+
+        const taskEventHandler = async (event: TaskEventType, data: any) => {
+            console.log("task event:", event, data);
+            switch (event) {
+                case TaskEventType.COMPLETE_TASK:
+                case TaskEventType.REMOVE_TASK:
+                case TaskEventType.CREATE_TARGET:
+                    fetchHistoryTasks();
+                    break;
+            }
+        };
 
         taskManager.addTaskEventListener(taskEventHandler);
         return () => {
             taskManager.removeTaskEventListener(taskEventHandler);
         };
-    }, []);
+    }, [fetchHistoryTasks]);
 
     useEffect(() => {
-        refreshList();
-    }, [searchPlanFilter, typeFilter]);
+        if (allTaskCount === 0) {
+            if (page !== 1) {
+                setPage(1);
+            }
+            return;
+        }
+
+        const maxPage = Math.max(
+            1,
+            Math.ceil(allTaskCount / HISTORY_PAGE_SIZE)
+        );
+
+        if (page > maxPage) {
+            setPage(maxPage);
+        }
+    }, [allTaskCount, page]);
+
+    const totalPages =
+        allTaskCount > 0 ? Math.ceil(allTaskCount / HISTORY_PAGE_SIZE) : 0;
+    const paginationItems = useMemo(
+        () => getPaginationRange(page, totalPages),
+        [page, totalPages]
+    );
 
     if (filterTasks === null) {
         return <Loading isMobile={isMobile} t={t} />;
@@ -768,6 +869,14 @@ function HistoryTaskTabContent({
             />
         );
     }
+
+    const showPagination = totalPages > 1 && filterTasks.length > 0;
+    const visibleStart =
+        filterTasks.length > 0 ? (page - 1) * HISTORY_PAGE_SIZE + 1 : 0;
+    const visibleEnd =
+        filterTasks.length > 0
+            ? Math.min(allTaskCount, visibleStart + filterTasks.length - 1)
+            : 0;
 
     return (
         <>
@@ -786,9 +895,10 @@ function HistoryTaskTabContent({
                                 <Input
                                     placeholder="搜索计划名称..."
                                     value={searchPlanFilter}
-                                    onChange={(e) =>
-                                        setSearchPlanFilter(e.target.value)
-                                    }
+                                    onChange={(e) => {
+                                        setPage(1);
+                                        setSearchPlanFilter(e.target.value);
+                                    }}
                                     className="pl-10"
                                 />
                             </div>
@@ -799,11 +909,14 @@ function HistoryTaskTabContent({
                             </label>
                             <Select
                                 value={typeFilter ?? "all"}
-                                onValueChange={(taskType: TaskType | "all") =>
-                                    taskType === "all"
-                                        ? setTypeFilter(null)
-                                        : setTypeFilter(taskType)
-                                }
+                                onValueChange={(taskType: TaskType | "all") => {
+                                    setPage(1);
+                                    if (taskType === "all") {
+                                        setTypeFilter(null);
+                                    } else {
+                                        setTypeFilter(taskType);
+                                    }
+                                }}
                             >
                                 <SelectTrigger className="w-full">
                                     <SelectValue placeholder="全部类型" />
@@ -1135,6 +1248,79 @@ function HistoryTaskTabContent({
                             </Card>
                         );
                     })}
+                    {showPagination && (
+                        <div className="flex flex-col gap-2 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="text-sm text-muted-foreground whitespace-nowrap">
+                                {`${visibleStart}-${visibleEnd} / ${allTaskCount}`}
+                            </div>
+                            <Pagination className="mx-0 justify-center sm:justify-end">
+                                <PaginationContent>
+                                    <PaginationItem>
+                                        <PaginationPrevious
+                                            href="#"
+                                            aria-disabled={page === 1}
+                                            className={
+                                                page === 1
+                                                    ? "pointer-events-none opacity-50"
+                                                    : ""
+                                            }
+                                            onClick={(event) => {
+                                                event.preventDefault();
+                                                if (page > 1) {
+                                                    setPage(page - 1);
+                                                }
+                                            }}
+                                        />
+                                    </PaginationItem>
+                                    {paginationItems.map((item, index) => {
+                                        if (item === "ellipsis") {
+                                            return (
+                                                <PaginationItem
+                                                    key={`ellipsis-${index}`}
+                                                >
+                                                    <PaginationEllipsis />
+                                                </PaginationItem>
+                                            );
+                                        }
+
+                                        return (
+                                            <PaginationItem
+                                                key={`page-${item}`}
+                                            >
+                                                <PaginationLink
+                                                    href="#"
+                                                    isActive={item === page}
+                                                    onClick={(event) => {
+                                                        event.preventDefault();
+                                                        setPage(item);
+                                                    }}
+                                                >
+                                                    {item}
+                                                </PaginationLink>
+                                            </PaginationItem>
+                                        );
+                                    })}
+                                    <PaginationItem>
+                                        <PaginationNext
+                                            href="#"
+                                            aria-disabled={page === totalPages}
+                                            className={
+                                                page === totalPages
+                                                    ? "pointer-events-none opacity-50"
+                                                    : ""
+                                            }
+                                            onClick={(event) => {
+                                                event.preventDefault();
+                                                if (page < totalPages) {
+                                                    setPage(page + 1);
+                                                }
+                                            }}
+                                        />
+                                    </PaginationItem>
+                                </PaginationContent>
+                            </Pagination>
+                        </div>
+                    )}
                 </>
             )}
         </>

@@ -1322,15 +1322,17 @@ export class FakeTaskManager extends BackupTaskManager {
                 return 0;
             });
         }
+
+        const total = result_tasks.length;
         if (offset > 0) {
             result_tasks = result_tasks.slice(offset);
         }
-        if (!limit) {
+        if (limit) {
             result_tasks = result_tasks.slice(0, limit);
         }
         return {
             task_ids: result_tasks.map((t) => t.taskid),
-            total: this.task_list.tasks.length,
+            total,
         };
     }
 
