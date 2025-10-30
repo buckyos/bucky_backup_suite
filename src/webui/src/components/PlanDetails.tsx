@@ -647,9 +647,9 @@ function TaskHistoryTabContent({
                                                     传输速度
                                                 </p>
                                                 <p className="font-medium">
-                                                    {`$${TaskMgrHelper.formatSize(
+                                                    {task.speed?`$${TaskMgrHelper.formatSize(
                                                         task.speed
-                                                    )}/s`}
+                                                    )}/s`:'--'}
                                                 </p>
                                             </div>
                                         </div>
