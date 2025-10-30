@@ -50,6 +50,7 @@ import {
 import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
 import { taskManager } from "./utils/fake_task_mgr";
 import { LoadingPage } from "./LoadingPage";
+import { TaskDetail } from "./TaskDetail";
 import { Translations } from "./i18n";
 
 interface PlanDetailsProps {
@@ -62,6 +63,7 @@ export function PlanDetails({ onBack, onNavigate, plan }: PlanDetailsProps) {
     const { t } = useLanguage();
     const isMobile = useMobile();
     const [uncompleteTasks, setUncompleteTasks] = useState<TaskInfo[]>([]);
+    const [selectedTask, setSelectedTask] = useState<TaskInfo | null>(null);
 
     useEffect(() => {
         taskManager
@@ -148,12 +150,22 @@ export function PlanDetails({ onBack, onNavigate, plan }: PlanDetailsProps) {
                         isMobile={isMobile}
                         t={t}
                         onNavigate={onNavigate}
+                        onTaskSelect={setSelectedTask}
                     />
                 </TabsContent>
 
                 {/* 操作日志 */}
                 <TabsContent value="logs" className="space-y-4"></TabsContent>
             </Tabs>
+            {selectedTask && (
+                <div className="fixed inset-0 z-50 bg-background overflow-auto">
+                    <TaskDetail
+                        task={selectedTask}
+                        plan={plan}
+                        onBack={() => setSelectedTask(null)}
+                    />
+                </div>
+            )}
         </div>
     );
 }
@@ -424,11 +436,13 @@ function TaskHistoryTabContent({
     isMobile,
     t,
     onNavigate,
+    onTaskSelect,
 }: {
     plan: BackupPlanInfo;
     isMobile: boolean;
     t: Translations;
     onNavigate: (page: string, data?: any) => void;
+    onTaskSelect: (task: TaskInfo) => void;
 }) {
     const [taskHistory, setTaskHistory] = useState<TaskInfo[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -594,7 +608,11 @@ function TaskHistoryTabContent({
                     </div>
                 ) : (
                     taskHistory.map((task) => (
-                        <Card key={task.taskid}>
+                        <Card
+                            key={task.taskid}
+                            className="cursor-pointer hover:bg-accent/50"
+                            onClick={() => onTaskSelect(task)}
+                        >
                             <CardContent className="p-4">
                                 <div className="flex items-start gap-4">
                                     {getTaskStatusIcon(task.state)}
@@ -665,11 +683,12 @@ function TaskHistoryTabContent({
                                                 <Button
                                                     variant="outline"
                                                     size="sm"
-                                                    onClick={() =>
+                                                    onClick={(event) => {
+                                                        event.stopPropagation();
                                                         onNavigate("restore", {
                                                             taskId: task.taskid,
-                                                        })
-                                                    }
+                                                        });
+                                                    }}
                                                     className="gap-2"
                                                 >
                                                     <Undo2 className="w-3 h-3" />
