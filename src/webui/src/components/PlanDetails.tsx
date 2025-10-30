@@ -1,4 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
 import {
     Card,
     CardContent,
@@ -52,6 +58,7 @@ import { taskManager } from "./utils/fake_task_mgr";
 import { LoadingPage } from "./LoadingPage";
 import { TaskDetail } from "./TaskDetail";
 import { Translations } from "./i18n";
+import { toast } from "sonner";
 
 interface PlanDetailsProps {
     onBack: () => void;
@@ -65,24 +72,35 @@ export function PlanDetails({ onBack, onNavigate, plan }: PlanDetailsProps) {
     const [uncompleteTasks, setUncompleteTasks] = useState<TaskInfo[]>([]);
     const [selectedTask, setSelectedTask] = useState<TaskInfo | null>(null);
 
+    const loadUncompleteTasks = useCallback(async () => {
+        const { task_ids } = await taskManager.listBackupTasks({
+            state: [
+                TaskState.FAILED,
+                TaskState.PAUSED,
+                TaskState.RUNNING,
+                TaskState.PENDING,
+            ],
+            owner_plan_id: [plan.plan_id],
+        });
+        const tasks = await Promise.all(
+            task_ids.map((id) => taskManager.getTaskInfo(id))
+        );
+        setUncompleteTasks(tasks);
+    }, [plan.plan_id]);
+
+    const handleRunPlan = async () => {
+        if (uncompleteTasks.length > 0) {
+            toast.error("当前有任务正在执行，请等待完成或删除现有任务");
+            return;
+        }
+        await taskManager.createBackupTask(plan.plan_id);
+        toast.success(`正在启动备份计划: ${plan.title}`);
+        loadUncompleteTasks();
+    };
+
     useEffect(() => {
-        taskManager
-            .listBackupTasks({
-                state: [
-                    TaskState.FAILED,
-                    TaskState.PAUSED,
-                    TaskState.RUNNING,
-                    TaskState.PENDING,
-                ],
-                owner_plan_id: [plan.plan_id],
-            })
-            .then(async ({ task_ids }) => {
-                const uncompleteTasks = await Promise.all(
-                    task_ids.map((id) => taskManager.getTaskInfo(id))
-                );
-                setUncompleteTasks(uncompleteTasks);
-            });
-    }, []);
+        loadUncompleteTasks();
+    }, [loadUncompleteTasks]);
 
     return (
         <div className={`${isMobile ? "p-4" : "p-6"} space-y-6`}>
@@ -102,6 +120,15 @@ export function PlanDetails({ onBack, onNavigate, plan }: PlanDetailsProps) {
                     </p>
                 </div>
                 <div className="flex gap-2">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRunPlan}
+                        className="gap-2"
+                    >
+                        <Play className="w-4 h-4" />
+                        {!isMobile && "立即执行"}
+                    </Button>
                     <Button
                         variant="outline"
                         size="sm"
