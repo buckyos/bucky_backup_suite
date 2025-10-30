@@ -196,18 +196,7 @@ function getTaskActions(
     onNavigate: (page: string, data?: any) => void,
     t: Translations
 ) {
-    const actions = [
-        <Button
-            key="view"
-            variant="outline"
-            size="sm"
-            className="gap-1"
-            onClick={() => onShowDetail(task)}
-        >
-            <Eye className="w-3 h-3" />
-            详情
-        </Button>,
-    ];
+    const actions = [];
 
     if (task.state === TaskState.RUNNING || task.state === TaskState.PENDING) {
         actions.push(
