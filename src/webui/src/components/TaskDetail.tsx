@@ -225,33 +225,33 @@ function TaskSummaryCard({
     plan?: BackupPlanInfo;
 }) {
     const taskProgress = TaskMgrHelper.taskProgress(task);
-    const getStatusBadge = (status: string) => {
+    const getStatusBadge = (status: TaskState) => {
         switch (status) {
-            case "running":
+            case TaskState.RUNNING:
                 return (
                     <Badge className="bg-blue-100 text-blue-800 text-xs">
                         {t.tasks.running}
                     </Badge>
                 );
-            case "completed":
+            case TaskState.DONE:
                 return (
                     <Badge className="bg-green-100 text-green-800 text-xs">
                         {t.tasks.completed}
                     </Badge>
                 );
-            case "paused":
+            case TaskState.PAUSED:
                 return (
                     <Badge className="bg-yellow-100 text-yellow-800 text-xs">
                         {t.tasks.paused}
                     </Badge>
                 );
-            case "failed":
+            case TaskState.FAILED:
                 return (
                     <Badge className="bg-red-100 text-red-800 text-xs">
                         {t.tasks.failed}
                     </Badge>
                 );
-            case "queued":
+            case TaskState.PENDING:
                 return (
                     <Badge className="bg-gray-100 text-gray-800 text-xs">
                         {t.tasks.queued}

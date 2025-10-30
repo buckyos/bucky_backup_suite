@@ -192,7 +192,6 @@ enum TaskAction {
 
 function getTaskActions(
     task: TaskInfo,
-    onShowDetail: (task: TaskInfo) => void,
     onNavigate: (page: string, data?: any) => void,
     t: Translations
 ) {
@@ -645,15 +644,6 @@ function RunningTaskTabContent({
                                             </DropdownMenuTrigger>
                                             <DropdownMenuContent align="end">
                                                 <DropdownMenuItem
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        showDetailTask(task);
-                                                    }}
-                                                >
-                                                    <Eye className="w-4 h-4 mr-2" />
-                                                    {t.common.details}
-                                                </DropdownMenuItem>
-                                                <DropdownMenuItem
                                                     onClick={(e) =>
                                                         e.stopPropagation()
                                                     }
@@ -718,7 +708,6 @@ function RunningTaskTabContent({
                                         >
                                             {getTaskActions(
                                                 task,
-                                                showDetailTask,
                                                 onNavigate,
                                                 t
                                             )}
@@ -999,17 +988,6 @@ function HistoryTaskTabContent({
                                                         </Button>
                                                     </DropdownMenuTrigger>
                                                     <DropdownMenuContent align="end">
-                                                        <DropdownMenuItem
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                showDetailTask(
-                                                                    task
-                                                                );
-                                                            }}
-                                                        >
-                                                            <Eye className="w-4 h-4 mr-2" />
-                                                            {t.common.details}
-                                                        </DropdownMenuItem>
                                                         {/* {(task.state ===
                                                             TaskState.RUNNING ||
                                                             task.state ===
@@ -1225,7 +1203,6 @@ function HistoryTaskTabContent({
                                                 >
                                                     {getTaskActions(
                                                         task,
-                                                        showDetailTask,
                                                         onNavigate,
                                                         t
                                                     )}

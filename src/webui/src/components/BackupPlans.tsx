@@ -549,6 +549,10 @@ function PlanListDesktop({
                         ? "opacity-60"
                         : ""
                 }`}
+                
+                onClick={() =>
+                    onNavigate?.("plan-details", plan)
+                }
             >
                 <CardHeader className="pt-4 pb-0">
                     <div className="flex items-start justify-between">
@@ -669,17 +673,6 @@ function PlanListDesktop({
                             >
                                 <Edit className="w-3 h-3" />
                                 {t.common.edit}
-                            </Button>
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="gap-1"
-                                onClick={() =>
-                                    onNavigate?.("plan-details", plan)
-                                }
-                            >
-                                <Eye className="w-3 h-3" />
-                                详情
                             </Button>
                             <AlertDialog>
                                 <AlertDialogTrigger asChild>
