@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
     Card,
     CardContent,
@@ -11,6 +11,15 @@ import { Badge } from "./ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { ScrollArea } from "./ui/scroll-area";
 import { Progress } from "./ui/progress";
+import {
+    Pagination,
+    PaginationContent,
+    PaginationEllipsis,
+    PaginationItem,
+    PaginationLink,
+    PaginationNext,
+    PaginationPrevious,
+} from "./ui/pagination";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
 import {
@@ -34,6 +43,7 @@ import {
     BackupPlanInfo,
     BackupTargetInfo,
     ListOrder,
+    ListTaskOrderBy,
     TaskInfo,
     TaskState,
 } from "./utils/task_mgr";
@@ -369,6 +379,46 @@ function OverviewTabContent({
     );
 }
 
+const TASK_HISTORY_PAGE_SIZE = 5;
+type TaskHistoryPaginationItem = number | "ellipsis";
+
+function getTaskHistoryPaginationRange(
+    current: number,
+    total: number
+): TaskHistoryPaginationItem[] {
+    if (total <= 0) {
+        return [];
+    }
+    const delta = 1;
+    const range: number[] = [];
+    for (let i = 1; i <= total; i++) {
+        if (
+            i === 1 ||
+            i === total ||
+            (i >= current - delta && i <= current + delta)
+        ) {
+            range.push(i);
+        }
+    }
+
+    const result: TaskHistoryPaginationItem[] = [];
+    let previous: number | null = null;
+
+    for (const pageNumber of range) {
+        if (previous !== null) {
+            if (pageNumber - previous === 2) {
+                result.push(previous + 1);
+            } else if (pageNumber - previous > 2) {
+                result.push("ellipsis");
+            }
+        }
+        result.push(pageNumber);
+        previous = pageNumber;
+    }
+
+    return result;
+}
+
 function TaskHistoryTabContent({
     plan,
     isMobile,
@@ -380,21 +430,92 @@ function TaskHistoryTabContent({
     t: Translations;
     onNavigate: (page: string, data?: any) => void;
 }) {
-    const [taskHistory, setTaskHistory] = useState<TaskInfo[] | null>(null);
+    const [taskHistory, setTaskHistory] = useState<TaskInfo[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [page, setPage] = useState(1);
+    const [totalTasks, setTotalTasks] = useState(0);
+    const lastPlanIdRef = useRef<string>(plan.plan_id);
 
     useEffect(() => {
+        if (plan.plan_id !== lastPlanIdRef.current) {
+            lastPlanIdRef.current = plan.plan_id;
+            if (page !== 1) {
+                setPage(1);
+                return;
+            }
+        }
+
+        let cancelled = false;
+        setIsLoading(true);
+
         taskManager
-            .listBackupTasks({ owner_plan_id: [plan.plan_id] })
-            .then(async (tasks) => {
-                const detailedTasks = await Promise.all(
-                    tasks.task_ids.map((id) => taskManager.getTaskInfo(id))
-                );
-                setTaskHistory(detailedTasks);
+            .listBackupTasks(
+                { owner_plan_id: [plan.plan_id] },
+                (page - 1) * TASK_HISTORY_PAGE_SIZE,
+                TASK_HISTORY_PAGE_SIZE,
+                [[ListTaskOrderBy.CREATE_TIME, ListOrder.DESC]]
+            )
+            .then(async ({ task_ids, total }) => {
+                if (cancelled) {
+                    return;
+                }
+                const detailedTasks =
+                    task_ids.length > 0
+                        ? await Promise.all(
+                              task_ids.map((id) => taskManager.getTaskInfo(id))
+                          )
+                        : [];
+                if (!cancelled) {
+                    setTaskHistory(detailedTasks);
+                    setTotalTasks(total);
+                }
             })
             .catch((error) => {
-                console.error("Error fetching task history:", error);
+                if (!cancelled) {
+                    console.error("Error fetching task history:", error);
+                    setTaskHistory([]);
+                    setTotalTasks(0);
+                }
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setIsLoading(false);
+                }
             });
-    }, [plan.plan_id]);
+
+        return () => {
+            cancelled = true;
+        };
+    }, [plan.plan_id, page]);
+
+    useEffect(() => {
+        const maxPage = Math.max(
+            1,
+            Math.ceil(totalTasks / TASK_HISTORY_PAGE_SIZE)
+        );
+        if (page > maxPage) {
+            setPage(maxPage);
+        }
+    }, [totalTasks, page]);
+
+    const totalPages =
+        totalTasks > 0
+            ? Math.ceil(totalTasks / TASK_HISTORY_PAGE_SIZE)
+            : 1;
+    const paginationItems = useMemo(
+        () => getTaskHistoryPaginationRange(page, totalPages),
+        [page, totalPages]
+    );
+    const visibleStart =
+        !isLoading && taskHistory.length > 0
+            ? (page - 1) * TASK_HISTORY_PAGE_SIZE + 1
+            : 0;
+    const visibleEnd =
+        !isLoading && taskHistory.length > 0
+            ? Math.min(totalTasks, visibleStart + taskHistory.length - 1)
+            : 0;
+    const showPagination =
+        !isLoading && totalTasks > TASK_HISTORY_PAGE_SIZE;
 
     const getTaskStatusBadge = (status: TaskState) => {
         switch (status) {
@@ -456,7 +577,6 @@ function TaskHistoryTabContent({
 
     return (
         <>
-            {" "}
             <div className="flex items-center justify-between">
                 <div>
                     <h3 className="text-lg font-medium">任务执行历史</h3>
@@ -466,113 +586,171 @@ function TaskHistoryTabContent({
                 </div>
             </div>
             <div className="space-y-3">
-                {taskHistory ? (
-                    taskHistory.length === 0 ? (
-                        <div className="p-4 text-center text-muted-foreground">
-                            暂无任务执行历史
-                        </div>
-                    ) : (
-                        taskHistory.map((task) => (
-                            <Card key={task.taskid}>
-                                <CardContent className="p-4">
-                                    <div className="flex items-start gap-4">
-                                        {getTaskStatusIcon(task.state)}
-                                        <div className="flex-1 space-y-2">
-                                            <div className="flex items-center justify-between">
-                                                <div className="flex items-center gap-2">
-                                                    <h4 className="font-medium">
-                                                        {task.name}
-                                                    </h4>
-                                                    {getTaskStatusBadge(
-                                                        task.state
-                                                    )}
-                                                </div>
-                                                <div className="text-right">
-                                                    <p className="text-sm font-medium">
-                                                        {TaskMgrHelper.formatSize(
-                                                            task.total_size
-                                                        )}
-                                                    </p>
-                                                </div>
-                                            </div>
-
-                                            <div
-                                                className={`grid ${
-                                                    isMobile
-                                                        ? "grid-cols-1"
-                                                        : "grid-cols-3"
-                                                } gap-4 text-sm`}
-                                            >
-                                                <div>
-                                                    <p className="text-muted-foreground">
-                                                        创建时间
-                                                    </p>
-                                                    <p className="font-medium">
-                                                        {TaskMgrHelper.formatTime(
-                                                            task.create_time,
-                                                            "未知"
-                                                        )}
-                                                    </p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-muted-foreground">
-                                                        文件/目录
-                                                    </p>
-                                                    <p className="font-medium">
-                                                        {
-                                                            task.completed_item_count
-                                                        }{" "}
-                                                        个
-                                                    </p>
-                                                </div>
-                                                <div>
-                                                    <p className="text-muted-foreground">
-                                                        传输速度
-                                                    </p>
-                                                    <p className="font-medium">
-                                                        {`$${TaskMgrHelper.formatSize(
-                                                            task.speed
-                                                        )}/s`}
-                                                    </p>
-                                                </div>
-                                            </div>
-
-                                            {task.error && (
-                                                <div className="p-3 bg-red-50 text-red-700 rounded-md text-sm">
-                                                    错误: {task.error}
-                                                </div>
-                                            )}
-
-                                            {task.state === TaskState.DONE && (
-                                                <div className="flex justify-end">
-                                                    <Button
-                                                        variant="outline"
-                                                        size="sm"
-                                                        onClick={() =>
-                                                            onNavigate(
-                                                                "restore",
-                                                                {
-                                                                    taskId: task.taskid,
-                                                                }
-                                                            )
-                                                        }
-                                                        className="gap-2"
-                                                    >
-                                                        <Undo2 className="w-3 h-3" />
-                                                        恢复
-                                                    </Button>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                </CardContent>
-                            </Card>
-                        ))
-                    )
-                ) : (
+                {isLoading ? (
                     LoadingPage({})
+                ) : taskHistory.length === 0 ? (
+                    <div className="p-4 text-center text-muted-foreground">
+                        暂无任务执行历史
+                    </div>
+                ) : (
+                    taskHistory.map((task) => (
+                        <Card key={task.taskid}>
+                            <CardContent className="p-4">
+                                <div className="flex items-start gap-4">
+                                    {getTaskStatusIcon(task.state)}
+                                    <div className="flex-1 space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <h4 className="font-medium">
+                                                    {task.name}
+                                                </h4>
+                                                {getTaskStatusBadge(task.state)}
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="text-sm font-medium">
+                                                    {TaskMgrHelper.formatSize(
+                                                        task.total_size
+                                                    )}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <div
+                                            className={`grid ${
+                                                isMobile
+                                                    ? "grid-cols-1"
+                                                    : "grid-cols-3"
+                                            } gap-4 text-sm`}
+                                        >
+                                            <div>
+                                                <p className="text-muted-foreground">
+                                                    创建时间
+                                                </p>
+                                                <p className="font-medium">
+                                                    {TaskMgrHelper.formatTime(
+                                                        task.create_time,
+                                                        "未知"
+                                                    )}
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <p className="text-muted-foreground">
+                                                    文件/目录
+                                                </p>
+                                                <p className="font-medium">
+                                                    {task.completed_item_count}{" "}
+                                                    个
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <p className="text-muted-foreground">
+                                                    传输速度
+                                                </p>
+                                                <p className="font-medium">
+                                                    {`$${TaskMgrHelper.formatSize(
+                                                        task.speed
+                                                    )}/s`}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {task.error && (
+                                            <div className="p-3 bg-red-50 text-red-700 rounded-md text-sm">
+                                                错误: {task.error}
+                                            </div>
+                                        )}
+
+                                        {task.state === TaskState.DONE && (
+                                            <div className="flex justify-end">
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() =>
+                                                        onNavigate("restore", {
+                                                            taskId: task.taskid,
+                                                        })
+                                                    }
+                                                    className="gap-2"
+                                                >
+                                                    <Undo2 className="w-3 h-3" />
+                                                    恢复
+                                                </Button>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ))
                 )}
             </div>
+            {showPagination && (
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                    <div className="text-sm text-muted-foreground">
+                        {`${visibleStart}-${visibleEnd} / ${totalTasks}`}
+                    </div>
+                    <Pagination className="mx-0 justify-center sm:justify-end">
+                        <PaginationContent>
+                            <PaginationItem>
+                                <PaginationPrevious
+                                    href="#"
+                                    aria-disabled={page === 1}
+                                    className={
+                                        page === 1
+                                            ? "pointer-events-none opacity-50"
+                                            : ""
+                                    }
+                                    onClick={(event) => {
+                                        event.preventDefault();
+                                        if (page > 1) {
+                                            setPage(page - 1);
+                                        }
+                                    }}
+                                />
+                            </PaginationItem>
+                            {paginationItems.map((item, index) =>
+                                item === "ellipsis" ? (
+                                    <PaginationItem
+                                        key={`ellipsis-${index}`}
+                                    >
+                                        <PaginationEllipsis />
+                                    </PaginationItem>
+                                ) : (
+                                    <PaginationItem key={`page-${item}`}>
+                                        <PaginationLink
+                                            href="#"
+                                            isActive={item === page}
+                                            onClick={(event) => {
+                                                event.preventDefault();
+                                                setPage(item);
+                                            }}
+                                        >
+                                            {item}
+                                        </PaginationLink>
+                                    </PaginationItem>
+                                )
+                            )}
+                            <PaginationItem>
+                                <PaginationNext
+                                    href="#"
+                                    aria-disabled={page === totalPages}
+                                    className={
+                                        page === totalPages
+                                            ? "pointer-events-none opacity-50"
+                                            : ""
+                                    }
+                                    onClick={(event) => {
+                                        event.preventDefault();
+                                        if (page < totalPages) {
+                                            setPage(page + 1);
+                                        }
+                                    }}
+                                />
+                            </PaginationItem>
+                        </PaginationContent>
+                    </Pagination>
+                </div>
+            )}
         </>
     );
 }
