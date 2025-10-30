@@ -245,7 +245,7 @@ impl BackupEngine {
         let mut real_task = owner_task.lock().await;
         real_task.completed_item_count += 1;
         real_task.completed_size += item.size;
-        self.task_db.uate_task(&real_task)?;
+        self.task_db.update_task(&real_task).map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
         drop(real_task);
         Ok(())
     }
