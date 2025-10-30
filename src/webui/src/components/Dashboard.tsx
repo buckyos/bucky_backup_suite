@@ -58,6 +58,7 @@ import {
 } from "./utils/task_mgr";
 import { taskManager } from "./utils/fake_task_mgr";
 import { LoadingPage } from "./LoadingPage";
+import { TaskDetail } from "./TaskDetail";
 import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
 
 interface DashboardProps {
@@ -84,6 +85,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     let [plans, setPlans] = useState<BackupPlanInfo[] | null>(null);
     const [services, setServices] = useState<BackupTargetInfo[] | null>(null);
     const [selectedPlan, setSelectedPlan] = useState("");
+    const [selectedTask, setSelectedTask] = useState<TaskInfo | null>(null);
 
     const loading =
         uncompleteTask === null ||
@@ -670,7 +672,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 type="button"
                                                 className="w-full text-left space-y-2 px-3 py-2 transition-colors hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-ring/50 focus-visible:ring-[3px]"
                                                 onClick={() =>
-                                                    onNavigate?.("tasks")
+                                                    setSelectedTask(task)
                                                 }
                                             >
                                                 <div className="flex items-center justify-between gap-2">
@@ -774,8 +776,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         key={task.taskid}
                                                         className="border-b border-border last:border-b-0 hover:bg-accent/40 cursor-pointer"
                                                         onClick={() =>
-                                                            onNavigate?.(
-                                                                "tasks"
+                                                            setSelectedTask(
+                                                                task
                                                             )
                                                         }
                                                     >
@@ -1236,9 +1238,21 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                 {lastCompletedTasks!.map((task) => (
                                     <div
                                         key={task.taskid}
+                                        role="button"
+                                        tabIndex={0}
                                         className={`flex items-center justify-between ${
                                             isMobile ? "text-sm" : ""
                                         }`}
+                                        onClick={() => setSelectedTask(task)}
+                                        onKeyDown={(event) => {
+                                            if (
+                                                event.key === "Enter" ||
+                                                event.key === " "
+                                            ) {
+                                                event.preventDefault();
+                                                setSelectedTask(task);
+                                            }
+                                        }}
                                     >
                                         <div className="flex items-center gap-3 flex-1 min-w-0">
                                             {getStatusIcon(task.state)}
@@ -1329,6 +1343,20 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                     </div>
                 )}
             </div>
+            {selectedTask && (
+                <div className="fixed inset-0 z-50 bg-background overflow-auto">
+                    <TaskDetail
+                        task={selectedTask}
+                        plan={
+                            plans?.find(
+                                (plan) =>
+                                    plan.plan_id === selectedTask.owner_plan_id
+                            )
+                        }
+                        onBack={() => setSelectedTask(null)}
+                    />
+                </div>
+            )}
         </>
     );
 }
