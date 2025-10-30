@@ -1,7 +1,6 @@
 // engine 是backup_suite的核心，负责统一管理配置，备份任务
 #![allow(unused)]
-use anyhow::Ok;
-use anyhow::Result;
+
 use base64;
 use buckyos_backup_lib::*;
 use buckyos_kit::buckyos_get_unix_timestamp;
@@ -32,6 +31,8 @@ use std::result::Result as StdResult;
 
 use crate::task_db::*;
 use crate::work_task::*;
+use buckyos_backup_lib::BackupResult;
+use buckyos_backup_lib::BuckyBackupError;
 
 const SMALL_CHUNK_SIZE: u64 = 1024 * 1024; //1MB
 const LARGE_CHUNK_SIZE: u64 = 1024 * 1024 * 256; //256MB
@@ -86,8 +87,11 @@ impl BackupEngine {
         }
     }
 
-    pub async fn start(&self) -> Result<()> {
-        let plans = self.task_db.list_backup_plans()?;
+    pub async fn start(&self) -> BackupResult<()> {
+        let plans = self.task_db.list_backup_plans().map_err(|e| {
+            error!("list backup plans error: {}", e.to_string());
+            BuckyBackupError::Failed(e.to_string())
+        })?;
         for plan in plans {
             let plan_key = plan.get_plan_key();
             self.all_plans
@@ -99,7 +103,7 @@ impl BackupEngine {
         Ok(())
     }
 
-    pub async fn stop(&self) -> Result<()> {
+    pub async fn stop(&self) -> BackupResult<()> {
         // stop all running task
         Ok(())
     }
@@ -116,11 +120,11 @@ impl BackupEngine {
     }
 
     //return planid
-    pub async fn create_backup_plan(&self, plan_config: BackupPlanConfig) -> Result<String> {
+    pub async fn create_backup_plan(&self, plan_config: BackupPlanConfig) -> BackupResult<String> {
         let plan_key = plan_config.get_plan_key();
         let mut all_plans = self.all_plans.lock().await;
         if all_plans.contains_key(&plan_key) {
-            return Err(anyhow::anyhow!("plan already exists"));
+            return Err(BuckyBackupError::Failed(format!("plan already exists")));
         }
 
         self.task_db.create_backup_plan(&plan_config)?;
@@ -129,21 +133,21 @@ impl BackupEngine {
         Ok(plan_key)
     }
 
-    pub async fn get_backup_plan(&self, plan_id: &str) -> Result<BackupPlanConfig> {
+    pub async fn get_backup_plan(&self, plan_id: &str) -> BackupResult<BackupPlanConfig> {
         let all_plans = self.all_plans.lock().await;
         let plan = all_plans.get(plan_id);
         if plan.is_none() {
-            return Err(anyhow::anyhow!("plan {} not found", plan_id));
+            return Err(BuckyBackupError::NotFound(format!("plan {} not found", plan_id)));
         }
         let plan = plan.unwrap().lock().await;
         Ok(plan.clone())
     }
 
-    pub async fn delete_backup_plan(&self, plan_id: &str) -> Result<()> {
+    pub async fn delete_backup_plan(&self, plan_id: &str) -> BackupResult<()> {
         unimplemented!()
     }
 
-    pub async fn list_backup_plans(&self) -> Result<Vec<String>> {
+    pub async fn list_backup_plans(&self) -> BackupResult<Vec<String>> {
         let all_plans = self.all_plans.lock().await;
         Ok(all_plans.keys().map(|k| k.clone()).collect())
     }
@@ -153,18 +157,21 @@ impl BackupEngine {
         &self,
         plan_id: &str,
         parent_checkpoint_id: Option<&str>,
-    ) -> Result<String> {
+    ) -> BackupResult<String> {
         if self.is_plan_have_running_backup_task(plan_id).await {
-            return Err(anyhow::anyhow!(
+            return Err(BuckyBackupError::Failed(format!(
                 "plan {} already has a running backup task",
                 plan_id
-            ));
+            )));
         }
 
         let mut all_plans = self.all_plans.lock().await;
         let mut plan = all_plans.get_mut(plan_id);
         if plan.is_none() {
-            return Err(anyhow::anyhow!("plan {} not found", plan_id));
+            return Err(BuckyBackupError::NotFound(format!(
+                "plan {} not found",
+                plan_id
+            )));
         }
         let mut plan = plan.unwrap().lock().await;
         if parent_checkpoint_id.is_some() {
@@ -224,7 +231,7 @@ impl BackupEngine {
         item: &BackupItem,
         owner_task: Arc<Mutex<WorkTask>>,
         done_items: Arc<Mutex<HashMap<String, u64>>>,
-    ) -> Result<()> {
+    ) -> BackupResult<()> {
         self.task_db.update_backup_item_state(
             checkpoint_id,
             &item.item_id,
@@ -238,7 +245,7 @@ impl BackupEngine {
         let mut real_task = owner_task.lock().await;
         real_task.completed_item_count += 1;
         real_task.completed_size += item.size;
-        self.task_db.update_task(&real_task)?;
+        self.task_db.uate_task(&real_task)?;
         drop(real_task);
         Ok(())
     }
@@ -249,7 +256,7 @@ impl BackupEngine {
         checkpoint_id: String,
         source: BackupChunkSourceProvider,
         target: BackupChunkTargetProvider,
-    ) -> Result<()> {
+    ) -> BackupResult<()> {
         let source2 = self
             .get_chunk_source_provider(source.get_source_url().as_str())
             .await?;
@@ -356,7 +363,7 @@ impl BackupEngine {
         backup_task: Arc<Mutex<WorkTask>>,
         task_session: Arc<Mutex<BackupTaskSession>>,
         checkpoint: Arc<Mutex<BackupCheckPoint>>,
-    ) -> Result<()> {
+    ) -> BackupResult<()> {
         let real_checkpoint = checkpoint.lock().await;
         let have_depend_checkpoint = real_checkpoint.depend_checkpoint_id.is_some();
         let checkpoint_id = real_checkpoint.checkpoint_id.clone();
@@ -378,7 +385,7 @@ impl BackupEngine {
                     checkpoint_id.as_str(),
                     e
                 );
-                anyhow::anyhow!("source.prepare_items error")
+                BuckyBackupError::Failed("source.prepare_items error".to_string())
             })?;
 
             let mut total_size = 0;
@@ -438,13 +445,13 @@ impl BackupEngine {
         backup_item: &BackupItem,
         mut item_reader: Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>,
         need_diff: bool,
-    ) -> Result<(ChunkId, Option<DiffObject>)> {
+    ) -> BackupResult<ChunkId> {
         //let chunk_id_str = backup_item.chunk_id.as_ref().unwrap();
         let cache_node_key = backup_item.item_id.as_str();
         item_reader.seek(SeekFrom::Start(0)).await;
 
         let mut offset = 0;
-        let mut full_hash_context = ChunkHasher::new(None).map_err(|e| anyhow::anyhow!("{}", e))?;
+        let mut full_hash_context = ChunkHasher::new(None).map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
         debug!(
             "start calc full hash for item: {}, size: {}",
             backup_item.item_id, backup_item.size
@@ -453,7 +460,10 @@ impl BackupEngine {
         let mut cache_mgr = CHUNK_TASK_CACHE_MGR.lock().await;
         let mut cache_node = cache_mgr.get_chunk_cache_node(cache_node_key);
         if cache_node.is_none() {
-            cache_mgr.create_chunk_cache(cache_node_key, 0).await?;
+            cache_mgr
+                .create_chunk_cache(cache_node_key, 0)
+                .await
+                .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
             cache_node = cache_mgr.get_chunk_cache_node(cache_node_key);
         }
         let mut total_size = cache_mgr.total_size.clone();
@@ -469,7 +479,10 @@ impl BackupEngine {
 
             let (content, mut is_last_piece) = if offset + HASH_CHUNK_SIZE >= backup_item.size {
                 let mut content_buffer = vec![0u8; (backup_item.size - offset) as usize];
-                item_reader.read_exact(&mut content_buffer).await?;
+                item_reader
+                    .read_exact(&mut content_buffer)
+                    .await
+                    .map_err(|e| BuckyBackupError::TryLater(e.to_string()))?;
                 debug!(
                     "read last piece for item: {}, offset: {},len: {}",
                     backup_item.item_id, offset, backup_item.size
@@ -477,7 +490,10 @@ impl BackupEngine {
                 (content_buffer, true)
             } else {
                 let mut content_buffer = vec![0u8; HASH_CHUNK_SIZE as usize];
-                item_reader.read_exact(&mut content_buffer).await?;
+                item_reader
+                    .read_exact(&mut content_buffer)
+                    .await
+                    .map_err(|e| BuckyBackupError::TryLater(e.to_string()))?;
                 (content_buffer, false)
             };
             let content_len = content.len() as u64;
@@ -515,7 +531,7 @@ impl BackupEngine {
             backup_item.item_id,
             full_id.to_string()
         );
-        Ok((full_id, None))
+        Ok(full_id)
     }
 
     pub async fn backup_chunk_source_eval_thread(
@@ -525,7 +541,7 @@ impl BackupEngine {
         backup_task: Arc<Mutex<WorkTask>>,
         task_session: Arc<Mutex<BackupTaskSession>>,
         checkpoint: Arc<Mutex<BackupCheckPoint>>,
-    ) -> Result<()> {
+    ) -> BackupResult<()> {
         let real_task_session = task_session.lock().await;
         let eval_queue = real_task_session.eval_queue.clone();
         let eval_cache_queue = real_task_session.eval_cache_queue.clone();
@@ -558,10 +574,10 @@ impl BackupEngine {
                         "backup task {} is not running, exit eval thread",
                         real_task.taskid
                     );
-                    return Err(anyhow::anyhow!(
+                    return Err(BuckyBackupError::Failed(format!(
                         "backup task {} is not running",
                         real_task.taskid
-                    ));
+                    )));
                 }
                 drop(real_task);
 
@@ -600,17 +616,19 @@ impl BackupEngine {
                                 }
                                 _ => {
                                     warn!("open item {} reader error", backup_item.item_id);
-                                    return Err(anyhow::anyhow!(
+                                    return Err(BuckyBackupError::Failed(format!(
                                         "open item {} reader error",
                                         backup_item.item_id
-                                    ));
+                                    )));
                                 }
                             }
                         }
 
                         let mut item_reader = item_reader.unwrap();
                         let quick_hash =
-                            calc_quick_hash(&mut item_reader, Some(backup_item.size)).await?;
+                            calc_quick_hash(&mut item_reader, Some(backup_item.size))
+                                .await
+                                .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
                         info!(
                             "{}'s quick_hash: {}",
                             backup_item.item_id,
@@ -680,10 +698,10 @@ impl BackupEngine {
                             }
                             _ => {
                                 warn!("open item {} reader error", backup_item.item_id);
-                                return Err(anyhow::anyhow!(
+                                return Err(BuckyBackupError::Failed(format!(
                                     "open item {} reader error",
                                     backup_item.item_id
-                                ));
+                                )));
                             }
                         }
                     }
@@ -697,7 +715,7 @@ impl BackupEngine {
                             real_transfer_cache_queue.push(backup_item2);
                         });
                     }
-                    let (chunk_id, diff_object) =
+                    let chunk_id =
                         BackupEngine::cacl_item_hash_and_diff(&backup_item, item_reader, need_diff)
                             .await?;
 
@@ -772,7 +790,7 @@ impl BackupEngine {
         backup_task: Arc<Mutex<WorkTask>>,
         task_session: Arc<Mutex<BackupTaskSession>>,
         checkpoint: Arc<Mutex<BackupCheckPoint>>,
-    ) -> Result<()> {
+    ) -> BackupResult<()> {
         let real_task_session = task_session.lock().await;
         let transfer_cache_queue = real_task_session.transfer_cache_queue.clone();
         let transfer_queue = real_task_session.transfer_queue.clone();
@@ -825,10 +843,10 @@ impl BackupEngine {
                         "backup task {} is not running, exit transfer thread",
                         real_task.taskid
                     );
-                    return Err(anyhow::anyhow!(
+                    return Err(BuckyBackupError::Failed(format!(
                         "backup task {} is not running",
                         real_task.taskid
-                    ));
+                    )));
                 }
                 drop(real_task);
 
@@ -896,11 +914,11 @@ impl BackupEngine {
                                     chunk_id.to_string(),
                                     err.to_string()
                                 );
-                                return Err(anyhow::anyhow!(
+                                return Err(BuckyBackupError::Failed(format!(
                                     "open chunk {} writer error: {}",
                                     chunk_id.to_string(),
                                     err.to_string()
-                                ));
+                                )));
                             }
                         }
                     }
@@ -988,10 +1006,10 @@ impl BackupEngine {
                                         }
                                         _ => {
                                             warn!("open item {} reader error", backup_item.item_id);
-                                            return Err(anyhow::anyhow!(
+                                            return Err(BuckyBackupError::Failed(format!(
                                                 "open item {} reader error",
                                                 backup_item.item_id
-                                            ));
+                                            )));
                                         }
                                     }
                                 }
@@ -1030,7 +1048,10 @@ impl BackupEngine {
                                 break;
                             }
                             upload_len = read_len as u64;
-                            writer.write_all(&send_buf[..read_len]).await?;
+                            writer
+                                .write_all(&send_buf[..read_len])
+                                .await
+                                .map_err(|e| BuckyBackupError::TryLater(e.to_string()))?;
                             debug!(
                                 "upload chunk {} & read from source, offset: {} + {} , size: {}",
                                 chunk_id_str, offset, upload_len, backup_item.size
@@ -1053,11 +1074,11 @@ impl BackupEngine {
                                         "cache piece start offset: {} not equal to offset: {}",
                                         piece_start_offset, offset
                                     );
-                                    return Err(anyhow::anyhow!(
+                                    return Err(BuckyBackupError::Failed(format!(
                                         "cache piece start offset: {} not equal to offset: {}",
                                         piece_start_offset,
                                         offset
-                                    ));
+                                    )));
                                 }
 
                                 upload_len = cache_piece.len() as u64;
@@ -1067,7 +1088,10 @@ impl BackupEngine {
                                     .fetch_sub(upload_len, std::sync::atomic::Ordering::Relaxed);
                                 drop(chunk_cache_node);
                                 //debug!("hit cache piece for chunk {}, offset: {} + {} = {} , size: {}", chunk_id_str, offset, upload_len, offset + upload_len, backup_item.size);
-                                writer.write_all(&cache_piece).await?;
+                                writer
+                                    .write_all(&cache_piece)
+                                    .await
+                                    .map_err(|e| BuckyBackupError::TryLater(e.to_string()))?;
                                 debug!("upload chunk {} & pop cache piece, offset: {} + {} = {} , size: {}", chunk_id_str, offset, upload_len, offset + upload_len, backup_item.size);
                             } else {
                                 debug!("no cache piece for chunk {}, offset: {}, size: {}, cache_start_offset: {},cache_end_offset: {}", 
@@ -1130,12 +1154,12 @@ impl BackupEngine {
         plan_id: &str,
         check_point_id: &str,
         restore_config: RestoreConfig,
-    ) -> Result<String> {
+    ) -> BackupResult<String> {
         if self.is_plan_have_running_backup_task(plan_id).await {
-            return Err(anyhow::anyhow!(
+            return Err(BuckyBackupError::Failed(format!(
                 "plan {} already has a running backup task",
                 plan_id
-            ));
+            )));
         }
 
         let checkpoint = self.task_db.load_checkpoint_by_id(check_point_id)?;
@@ -1149,7 +1173,7 @@ impl BackupEngine {
         Ok(new_task_id)
     }
 
-    fn check_all_check_point_exist(&self, checkpoint_id: &str) -> Result<bool> {
+    fn check_all_check_point_exist(&self, checkpoint_id: &str) -> BackupResult<bool> {
         let checkpoint = self.task_db.load_checkpoint_by_id(checkpoint_id)?;
         if checkpoint.state != CheckPointState::Done {
             info!("checkpoint {} is not done! cannot restore", checkpoint_id);
@@ -1175,13 +1199,13 @@ impl BackupEngine {
         checkpoint_id: String,
         source: BackupChunkSourceProvider,
         target: BackupChunkTargetProvider,
-    ) -> Result<()> {
+    ) -> BackupResult<()> {
         let mut real_task = restore_task.lock().await;
         let need_build_items = real_task.item_count == 0;
         let real_task_id = real_task.taskid.clone();
         let restore_config = real_task.restore_config.clone();
         if restore_config.is_none() {
-            return Err(anyhow::anyhow!("restore config is none"));
+            return Err(BuckyBackupError::Failed("restore config is none".to_string()));
         }
         let restore_config = restore_config.unwrap();
 
@@ -1191,7 +1215,10 @@ impl BackupEngine {
             source.init_for_restore(&restore_config).await?;
             restore_item_list = Vec::new();
             if !self.check_all_check_point_exist(&checkpoint_id)? {
-                return Err(anyhow::anyhow!("checkpoint {} not exist", checkpoint_id));
+                return Err(BuckyBackupError::NotFound(format!(
+                    "checkpoint {} not exist",
+                    checkpoint_id
+                )));
             }
 
             let backup_items = self
@@ -1245,10 +1272,10 @@ impl BackupEngine {
             info!("start restore item: {:?} ... ", item);
             if item.chunk_id.is_none() {
                 warn!("restore item {} has no chunk_id,skip restore", item.item_id);
-                return Err(anyhow::anyhow!(
+                return Err(BuckyBackupError::Failed(format!(
                     "restore item {} has no chunk_id, in-complete checkpoint? skip restore",
                     item.item_id
-                ));
+                )));
             }
             let mut offset = 0;
             let mut real_hash_state: Option<ChunkHasher> = None;
@@ -1337,7 +1364,8 @@ impl BackupEngine {
                 real_hash_state,
                 None,
             )
-            .await?;
+            .await
+            .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
 
             //set item state to done & update task state
             let mut real_task = restore_task.lock().await;
@@ -1354,19 +1382,19 @@ impl BackupEngine {
         Ok(())
     }
 
-    async fn run_dir2chunk_restore_task(&self, plan_id: &str, check_point_id: &str) -> Result<()> {
+    async fn run_dir2chunk_restore_task(&self, plan_id: &str, check_point_id: &str) -> BackupResult<()> {
         unimplemented!()
     }
 
-    async fn run_dir2dir_restore_task(&self, plan_id: &str, check_point_id: &str) -> Result<()> {
+    async fn run_dir2dir_restore_task(&self, plan_id: &str, check_point_id: &str) -> BackupResult<()> {
         unimplemented!()
     }
 
     async fn get_chunk_source_provider(
         &self,
         source_url: &str,
-    ) -> Result<BackupChunkSourceProvider> {
-        let url = Url::parse(source_url)?;
+    ) -> BackupResult<BackupChunkSourceProvider> {
+        let url = Url::parse(source_url).map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
         assert_eq!(url.scheme(), "file");
 
         let mut local_path = url.path();
@@ -1382,8 +1410,8 @@ impl BackupEngine {
     async fn get_chunk_target_provider(
         &self,
         target_url: &str,
-    ) -> Result<BackupChunkTargetProvider> {
-        let url = Url::parse(target_url)?;
+    ) -> BackupResult<BackupChunkTargetProvider> {
+        let url = Url::parse(target_url).map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
         match url.scheme() {
             "file" => {
                 let mut local_path = url.path();
@@ -1391,30 +1419,34 @@ impl BackupEngine {
                 {
                     local_path = local_path.trim_start_matches('/');
                 }
-                let store = LocalChunkTargetProvider::new(local_path.to_string()).await?;
+                let store = LocalChunkTargetProvider::new(local_path.to_string(), "default".to_string())
+                    .await
+                    .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
                 Ok(Box::new(store))
             }
             "s3" => {
                 // 从 URL 中提取 S3 配置参数
-                let store = S3ChunkTarget::with_url(url).await?;
+                let store = S3ChunkTarget::with_url(url)
+                    .await
+                    .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
                 Ok(Box::new(store))
             }
-            _ => Err(anyhow::anyhow!(
+            _ => Err(BuckyBackupError::Failed(format!(
                 "不支持的 target URL scheme: {}",
                 url.scheme()
-            )),
+            ))),
         }
     }
 
-    pub async fn list_backup_tasks(&self, filter: &str) -> Result<Vec<String>> {
+    pub async fn list_backup_tasks(&self, filter: &str) -> BackupResult<Vec<String>> {
         self.task_db.list_worktasks(filter).map_err(|e| {
             let err_str = e.to_string();
             warn!("list work tasks error: {}", err_str.as_str());
-            anyhow::anyhow!("list work tasks error: {}", err_str)
+            BuckyBackupError::Failed(format!("list work tasks error: {}", err_str))
         })
     }
 
-    pub async fn get_task_info(&self, taskid: &str) -> Result<WorkTask> {
+    pub async fn get_task_info(&self, taskid: &str) -> BackupResult<WorkTask> {
         let mut all_tasks = self.all_tasks.lock().await;
         let mut backup_task = all_tasks.get(taskid);
         if backup_task.is_none() {
@@ -1424,18 +1456,18 @@ impl BackupEngine {
         }
 
         if backup_task.is_none() {
-            return Err(anyhow::anyhow!("task not found"));
+            return Err(BuckyBackupError::NotFound("task not found".to_string()));
         }
         let backup_task = backup_task.unwrap().lock().await.clone();
         Ok(backup_task)
     }
 
-    pub async fn resume_restore_task(&self, taskid: &str) -> Result<()> {
+    pub async fn resume_restore_task(&self, taskid: &str) -> BackupResult<()> {
         let mut all_tasks = self.all_tasks.lock().await;
         let mut restore_task = all_tasks.get(taskid);
         if restore_task.is_none() {
             error!("restore task not found: {}", taskid);
-            return Err(anyhow::anyhow!("task not found"));
+            return Err(BuckyBackupError::NotFound("task not found".to_string()));
         }
         let restore_task = restore_task.unwrap().clone();
         drop(all_tasks);
@@ -1443,11 +1475,11 @@ impl BackupEngine {
         let mut real_restore_task = restore_task.lock().await;
         if real_restore_task.task_type != TaskType::Restore {
             error!("try resume a BackupTask as Restore.");
-            return Err(anyhow::anyhow!("try resume a BackupTask as Restore"));
+            return Err(BuckyBackupError::Failed("try resume a BackupTask as Restore".to_string()));
         }
         if real_restore_task.state != TaskState::Paused {
             warn!("restore task is not paused, ignore resume");
-            return Err(anyhow::anyhow!("restore task is not paused"));
+            return Err(BuckyBackupError::Failed("restore task is not paused".to_string()));
         }
         real_restore_task.state = TaskState::Running;
         let task_id = real_restore_task.taskid.clone();
@@ -1462,7 +1494,7 @@ impl BackupEngine {
                 taskid,
                 owner_plan_id.as_str()
             );
-            return Err(anyhow::anyhow!("task plan not found"));
+            return Err(BuckyBackupError::NotFound("task plan not found".to_string()));
         }
         let plan = plan.unwrap().lock().await;
         let task_type = plan.type_str.clone();
@@ -1499,7 +1531,7 @@ impl BackupEngine {
                 //"d2c" => engine.run_dir2chunk_backup_task(backup_task, source_provider, target_provider).await,
                 //"d2d" => engine.run_dir2dir_backup_task(backup_task, source_provider, target_provider).await,
                 //"c2d" => engine.run_chunk2dir_backup_task(backup_task, source_provider, target_provider).await,
-                _ => Err(anyhow::anyhow!("unknown plan type: {}", task_type)),
+                _ => Err(BuckyBackupError::Failed(format!("unknown plan type: {}", task_type))),
             };
 
             let mut real_restore_task = restore_task.lock().await;
@@ -1520,7 +1552,7 @@ impl BackupEngine {
         Ok(())
     }
 
-    pub async fn resume_backup_task(&self, taskid: &str) -> Result<()> {
+    pub async fn resume_backup_task(&self, taskid: &str) -> BackupResult<()> {
         // load task from db
         let mut all_tasks = self.all_tasks.lock().await;
         let mut backup_task = all_tasks.get(taskid);
@@ -1536,11 +1568,11 @@ impl BackupEngine {
         let mut real_backup_task = backup_task.lock().await;
         if real_backup_task.task_type != TaskType::Backup {
             error!("try resume a RestoreTask as Backup.");
-            return Err(anyhow::anyhow!("try resume a RestoreTask as Backup"));
+            return Err(BuckyBackupError::Failed("try resume a RestoreTask as Backup".to_string()));
         }
         if real_backup_task.state != TaskState::Paused {
             warn!("task is not paused, ignore resume");
-            return Err(anyhow::anyhow!("task is not paused"));
+            return Err(BuckyBackupError::Failed("task is not paused".to_string()));
         }
         real_backup_task.state = TaskState::Running;
         let task_id = real_backup_task.taskid.clone();
@@ -1555,7 +1587,7 @@ impl BackupEngine {
                 taskid,
                 owner_plan_id.as_str()
             );
-            return Err(anyhow::anyhow!("task plan not found"));
+            return Err(BuckyBackupError::NotFound("task plan not found".to_string()));
         }
         let plan = plan.unwrap().lock().await;
         let task_type = plan.type_str.clone();
@@ -1592,7 +1624,7 @@ impl BackupEngine {
                 //"d2c" => engine.run_dir2chunk_backup_task(backup_task, source_provider, target_provider).await,
                 //"d2d" => engine.run_dir2dir_backup_task(backup_task, source_provider, target_provider).await,
                 //"c2d" => engine.run_chunk2dir_backup_task(backup_task, source_provider, target_provider).await,
-                _ => Err(anyhow::anyhow!("unknown plan type: {}", task_type)),
+                _ => Err(BuckyBackupError::Failed(format!("unknown plan type: {}", task_type))),
             };
 
             //let all_tasks = engine.all_tasks.lock().await;
@@ -1615,7 +1647,7 @@ impl BackupEngine {
         Ok(())
     }
 
-    pub async fn resume_work_task(&self, taskid: &str) -> Result<()> {
+    pub async fn resume_work_task(&self, taskid: &str) -> BackupResult<()> {
         let mut all_tasks = self.all_tasks.lock().await;
         let mut backup_task = all_tasks.get(taskid);
         if backup_task.is_none() {
@@ -1637,24 +1669,24 @@ impl BackupEngine {
         }
     }
 
-    pub async fn pause_work_task(&self, taskid: &str) -> Result<()> {
+    pub async fn pause_work_task(&self, taskid: &str) -> BackupResult<()> {
         let all_tasks = self.all_tasks.lock().await;
         let backup_task = all_tasks.get(taskid);
         if backup_task.is_none() {
             error!("task not found: {}", taskid);
-            return Err(anyhow::anyhow!("task not found"));
+            return Err(BuckyBackupError::NotFound("task not found".to_string()));
         }
         let mut backup_task = backup_task.unwrap().lock().await;
         if backup_task.state != TaskState::Running {
             warn!("task is not running, ignore pause");
-            return Err(anyhow::anyhow!("task is not running"));
+            return Err(BuckyBackupError::Failed("task is not running".to_string()));
         }
         backup_task.state = TaskState::Paused;
         self.task_db.update_task(&backup_task)?;
         Ok(())
     }
 
-    pub async fn cancel_backup_task(&self, taskid: &str) -> Result<()> {
+    pub async fn cancel_backup_task(&self, taskid: &str) -> BackupResult<()> {
         unimplemented!()
     }
 }

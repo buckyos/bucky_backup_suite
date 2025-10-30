@@ -440,7 +440,7 @@ impl AsyncWrite for S3ChunkWriter {
 
 #[async_trait]
 impl IBackupChunkTargetProvider for S3ChunkTarget {
-    async fn get_target_info(&self) -> Result<String> {
+    async fn get_target_info(&self) -> BackupResult<String> {
         Ok("aws s3".to_string())
     }
 
@@ -448,15 +448,15 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
         self.url.clone()
     }
 
-    async fn get_account_session_info(&self) -> Result<String> {
+    async fn get_account_session_info(&self) -> BackupResult<String> {
         Ok(String::new())
     }
 
-    async fn set_account_session_info(&self, _: &str) -> Result<()> {
+    async fn set_account_session_info(&self, _: &str) -> BackupResult<()> {
         Ok(())
     }
 
-    async fn is_chunk_exist(&self, chunk_id: &ChunkId) -> Result<(bool, u64)> {
+    async fn is_chunk_exist(&self, chunk_id: &ChunkId) -> BackupResult<(bool, u64)> {
         let key = chunk_id.to_string();
         
         match self.client.head_object()
@@ -474,10 +474,10 @@ impl IBackupChunkTargetProvider for S3ChunkTarget {
                     if service_err.raw().status().as_u16() == 404 {
                         Ok((false, 0))
                     } else {
-                        Err(anyhow!("Failed to check object existence: {}", err))
+                        Err(BuckyBackupError::Failed(format!("Failed to check object existence: {}", err)))
                     }
                 } else {
-                    Err(anyhow!("Failed to check object existence: {}", err))
+                    Err(BuckyBackupError::Failed(format!("Failed to check object existence: {}", err)))
                 }
             }
         }

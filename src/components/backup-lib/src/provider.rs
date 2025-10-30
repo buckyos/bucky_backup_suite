@@ -5,24 +5,8 @@ use serde_json::Value;
 use ndn_lib::{ChunkId, ChunkReadSeek, ChunkReader, ChunkWriter, ObjId};
 use std::pin::Pin;
 use serde::{Serialize, Deserialize};
-use thiserror::Error;
-use anyhow::Result;
+use crate::BackupResult;
 
-#[derive(Error, Debug)]
-pub enum BuckyBackupError {
-    #[error("Internal error: {0}")]
-    Internal(String),
-    #[error("AlreadyDone: {0}")]
-    AlreadyDone(String),
-    #[error("TryLater: {0}")]
-    TryLater(String),
-    #[error("NeedProcess: {0}")]
-    NeedProcess(String),
-    #[error("Failed: {0}")]
-    Failed(String),
-}
-
-pub type BackupResult<T> = std::result::Result<T, BuckyBackupError>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RestoreConfig {
@@ -145,7 +129,7 @@ pub struct BackupItem {
 #[async_trait]
 pub trait IBackupChunkSourceProvider {
     //return json string?
-    async fn get_source_info(&self) -> Result<Value>;
+    async fn get_source_info(&self) -> BackupResult<Value>;
     fn get_source_url(&self)->String;
     fn is_local(&self)->bool;
     //async fn lock_for_backup(&self,source_url: &str)->BackupResult<()>;
@@ -153,9 +137,9 @@ pub trait IBackupChunkSourceProvider {
     async fn prepare_items(&self)->BackupResult<(Vec<BackupItem>,bool)>;
     async fn open_item(&self, item_id: &str)->BackupResult<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>>;
     async fn open_item_chunk_reader(&self, item_id: &str,offset:u64)->BackupResult<ChunkReader>;
-    async fn on_item_backuped(&self, item_id: &str)->Result<()>;
+    async fn on_item_backuped(&self, item_id: &str)->BackupResult<()>;
     //restore
-    async fn init_for_restore(&self, restore_config:&RestoreConfig)->Result<()>;
+    async fn init_for_restore(&self, restore_config:&RestoreConfig)->BackupResult<()>;
     async fn open_writer_for_restore(&self, item: &BackupItem,restore_config:&RestoreConfig,offset:u64)->BackupResult<(ChunkWriter,u64)>;
 }
 
@@ -163,10 +147,10 @@ pub trait IBackupChunkSourceProvider {
 //TODO ChunkTarget目前只依赖Chunk和Chunklist的语义，是否需要理解CheckPoint的概念?
 #[async_trait]
 pub trait IBackupChunkTargetProvider {
-    async fn get_target_info(&self) -> Result<String>;
+    async fn get_target_info(&self) -> BackupResult<String>;
     fn get_target_url(&self)->String;
-    async fn get_account_session_info(&self)->Result<String>;
-    async fn set_account_session_info(&self, session_info: &str)->Result<()>;
+    async fn get_account_session_info(&self)->BackupResult<String>;
+    async fn set_account_session_info(&self, session_info: &str)->BackupResult<()>;
     //fn get_max_chunk_size(&self)->Result<u64>;
     //返回Target上已经存在的Checkpoint列表()
     //async fn get_checkpoint_list(&self)->Result<Vec<String>>;
@@ -174,7 +158,7 @@ pub trait IBackupChunkTargetProvider {
     //下面的接口将要成为通用的http based的chunk操作接口
     //async fn get_support_chunkid_types(&self)->Result<Vec<String>>;
     
-    async fn is_chunk_exist(&self, chunk_id: &ChunkId)->Result<(bool,u64)>;
+    async fn is_chunk_exist(&self, chunk_id: &ChunkId)->BackupResult<(bool,u64)>;
     async fn open_chunk_writer(&self, chunk_id: &ChunkId,offset:u64,size:u64)->BackupResult<(ChunkWriter,u64)>;
     async fn complete_chunk_writer(&self, chunk_id: &ChunkId)->BackupResult<()>;
     async fn link_chunkid(&self, source_chunk_id: &ChunkId, new_chunk_id: &ChunkId)->BackupResult<()>;
@@ -190,21 +174,21 @@ pub trait IBackupChunkTargetProvider {
 //不需要定义dir source/target ? 完全基于named data mgr来管理？
 #[async_trait]
 pub trait IBackupDirSourceProvider {
-    async fn get_source_info(&self) -> Result<Value>;
-    async fn list_dirs(&self)->Result<Vec<String>>;
+    async fn get_source_info(&self) -> BackupResult<Value>;
+    async fn list_dirs(&self)->BackupResult<Vec<String>>;
     //return url for backup target
-    async fn prepare_dir_for_backup(&self, dir_id: &str,backup_config:&BackupConfig)->Result<()>;
-    async fn start_restore_dir(&self, dir_id: &str,dir_obj_id:&ObjId,restore_config:&RestoreConfig)->Result<()>;
-    async fn query_restore_task_info(&self, dir_obj_id: &ObjId)->Result<String>;
+    async fn prepare_dir_for_backup(&self, dir_id: &str,backup_config:&BackupConfig)->BackupResult<()>;
+    async fn start_restore_dir(&self, dir_id: &str,dir_obj_id:&ObjId,restore_config:&RestoreConfig)->BackupResult<()>;
+    async fn query_restore_task_info(&self, dir_obj_id: &ObjId)->BackupResult<String>;
 }
 #[async_trait]
 pub trait IBackupDirTargetProvider {
-    async fn get_target_info(&self) -> Result<Value>;
-    async fn list_dirs(&self)->Result<Vec<String>>;
-    async fn prepare_dir_for_restore(&self, dir_id: &str,restore_config:&RestoreConfig)->Result<()>;
+    async fn get_target_info(&self) -> BackupResult<String>;
+    async fn list_dirs(&self)->BackupResult<Vec<String>>;
+    async fn prepare_dir_for_restore(&self, dir_id: &str,restore_config:&RestoreConfig)->BackupResult<()>;
 
-    async fn start_backup_dir(&self, dir_id: &str,dir_obj_id:&ObjId)->Result<()>;
-    async fn query_backup_task_info(&self, dir_obj_id: &ObjId)->Result<String>;
+    async fn start_backup_dir(&self, dir_id: &str,dir_obj_id:&ObjId)->BackupResult<()>;
+    async fn query_backup_task_info(&self, dir_obj_id: &ObjId)->BackupResult<String>;
 }
 
 pub type BackupChunkSourceProvider = Box<dyn IBackupChunkSourceProvider + Send + Sync>;

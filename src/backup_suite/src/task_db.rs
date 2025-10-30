@@ -37,6 +37,16 @@ pub enum BackupTaskError {
 
 pub type Result<T> = std::result::Result<T, BackupTaskError>;
 
+impl From<BackupTaskError> for BuckyBackupError {
+    fn from(err: BackupTaskError) -> Self {
+        match err {
+            BackupTaskError::TaskNotFound => BuckyBackupError::NotFound(format!("task not found")),
+            BackupTaskError::InvalidCheckpointId => BuckyBackupError::Failed(format!("invalid checkpoint id")),
+            BackupTaskError::DatabaseError(e) => BuckyBackupError::Failed(format!("database error: {}", e.to_string())),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum BackupSource {
     Directory(String),
