@@ -1121,7 +1121,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 key={plan.plan_id}
                                                 className="flex flex-col gap-2 text-sm cursor-pointer border rounded-lg p-3 hover:bg-accent/30"
                                                 onClick={() =>
-                                                    onNavigate?.("plans")
+                                                    onNavigate?.(
+                                                        "plan-details",
+                                                        plan
+                                                    )
                                                 }
                                             >
                                                 <div className="flex items-start justify-between gap-2">
@@ -1175,7 +1178,13 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                         return (
                                             <div
                                                 key={plan.plan_id}
-                                                className="flex flex-col gap-3 border rounded-lg p-3 hover:bg-accent/30"
+                                                className="flex flex-col gap-3 border rounded-lg p-3 hover:bg-accent/30 cursor-pointer"
+                                                onClick={() =>
+                                                    onNavigate?.(
+                                                        "plan-details",
+                                                        plan
+                                                    )
+                                                }
                                             >
                                                 <div className="flex items-start justify-between gap-2">
                                                     <div className="flex-1 min-w-0">
