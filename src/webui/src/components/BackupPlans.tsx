@@ -381,6 +381,7 @@ function PlanListMobile({
                                         plan.policy.length === 0
                                     )
                                 }
+                                onClick={(event) => event.stopPropagation()}
                                 onCheckedChange={() => togglePlan(plan)}
                             />
                         </div>
@@ -452,7 +453,10 @@ function PlanListMobile({
                                 variant="outline"
                                 size="sm"
                                 className="p-2"
-                                onClick={() => runPlan(plan)}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    runPlan(plan);
+                                }}
                             >
                                 <Play className="w-3 h-3" />
                             </Button>
@@ -460,11 +464,12 @@ function PlanListMobile({
                                 variant="outline"
                                 size="sm"
                                 className="p-2"
-                                onClick={() =>
+                                onClick={(event) => {
+                                    event.stopPropagation();
                                     onNavigate?.("restore", {
                                         planId: plan.plan_id,
-                                    })
-                                }
+                                    });
+                                }}
                             >
                                 <Undo2 className="w-3 h-3" />
                             </Button>
@@ -472,7 +477,10 @@ function PlanListMobile({
                                 variant="outline"
                                 size="sm"
                                 className="p-2"
-                                onClick={() => onNavigate?.("edit-plan", plan)}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onNavigate?.("edit-plan", plan);
+                                }}
                             >
                                 <Edit className="w-3 h-3" />
                             </Button>
@@ -482,6 +490,9 @@ function PlanListMobile({
                                         variant="outline"
                                         size="sm"
                                         className="p-2 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                                        onClick={(event) =>
+                                            event.stopPropagation()
+                                        }
                                     >
                                         <Trash2 className="w-3 h-3" />
                                     </Button>
@@ -549,10 +560,7 @@ function PlanListDesktop({
                         ? "opacity-60"
                         : ""
                 }`}
-                
-                onClick={() =>
-                    onNavigate?.("plan-details", plan)
-                }
+                onClick={() => onNavigate?.("plan-details", plan)}
             >
                 <CardHeader className="pt-4 pb-0">
                     <div className="flex items-start justify-between">
@@ -576,6 +584,7 @@ function PlanListDesktop({
                                         plan.policy.length === 0
                                     )
                                 }
+                                onClick={(event) => event.stopPropagation()}
                                 onCheckedChange={() => togglePlan(plan)}
                             />
                         </div>
@@ -647,7 +656,10 @@ function PlanListDesktop({
                                 variant="outline"
                                 size="sm"
                                 className="gap-1"
-                                onClick={() => runPlan(plan)}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    runPlan(plan);
+                                }}
                             >
                                 <Play className="w-3 h-3" />
                                 {t.plans.runNow}
@@ -656,11 +668,12 @@ function PlanListDesktop({
                                 variant="outline"
                                 size="sm"
                                 className="gap-1"
-                                onClick={() =>
+                                onClick={(event) => {
+                                    event.stopPropagation();
                                     onNavigate?.("restore", {
                                         planId: plan.plan_id,
-                                    })
-                                }
+                                    });
+                                }}
                             >
                                 <Undo2 className="w-3 h-3" />
                                 {t.common.restore}
@@ -669,7 +682,10 @@ function PlanListDesktop({
                                 variant="outline"
                                 size="sm"
                                 className="gap-1"
-                                onClick={() => onNavigate?.("edit-plan", plan)}
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    onNavigate?.("edit-plan", plan);
+                                }}
                             >
                                 <Edit className="w-3 h-3" />
                                 {t.common.edit}
@@ -680,6 +696,9 @@ function PlanListDesktop({
                                         variant="outline"
                                         size="sm"
                                         className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                                        onClick={(event) =>
+                                            event.stopPropagation()
+                                        }
                                     >
                                         <Trash2 className="w-3 h-3" />
                                         {t.common.delete}
