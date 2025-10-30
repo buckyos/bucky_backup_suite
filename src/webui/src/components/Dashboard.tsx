@@ -1064,7 +1064,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                     {t.dashboard.backupPlans}
                                 </CardTitle>
                                 <CardDescription className="text-sm">
-                                    自动备份计划列表
+                                    备份计划列表
                                 </CardDescription>
                             </div>
                             <div className="flex gap-2">
