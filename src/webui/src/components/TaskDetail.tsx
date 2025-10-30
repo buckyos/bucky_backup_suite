@@ -495,6 +495,7 @@ function FileListBreadcrumbs({
             fullPath: entry.fullPath,
             isFile: !entry.isDirectory,
         } as BreadcrumbEntry;
+        console.log("new breadcrumb:", newBreadcrumb);
         setBreadcrumbs((prev) => [...prev, newBreadcrumb]);
         onBreadcrumbChange?.(newBreadcrumb);
     };
@@ -507,8 +508,9 @@ function FileListBreadcrumbs({
     const isViewingChunks = Boolean(
         currentBreadcrumb &&
             currentBreadcrumb.isFile &&
-            currentBreadcrumb.filePath
+            currentBreadcrumb.fullPath
     );
+    console.log("current breadcrumb:", currentBreadcrumb, "isViewingChunks:", isViewingChunks);
 
     return (
         <>
