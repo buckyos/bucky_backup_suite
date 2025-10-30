@@ -54,6 +54,7 @@ import {
     ListTaskOrderBy,
     TaskEventType,
     TaskState,
+    TargetState,
 } from "./utils/task_mgr";
 import { taskManager } from "./utils/fake_task_mgr";
 import { LoadingPage } from "./LoadingPage";
@@ -289,28 +290,28 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         return type === "local" ? HardDrive : Network;
     };
 
-    const getServiceStatusBadge = (status: string) => {
+    const getServiceStatusBadge = (status: TargetState) => {
         // todo: 检查服务状态
         switch (status) {
-            case "healthy":
+            case TargetState.ONLINE:
                 return (
                     <Badge className="bg-green-100 text-green-800 text-xs">
                         正常
                     </Badge>
                 );
-            case "warning":
-                return (
-                    <Badge className="bg-yellow-100 text-yellow-800 text-xs">
-                        警告
-                    </Badge>
-                );
-            case "offline":
+            case TargetState.ERROR:
                 return (
                     <Badge variant="destructive" className="text-xs">
+                        错误
+                    </Badge>
+                );
+            case TargetState.OFFLINE:
+                return (
+                    <Badge className="bg-yellow-100 text-yellow-800 text-xs">
                         离线
                     </Badge>
                 );
-            default:
+            case TargetState.UNKNOWN:
                 return (
                     <Badge variant="outline" className="text-xs">
                         未知
@@ -356,6 +357,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
     const handleBackupNow = () => {
         const plan = plans?.find((p) => p.plan_id === selectedPlan);
+        console.log("will run plan: ", plan);
         if (plan) {
             toast.success(`已启动备份计划: ${plan.title}`);
         }
@@ -1146,9 +1148,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         disabled={!plan.policy}
                                                         onClick={(e) => {
                                                             e.stopPropagation();
-                                                            toast.success(
-                                                                `正在启动计划: ${plan.title}`
-                                                            );
+                                                            setSelectedPlan(plan.plan_id);
+                                                            handleBackupNow();
                                                         }}
                                                     >
                                                         <Play className="w-3 h-3" />
@@ -1199,10 +1200,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         size="icon"
                                                         className="h-8 w-8 flex-shrink-0"
                                                         disabled={!plan.policy}
-                                                        onClick={() =>
-                                                            toast.success(
-                                                                `正在启动计划: ${plan.title}`
-                                                            )
+                                                        onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setSelectedPlan(plan.plan_id);
+                                                                handleBackupNow();
+                                                            }
                                                         }
                                                     >
                                                         <Play className="w-4 h-4" />
