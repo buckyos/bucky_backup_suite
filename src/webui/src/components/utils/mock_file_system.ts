@@ -12,8 +12,6 @@ export type MockFsSpec =
           chunkSizeRange?: [number, number];
       };
 
-// 妯℃嫙鐨勭洰褰曟爲锛圝SON缁撴瀯锛岀洿瑙傛槗缂栬緫锛?
-// 绾﹀畾锛氶敭涓烘枃浠跺す鍚嶏紝鍊间负鍏跺瓙鐩綍瀵硅薄锛涚┖瀵硅薄琛ㄧず璇ョ洰褰曠洰鍓嶆棤瀛愰」
 export const MOCK_FILE_SYSTEM_SPEC: MockFsSpec = {
     kind: "dir",
     name: "/",

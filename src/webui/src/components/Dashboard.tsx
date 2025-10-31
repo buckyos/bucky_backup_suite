@@ -56,10 +56,9 @@ import {
     TaskState,
     TargetState,
 } from "./utils/task_mgr";
-import { taskManager } from "./utils/fake_task_mgr";
 import { LoadingPage } from "./LoadingPage";
 import { TaskDetail } from "./TaskDetail";
-import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
+import { PlanState, TaskMgrHelper, taskManager } from "./utils/task_mgr_helper";
 
 interface DashboardProps {
     onNavigate?: (page: string, data?: any) => void;

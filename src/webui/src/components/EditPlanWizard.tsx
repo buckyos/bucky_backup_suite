@@ -24,8 +24,7 @@ import {
     PlanPolicy,
     SourceType,
 } from "./utils/task_mgr";
-import { taskManager } from "./utils/fake_task_mgr";
-import { TaskMgrHelper } from "./utils/task_mgr_helper";
+import { TaskMgrHelper,taskManager } from "./utils/task_mgr_helper";
 
 interface EditPlanWizardProps {
     onBack: () => void;

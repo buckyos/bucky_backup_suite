@@ -36,9 +36,8 @@ import {
     Check,
     X,
 } from "lucide-react";
-import { taskManager } from "./utils/fake_task_mgr";
 import { BackupTargetInfo, TargetState, TargetType } from "./utils/task_mgr";
-import { TaskMgrHelper } from "./utils/task_mgr_helper";
+import { TaskMgrHelper, taskManager } from "./utils/task_mgr_helper";
 
 interface ServiceManagementProps {
     onNavigate?: (page: string, data?: any) => void;

@@ -43,8 +43,7 @@ import {
     TaskState,
     TaskType,
 } from "./utils/task_mgr";
-import { taskManager } from "./utils/fake_task_mgr";
-import { TaskMgrHelper } from "./utils/task_mgr_helper";
+import { TaskMgrHelper, taskManager } from "./utils/task_mgr_helper";
 import { Translations } from "./i18n";
 
 interface TaskDetailProps {

@@ -69,8 +69,7 @@ import {
     TaskState,
     TaskType,
 } from "./utils/task_mgr";
-import { taskManager } from "./utils/fake_task_mgr";
-import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
+import { PlanState, TaskMgrHelper, taskManager } from "./utils/task_mgr_helper";
 
 const HISTORY_PAGE_SIZE = 10;
 

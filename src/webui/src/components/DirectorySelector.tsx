@@ -4,7 +4,7 @@ import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
 import { Checkbox } from "./ui/checkbox";
 import { DirectoryNode, DirectoryPurpose } from "./utils/task_mgr";
-import { taskManager } from "./utils/fake_task_mgr";
+import { taskManager } from "./utils/task_mgr_helper";
 
 interface DirectorySelectorProps {
     multiple?: boolean;

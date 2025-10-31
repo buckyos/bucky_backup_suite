@@ -43,8 +43,7 @@ import {
     TaskInfo,
     TaskState,
 } from "./utils/task_mgr";
-import { taskManager } from "./utils/fake_task_mgr";
-import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
+import { PlanState, TaskMgrHelper, taskManager } from "./utils/task_mgr_helper";
 import { Translations } from "./i18n";
 
 interface BackupPlansProps {

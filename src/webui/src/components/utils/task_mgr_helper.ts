@@ -5,6 +5,10 @@ import {
     BackupTargetInfo,
     TaskInfo,
 } from "./task_mgr";
+import {
+    taskManager as taskManagerInner,} from "./mock_task_mgr";
+
+export const taskManager = taskManagerInner;
 
 export enum PlanState {
     ACTIVE = "ACTIVE",

@@ -53,8 +53,7 @@ import {
     TaskInfo,
     TaskState,
 } from "./utils/task_mgr";
-import { PlanState, TaskMgrHelper } from "./utils/task_mgr_helper";
-import { taskManager } from "./utils/fake_task_mgr";
+import { PlanState, TaskMgrHelper, taskManager } from "./utils/task_mgr_helper";
 import { LoadingPage } from "./LoadingPage";
 import { TaskDetail } from "./TaskDetail";
 import { Translations } from "./i18n";

@@ -33,7 +33,7 @@ import {
     Network,
 } from "lucide-react";
 import { DirectoryNode, DirectoryPurpose, TargetType } from "./utils/task_mgr";
-import { taskManager } from "./utils/fake_task_mgr";
+import { taskManager } from "./utils/task_mgr_helper";
 
 interface BreadcrumbNode {
     label: string;
