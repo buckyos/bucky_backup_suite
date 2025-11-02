@@ -79,71 +79,6 @@ impl BackupTarget {
 
 
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum CheckPointState {
-    New,
-    Prepared,//所有的backup item确认了
-    Evaluated,//所有的backup item都计算了hash和diff(如有需要)
-    Done,
-    Failed,
-}
-
-impl ToSql for CheckPointState {
-    fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
-        let s = match self {
-            CheckPointState::New => "NEW",
-            CheckPointState::Prepared => "PREPARED",
-            CheckPointState::Evaluated => "EVALUATED",
-            CheckPointState::Done => "DONE",
-            CheckPointState::Failed => "FAILED",
-        };
-        Ok(s.into())
-    }
-}
-
-impl FromSql for CheckPointState {
-    fn column_result(value: ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
-        value.as_str().map(|s| match s {
-            "NEW" => CheckPointState::New,
-            "PREPARED" => CheckPointState::Prepared,
-            "EVALUATED" => CheckPointState::Evaluated,
-            "DONE" => CheckPointState::Done,
-            "FAILED" => CheckPointState::Failed,
-            _ => CheckPointState::Failed, // 默认失败状态
-        })
-    }
-}
-
-pub struct BackupCheckPoint {
-    pub checkpoint_id: String,
-    pub prev_checkpoint_id: Option<String>,
-    pub depend_checkpoint_id: Option<String>,
-    pub state:CheckPointState,
-    pub owner_plan:String,
-    pub checkpoint_hash:Option<String>,
-    pub checkpoint_index:u64,
-    pub create_time: u64, //checkpoint的顺序很重要，因此不能用时间来排序（这可能会因为时间错误带来严重的BUG）
-
-    //pub small_content_cache:HashMap<String, Vec<u8>>,
-}
-
-impl BackupCheckPoint {
-    pub fn new(owner_plan: &str, parent_checkpoint_id: Option<&str>, checkpoint_index: u64) -> Self {
-        let new_id = format!("chk_{}" ,Uuid::new_v4());
-        Self {
-            checkpoint_id: new_id,
-            owner_plan: owner_plan.to_string(),
-            prev_checkpoint_id: parent_checkpoint_id.map(|s| s.to_string()),
-            depend_checkpoint_id: parent_checkpoint_id.map(|s| s.to_string()),
-            state: CheckPointState::New,
-            checkpoint_hash: None,
-            checkpoint_index,
-            create_time: (chrono::Utc::now().timestamp_millis() as u64),
-        }
-    }
-}
-
-
 #[derive(Debug, Clone)]
 pub struct BackupPlanConfig {
     pub source: BackupSource,
@@ -155,6 +90,10 @@ pub struct BackupPlanConfig {
 }
 
 impl BackupPlanConfig {
+    pub fn get_checkpiont_type(&self) -> String {
+        return self.type_str.clone();
+    }
+    
     pub fn to_json_value(&self) -> Value {
         let result = json!({
             "source": self.source.get_source_url(),
@@ -409,13 +348,20 @@ impl BackupTaskDb {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS checkpoints (
                 checkpoint_id TEXT PRIMARY KEY,
-                depend_checkpoint_id TEXT,
+                checkpoint_type TEXT NOT NULL,
+                checkpoint_name TEXT NOT NULL,
                 prev_checkpoint_id TEXT,
                 state TEXT NOT NULL,
-                owner_plan TEXT NOT NULL,
-                checkpoint_hash TEXT,
-                checkpoint_index INTEGER NOT NULL,
-                create_time INTEGER NOT NULL
+                extra_info TEXT NOT NULL,
+                create_time INTEGER NOT NULL,
+                last_update_time INTEGER NOT NULL,
+                item_list_id TEXT,
+                item_count INTEGER,
+                total_size INTEGER,
+                owner_plan_id TEXT NOT NULL,
+                crpyto_config TEXT,
+                crypto_key TEXT,
+                org_item_list_id TEXT
             )",
             [],
         )?;
@@ -439,15 +385,11 @@ impl BackupTaskDb {
             "CREATE TABLE IF NOT EXISTS backup_items (
                 item_id TEXT NOT NULL,
                 checkpoint_id TEXT NOT NULL,
-                item_type TEXT NOT NULL,
                 chunk_id TEXT,
-                quick_hash TEXT,
+                local_chunk_id TEXT,
                 state TEXT NOT NULL,
                 size INTEGER NOT NULL,
-                last_modify_time INTEGER NOT NULL,
-                create_time INTEGER NOT NULL,
-                progress TEXT,
-                diff_info TEXT,
+                last_update_time INTEGER NOT NULL,
                 PRIMARY KEY (item_id, checkpoint_id)
             )",
             [],
@@ -577,44 +519,33 @@ impl BackupTaskDb {
     }
 
 
-    pub fn load_last_checkpoint(&self, taskid: &str, count:Option<u32>) -> Result<BackupCheckPoint> {
-        let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare("SELECT * FROM checkpoints WHERE taskid = ?1 ORDER BY create_time DESC LIMIT ?2")?;
-        let mut rows = stmt.query(params![taskid, count.unwrap_or(1)])?;
-
-        if let Some(row) = rows.next()? {
-            let checkpoint = BackupCheckPoint {
-                checkpoint_id: row.get(0)?,
-                depend_checkpoint_id: row.get(1)?,
-                prev_checkpoint_id: row.get(2)?,
-                state: row.get(3)?,
-                owner_plan: row.get(4)?,
-                checkpoint_hash: row.get(5)?,
-                checkpoint_index: row.get(6)?,
-                create_time: row.get(7)?,
-            };
-            Ok(checkpoint)
-        } else {
-            Err(BackupTaskError::InvalidCheckpointId)
-        }
-    }
-
-    pub fn load_checkpoint_by_id(&self, checkpoint_id: &str) -> Result<BackupCheckPoint> {
+    pub fn load_checkpoint_by_id(&self, checkpoint_id: &str) -> Result<LocalBackupCheckpoint> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
-            "SELECT * FROM checkpoints WHERE checkpoint_id = ?"
+            "SELECT checkpoint_id,checkpoint_type, checkpoint_name, prev_checkpoint_id, state, extra_info, create_time, last_update_time, item_list_id, item_count, total_size, owner_plan_id, crpyto_config, crypto_key, org_item_list_id FROM checkpoints WHERE checkpoint_id = ?"
         )?;
         
         let checkpoint = stmt.query_row(params![checkpoint_id], |row| {
-            Ok(BackupCheckPoint {
+
+            let checkpoint = BackupCheckpoint {
+                checkpoint_type: row.get(1)?,
+                checkpoint_name: row.get(2)?,
+                prev_checkpoint_id: row.get(3)?,
+                state: row.get(4)?,
+                extra_info: row.get(5)?,
+                create_time: row.get(6)?,
+                last_update_time: row.get(7)?,
+                item_list_id: row.get(8)?,
+                item_count: row.get(9)?,
+                total_size: row.get(10)?,
+            };
+            Ok(LocalBackupCheckpoint {
+                checkpoint: checkpoint,
                 checkpoint_id: row.get(0)?,
-                depend_checkpoint_id: row.get(1)?,
-                prev_checkpoint_id: row.get(2)?,
-                state: row.get(3)?,
-                owner_plan: row.get(4)?,
-                checkpoint_hash: row.get(5)?,
-                checkpoint_index: row.get(6)?,
-                create_time: row.get(7)?,
+                owner_plan_id: row.get(11)?,
+                crpyto_config: row.get(12)?,
+                crypto_key: row.get(13)?,
+                org_item_list_id: row.get(14)?,
             })
         }).map_err(|_| BackupTaskError::InvalidCheckpointId)?;
 
@@ -638,131 +569,144 @@ impl BackupTaskDb {
         Ok(())
     }
 
-    pub fn save_backup_item(&self, checkpoint_id: &str, item: &BackupItem) -> Result<()> {
+    pub fn save_backup_item(&self, checkpoint_id: &str, item: &BackupChunkItem) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
+        let local_chunk_id = item.local_chunk_id.clone().map(|id| id.to_string());
         conn.execute(
-            "INSERT INTO backup_items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO backup_items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 item.item_id,
                 checkpoint_id,
-                item.item_type,
-                item.chunk_id,
-                item.quick_hash,
+                item.chunk_id.to_string(),
+                local_chunk_id.unwrap_or("".to_string()),
                 item.state,
                 item.size,
-                item.last_modify_time,
-                item.create_time,
-                item.progress,
-                item.diff_info.clone().unwrap_or("".to_string()),
+                item.last_update_time,
             ],
         )?;
         Ok(())
     }
 
-    pub fn save_item_list_to_checkpoint(&self, checkpoint_id: &str, item_list: &Vec<BackupItem>) -> Result<()> {
-        let mut conn = Connection::open(&self.db_path)?;
-        let tx = conn.transaction()?;
+    // pub fn save_item_list_to_checkpoint(&self, checkpoint_id: &str, item_list: &Vec<BackupChunkItem>) -> Result<()> {
+    //     let mut conn = Connection::open(&self.db_path)?;
+    //     let tx = conn.transaction()?;
 
-        // optimize: per checkpoint per table?
-        // tx.execute(
-        //     "CREATE TABLE IF NOT EXISTS {}_backup_items (
-        //         item_id TEXT NOT NULL,
-        //         checkpoint_id TEXT NOT NULL,
-        //         item_type TEXT NOT NULL,
-        //         chunk_id TEXT,
-        //         quick_hash TEXT,
-        //         state TEXT NOT NULL,
-        //         size INTEGER NOT NULL,
-        //         last_modify_time INTEGER NOT NULL,
-        //         create_time INTEGER NOT NULL,
-        //         PRIMARY KEY (item_id, checkpoint_id)
-        //     )",
-        //     [],
-        // )?;
+    //     // optimize: per checkpoint per table?
+    //     // tx.execute(
+    //     //     "CREATE TABLE IF NOT EXISTS {}_backup_items (
+    //     //         item_id TEXT NOT NULL,
+    //     //         checkpoint_id TEXT NOT NULL,
+    //     //         item_type TEXT NOT NULL,
+    //     //         chunk_id TEXT,
+    //     //         quick_hash TEXT,
+    //     //         state TEXT NOT NULL,
+    //     //         size INTEGER NOT NULL,
+    //     //         last_modify_time INTEGER NOT NULL,
+    //     //         create_time INTEGER NOT NULL,
+    //     //         PRIMARY KEY (item_id, checkpoint_id)
+    //     //     )",
+    //     //     [],
+    //     // )?;
 
-        for item in item_list {
-            tx.execute(
-                "INSERT INTO backup_items (
-                    item_id,
-                    checkpoint_id,
-                    item_type,
-                    chunk_id,
-                    quick_hash,
-                    state,
-                    size,
-                    last_modify_time,
-                    create_time,
-                    progress,
-                    diff_info
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
-                    item.item_id,
-                    checkpoint_id,
-                    item.item_type,
-                    item.chunk_id,
-                    item.quick_hash,
-                    item.state,
-                    item.size,
-                    item.last_modify_time,
-                    item.create_time,
-                    item.progress,
-                    item.diff_info.clone().unwrap_or("".to_string()),
-                ],
-            )?;
-        }
+    //     for item in item_list {
+    //         tx.execute(
+    //             "INSERT INTO backup_items (
+    //                 item_id,
+    //                 checkpoint_id,
+    //                 item_type,
+    //                 chunk_id,
+    //                 quick_hash,
+    //                 state,
+    //                 size,
+    //                 last_modify_time,
+    //                 create_time,
+    //                 progress,
+    //                 diff_info
+    //             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+    //             params![
+    //                 item.item_id,
+    //                 checkpoint_id,
+    //                 item.item_type,
+    //                 item.chunk_id,
+    //                 item.quick_hash,
+    //                 item.state,
+    //                 item.size,
+    //                 item.last_modify_time,
+    //                 item.create_time,
+    //                 item.progress,
+    //                 item.diff_info.clone().unwrap_or("".to_string()),
+    //             ],
+    //         )?;
+    //     }
 
-        tx.commit()?;
-        info!("taskdb.save_item_list_to_checkpoint: {} {} items", checkpoint_id, item_list.len());
-        Ok(())
-    }
+    //     tx.commit()?;
+    //     info!("taskdb.save_item_list_to_checkpoint: {} {} items", checkpoint_id, item_list.len());
+    //     Ok(())
+    // }
 
-    pub fn create_checkpoint(&self, checkpoint: &BackupCheckPoint) -> Result<()> {
+    pub fn create_checkpoint(&self, checkpoint: &LocalBackupCheckpoint) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         conn.execute(
-            "INSERT INTO checkpoints VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO checkpoints VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 checkpoint.checkpoint_id,
-                checkpoint.depend_checkpoint_id,
+                checkpoint.checkpoint_type,
+                checkpoint.checkpoint_name,
                 checkpoint.prev_checkpoint_id,
                 checkpoint.state,
-                checkpoint.owner_plan,
-                checkpoint.checkpoint_hash,
-                checkpoint.checkpoint_index,
+                checkpoint.extra_info,
                 checkpoint.create_time,
+                checkpoint.last_update_time,
+                checkpoint.item_list_id,
+                checkpoint.item_count,
+                checkpoint.total_size,
+                checkpoint.owner_plan_id,
+                checkpoint.crpyto_config,
+                checkpoint.crypto_key,
+                checkpoint.org_item_list_id,
             ],
         )?;
         Ok(())
     }
 
-    pub fn update_checkpoint(&self, checkpoint: &BackupCheckPoint) -> Result<()> {
+    pub fn update_checkpoint_state(&self, checkpoint_id: &str, state: CheckPointState) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
-            "UPDATE checkpoints SET 
-                depend_checkpoint_id = ?2,
-                prev_checkpoint_id = ?3,
-                state = ?4,
-                owner_plan = ?5,
-                checkpoint_hash = ?6,
-                checkpoint_index = ?7,
-                create_time = ?8
-            WHERE checkpoint_id = ?1",
-            params![
-                checkpoint.checkpoint_id,
-                checkpoint.depend_checkpoint_id,
-                checkpoint.prev_checkpoint_id,
-                checkpoint.state,
-                checkpoint.owner_plan,
-                checkpoint.checkpoint_hash,
-                checkpoint.checkpoint_index,
-                checkpoint.create_time,
-            ],
+            "UPDATE checkpoints SET state = ? WHERE checkpoint_id = ?",
+            params![state, checkpoint_id],
         )?;
-
-        if rows_affected == 0 {
-            return Err(BackupTaskError::InvalidCheckpointId);
-        }
         Ok(())
     }
+
+    // pub fn update_checkpoint(&self, checkpoint: &LocalBackupCheckpoint) -> Result<()> {
+    //     let conn = Connection::open(&self.db_path)?;
+    //     let rows_affected = conn.execute(
+    //         "UPDATE checkpoints SET 
+    //             depend_checkpoint_id = ?2,
+    //             prev_checkpoint_id = ?3,
+    //             state = ?4,
+    //             owner_plan = ?5,
+    //             checkpoint_hash = ?6,
+    //             checkpoint_index = ?7,
+    //             create_time = ?8
+    //         WHERE checkpoint_id = ?1",
+    //         params![
+    //             checkpoint.checkpoint_id,
+    //             checkpoint.depend_checkpoint_id,
+    //             checkpoint.prev_checkpoint_id,
+    //             checkpoint.state,
+    //             checkpoint.owner_plan,
+    //             checkpoint.checkpoint_hash,
+    //             checkpoint.checkpoint_index,
+    //             checkpoint.create_time,
+    //         ],
+    //     )?;
+
+    //     if rows_affected == 0 {
+    //         return Err(BackupTaskError::InvalidCheckpointId);
+    //     }
+    //     Ok(())
+    // }
 
     pub fn delete_checkpoint(&self, checkpoint_id: &str) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
@@ -777,112 +721,11 @@ impl BackupTaskDb {
         Ok(())
     }
 
-    pub fn load_backup_items_by_checkpoint(&self, checkpoint_id: &str) -> Result<Vec<BackupItem>> {
-        let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare(
-            "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
-                    last_modify_time, create_time, progress, diff_info
-             FROM backup_items WHERE checkpoint_id = ?"
-        )?;
-        
-        
-        let items = stmt.query_map(params![checkpoint_id], |row| {
-            let diff_info: Option<String> = row.get(9)?;
-            let diff_info = if diff_info.is_none() {
-                None
-            } else {
-                let diff_info_str = diff_info.unwrap();
-                if diff_info_str.is_empty() {
-                    None
-                } else {
-                    Some(diff_info_str)
-                }
-            };
-            Ok(BackupItem {
-                item_id: row.get(0)?,
-                item_type: row.get(1)?,
-                chunk_id: row.get(2)?,
-                quick_hash: row.get(3)?,
-                state: row.get(4)?,
-                size: row.get(5)?,
-                last_modify_time: row.get(6)?,
-                create_time: row.get(7)?,
-                have_cache: false,
-                progress: row.get(8)?,
-                diff_info,
-            })
-        })?
-        .collect::<SqlResult<Vec<BackupItem>>>()?;
-
-        Ok(items)
+    pub fn load_backup_chunk_items_by_checkpoint(&self, checkpoint_id: &str) -> Result<Vec<BackupChunkItem>> {
+        unimplemented!()
     }
 
-    pub fn load_wait_cacl_backup_items(&self, checkpoint_id: &str) -> Result<Vec<BackupItem>> {
-        let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare(
-            "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
-                    last_modify_time, create_time, progress, diff_info
-             FROM backup_items 
-             WHERE checkpoint_id = ? AND state = ?"
-        )?;
 
-        let items = stmt.query_map(
-            params![checkpoint_id, BackupItemState::New],
-            |row| {
-                Ok(BackupItem {
-                    item_id: row.get(0)?,
-                    item_type: row.get(1)?,
-                    chunk_id: row.get(2)?,
-                    quick_hash: row.get(3)?,
-                    state: row.get(4)?, 
-                    size: row.get(5)?,
-                    last_modify_time: row.get(6)?,
-                    create_time: row.get(7)?,
-                    have_cache: false,
-                    progress: row.get(8)?,
-                    diff_info: Some(row.get(9)?),
-                })
-            }
-        )?
-        .collect::<SqlResult<Vec<BackupItem>>>()?;
-
-        Ok(items)
-    }
-
-    pub fn load_wait_transfer_backup_items(&self, checkpoint_id: &str) -> Result<Vec<BackupItem>> {
-        let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare(
-            "SELECT item_id, item_type, chunk_id, quick_hash, state,size, 
-                    last_modify_time, create_time, progress, diff_info
-             FROM backup_items 
-             WHERE checkpoint_id = ? AND state = ?"
-        )?;
-        
-        let items = stmt.query_map(
-            params![
-                checkpoint_id,
-                BackupItemState::LocalDone,
-            ],
-            |row| {
-                Ok(BackupItem {
-                    item_id: row.get(0)?,
-                    item_type: row.get(1)?,
-                    chunk_id: row.get(2)?,
-                    quick_hash: row.get(3)?,
-                    state: row.get(4)?,
-                    size: row.get(5)?,
-                    last_modify_time: row.get(6)?,
-                    create_time: row.get(7)?,
-                    have_cache: false,
-                    progress: row.get(8)?,
-                    diff_info: Some(row.get(9)?),
-                })
-            }
-        )?
-        .collect::<SqlResult<Vec<BackupItem>>>()?;
-
-        Ok(items)
-    }
 
     pub fn check_is_checkpoint_items_all_done(&self, checkpoint_id: &str) -> Result<bool> {
         let conn = Connection::open(&self.db_path)?;
@@ -895,42 +738,6 @@ impl BackupTaskDb {
         Ok(count == 0)
     }
 
-    pub fn update_backup_item(&self, checkpoint_id: &str, item: &BackupItem) -> Result<()> {
-        //info!("taskdb.update_backup_item: {} {} {:?}", checkpoint_id, item.item_id, item.state);
-        let conn = Connection::open(&self.db_path)?;
-        let rows_affected = conn.execute(
-            "UPDATE backup_items SET 
-                item_type = ?1,
-                chunk_id = ?2,
-                quick_hash = ?3,
-                state = ?4,
-                size = ?5,
-                last_modify_time = ?6,
-                create_time = ?7,
-                progress = ?8,
-                diff_info = ?9
-            WHERE checkpoint_id = ?10 AND item_id = ?11",
-            params![
-                item.item_type,
-                item.chunk_id,
-                item.quick_hash,
-                item.state,
-                item.size,
-                item.last_modify_time,
-                item.create_time,
-                item.progress,
-                item.diff_info.clone().unwrap_or("".to_string()),
-                checkpoint_id,
-                item.item_id,
-            ],
-        )?;
-
-        if rows_affected == 0 {
-            return Err(BackupTaskError::TaskNotFound);
-        }
-
-        Ok(())
-    }
 
     pub fn update_backup_item_state(&self, checkpoint_id: &str, item_id: &str, state: BackupItemState) -> Result<()> {
         info!("taskdb.update_backup_item_state: {} {} {:?}", checkpoint_id, item_id, state);
@@ -1109,102 +916,102 @@ impl BackupTaskDb {
         Ok(logs)
     }
 
-    pub fn save_restore_item_list_to_task(&self, owner_taskid: &str, item_list: &Vec<BackupItem>) -> Result<()> {
-        let mut conn = Connection::open(&self.db_path)?;
-        let tx = conn.transaction()?;
+    // pub fn save_restore_item_list_to_task(&self, owner_taskid: &str, item_list: &Vec<BackupChunkItem>) -> Result<()> {
+    //     let mut conn = Connection::open(&self.db_path)?;
+    //     let tx = conn.transaction()?;
 
-        for item in item_list {
-            tx.execute(
-                "INSERT INTO restore_items (
-                    item_id,
-                    owner_taskid,
-                    item_type,
-                    chunk_id,
-                    quick_hash,
-                    state,
-                    size,
-                    last_modify_time,
-                    create_time
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![
-                    item.item_id,
-                    owner_taskid,
-                    item.item_type,
-                    item.chunk_id,
-                    item.quick_hash,
-                    item.state,
-                    item.size,
-                    item.last_modify_time,
-                    item.create_time,
-                ],
-            )?;
-        }
+    //     for item in item_list {
+    //         tx.execute(
+    //             "INSERT INTO restore_items (
+    //                 item_id,
+    //                 owner_taskid,
+    //                 item_type,
+    //                 chunk_id,
+    //                 quick_hash,
+    //                 state,
+    //                 size,
+    //                 last_modify_time,
+    //                 create_time
+    //             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    //             params![
+    //                 item.item_id,
+    //                 owner_taskid,
+    //                 item.item_type,
+    //                 item.chunk_id,
+    //                 item.quick_hash,
+    //                 item.state,
+    //                 item.size,
+    //                 item.last_modify_time,
+    //                 item.create_time,
+    //             ],
+    //         )?;
+    //     }
 
-        tx.commit()?;
-        info!("taskdb.save_restore_item_list_to_task: {} {} items", owner_taskid, item_list.len());
-        Ok(())
-    }
+    //     tx.commit()?;
+    //     info!("taskdb.save_restore_item_list_to_task: {} {} items", owner_taskid, item_list.len());
+    //     Ok(())
+    // }
 
-    pub fn load_restore_items_by_task(&self, owner_taskid: &str,state: &BackupItemState) -> Result<Vec<BackupItem>> {
-        let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare(
-            "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
-                    last_modify_time, create_time, progress, diff_info
-             FROM restore_items WHERE owner_taskid = ? AND state = ?"
-        )?;
+    // pub fn load_restore_items_by_task(&self, owner_taskid: &str,state: &BackupItemState) -> Result<Vec<BackupChunkItem>> {
+    //     let conn = Connection::open(&self.db_path)?;
+    //     let mut stmt = conn.prepare(
+    //         "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
+    //                 last_modify_time, create_time, progress, diff_info
+    //          FROM restore_items WHERE owner_taskid = ? AND state = ?"
+    //     )?;
         
-        let items = stmt.query_map(params![owner_taskid, state], |row| {
-            Ok(BackupItem {
-                item_id: row.get(0)?,
-                item_type: row.get(1)?,
-                chunk_id: row.get(2)?,
-                quick_hash: row.get(3)?,
-                state: row.get(4)?,
-                size: row.get(5)?,
-                last_modify_time: row.get(6)?,
-                create_time: row.get(7)?,
-                have_cache: false,
-                progress: row.get(8)?,
-                diff_info: Some(row.get(9)?),
-            })
-        })?
-        .collect::<SqlResult<Vec<BackupItem>>>()?;
+    //     let items = stmt.query_map(params![owner_taskid, state], |row| {
+    //         Ok(BackupChunkItem {
+    //             item_id: row.get(0)?,
+    //             item_type: row.get(1)?,
+    //             chunk_id: row.get(2)?,
+    //             quick_hash: row.get(3)?,
+    //             state: row.get(4)?,
+    //             size: row.get(5)?,
+    //             last_modify_time: row.get(6)?,
+    //             create_time: row.get(7)?,
+    //             have_cache: false,
+    //             progress: row.get(8)?,
+    //             diff_info: Some(row.get(9)?),
+    //         })
+    //     })?
+    //     .collect::<SqlResult<Vec<BackupChunkItem>>>()?;
 
-        Ok(items)
-    }
+    //     Ok(items)
+    // }
 
-    pub fn update_restore_item(&self, owner_taskid: &str, item: &BackupItem) -> Result<()> {
-        info!("taskdb.update_restore_item: {} {} {:?}", owner_taskid, item.item_id, item.state);
-        let conn = Connection::open(&self.db_path)?;
-        let rows_affected = conn.execute(
-            "UPDATE restore_items SET 
-                item_type = ?1,
-                chunk_id = ?2,
-                quick_hash = ?3,
-                state = ?4,
-                size = ?5,
-                last_modify_time = ?6,
-                create_time = ?7
-            WHERE owner_taskid = ?8 AND item_id = ?9",
-            params![
-                item.item_type,
-                item.chunk_id,
-                item.quick_hash,
-                item.state,
-                item.size,
-                item.last_modify_time,
-                item.create_time,
-                owner_taskid,
-                item.item_id,
-            ],
-        )?;
+    // pub fn update_restore_item(&self, owner_taskid: &str, item: &BackupChunkItem) -> Result<()> {
+    //     info!("taskdb.update_restore_item: {} {} {:?}", owner_taskid, item.item_id, item.state);
+    //     let conn = Connection::open(&self.db_path)?;
+    //     let rows_affected = conn.execute(
+    //         "UPDATE restore_items SET 
+    //             item_type = ?1,
+    //             chunk_id = ?2,
+    //             quick_hash = ?3,
+    //             state = ?4,
+    //             size = ?5,
+    //             last_modify_time = ?6,
+    //             create_time = ?7
+    //         WHERE owner_taskid = ?8 AND item_id = ?9",
+    //         params![
+    //             item.item_type,
+    //             item.chunk_id,
+    //             item.quick_hash,
+    //             item.state,
+    //             item.size,
+    //             item.last_modify_time,
+    //             item.create_time,
+    //             owner_taskid,
+    //             item.item_id,
+    //         ],
+    //     )?;
 
-        if rows_affected == 0 {
-            return Err(BackupTaskError::TaskNotFound);
-        }
+    //     if rows_affected == 0 {
+    //         return Err(BackupTaskError::TaskNotFound);
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     pub fn update_restore_item_state(&self, owner_taskid: &str, item_id: &str, state: BackupItemState) -> Result<()> {
         info!("taskdb.update_restore_item_state: {} {} {:?}", owner_taskid, item_id, state);
@@ -1226,40 +1033,40 @@ impl BackupTaskDb {
         Ok(())
     }
 
-    pub fn load_wait_transfer_restore_items(&self, owner_taskid: &str) -> Result<Vec<BackupItem>> {
-        let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare(
-            "SELECT item_id, item_type, chunk_id, quick_hash, size, 
-                    last_modify_time, create_time, progress, diff_info
-             FROM restore_items 
-             WHERE owner_taskid = ? AND state = ?"
-        )?;
+    // pub fn load_wait_transfer_restore_items(&self, owner_taskid: &str) -> Result<Vec<BackupChunkItem>> {
+    //     let conn = Connection::open(&self.db_path)?;
+    //     let mut stmt = conn.prepare(
+    //         "SELECT item_id, item_type, chunk_id, quick_hash, size, 
+    //                 last_modify_time, create_time, progress, diff_info
+    //          FROM restore_items 
+    //          WHERE owner_taskid = ? AND state = ?"
+    //     )?;
         
-        let items = stmt.query_map(
-            params![
-                owner_taskid,
-                BackupItemState::LocalDone,
-            ],
-            |row| {
-                Ok(BackupItem {
-                    item_id: row.get(0)?,
-                    item_type: row.get(1)?,
-                    chunk_id: row.get(2)?,
-                    quick_hash: row.get(3)?,
-                    state: row.get(4)?,
-                    size: row.get(5)?,
-                    last_modify_time: row.get(6)?,
-                    create_time: row.get(7)?,
-                    have_cache: false,
-                    progress: row.get(8)?,
-                    diff_info: Some(row.get(9)?),
-                })
-            }
-        )?
-        .collect::<SqlResult<Vec<BackupItem>>>()?;
+    //     let items = stmt.query_map(
+    //         params![
+    //             owner_taskid,
+    //             BackupItemState::LocalDone,
+    //         ],
+    //         |row| {
+    //             Ok(BackupChunkItem {
+    //                 item_id: row.get(0)?,
+    //                 item_type: row.get(1)?,
+    //                 chunk_id: row.get(2)?,
+    //                 quick_hash: row.get(3)?,
+    //                 state: row.get(4)?,
+    //                 size: row.get(5)?,
+    //                 last_modify_time: row.get(6)?,
+    //                 create_time: row.get(7)?,
+    //                 have_cache: false,
+    //                 progress: row.get(8)?,
+    //                 diff_info: Some(row.get(9)?),
+    //             })
+    //         }
+    //     )?
+    //     .collect::<SqlResult<Vec<BackupChunkItem>>>()?;
 
-        Ok(items)
-    }
+    //     Ok(items)
+    // }
 }
 
 #[cfg(test)]
@@ -1340,20 +1147,19 @@ mod tests {
     fn test_checkpoint_operations() {
         let (db, _) = setup_test_db();
         
+        let checkpoint = BackupCheckpoint::new(CHECKPOINT_TYPE_CHUNK.to_string(), "test_checkpoint".to_string(), None, None);
+        let checkpoint_id = uuid::Uuid::new_v4().to_string();
         // Create checkpoint
-        let checkpoint = BackupCheckPoint::new("test_plan", None, 1);
-        let checkpoint_id = checkpoint.checkpoint_id.clone();
-        db.create_checkpoint(&checkpoint).unwrap();
+        let local_checkpoint = LocalBackupCheckpoint::new(checkpoint, checkpoint_id.clone(), "test_plan".to_string());
+        db.create_checkpoint(&local_checkpoint).unwrap();
 
         // Load and verify
         let loaded_cp = db.load_checkpoint_by_id(&checkpoint_id).unwrap();
         assert_eq!(loaded_cp.checkpoint_id, checkpoint_id);
-        assert_eq!(loaded_cp.owner_plan, "test_plan");
+        assert_eq!(loaded_cp.owner_plan_id, "test_plan");
 
         // Update checkpoint
-        let mut updated_cp = checkpoint;
-        updated_cp.state = CheckPointState::Prepared;
-        db.update_checkpoint(&updated_cp).unwrap();
+        db.update_checkpoint_state(&checkpoint_id, CheckPointState::Prepared).unwrap();
 
         // Verify update
         let loaded_cp = db.load_checkpoint_by_id(&checkpoint_id).unwrap();

@@ -244,22 +244,14 @@ lazy_static::lazy_static!{
 
 pub struct BackupTaskSession {
     pub task_id: String,
-    pub eval_cache_queue:Arc<SegQueue<BackupItem>>,
-    pub eval_queue: Arc<SegQueue<BackupItem>>,
-    pub transfer_cache_queue:Arc<SegQueue<BackupItem>>,
-    pub transfer_queue:Arc<SegQueue<BackupItem>>,
-    pub done_items:Arc<Mutex<HashMap<String,u64>>>,
+    pub logs:Vec<String>,
 }
 
 impl BackupTaskSession {
     pub fn new(task_id:String) -> Self {
         Self {
             task_id,
-            eval_cache_queue:Arc::new(SegQueue::new()),
-            eval_queue: Arc::new(SegQueue::new()),
-            transfer_cache_queue:Arc::new(SegQueue::new()),
-            transfer_queue:Arc::new(SegQueue::new()),
-            done_items:Arc::new(Mutex::new(HashMap::new())),
+            logs:Vec::new(),
         }
     }
 }
