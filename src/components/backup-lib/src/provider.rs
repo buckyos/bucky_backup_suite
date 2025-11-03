@@ -53,7 +53,7 @@ pub trait IBackupChunkSourceProvider {
     fn is_support(&self, ability:&str)->bool;
     //async fn lock_for_backup(&self,source_url: &str)->BackupResult<()>;
     //async fn unlock_for_backup(&self,source_url: &str)->BackupResult<()>;
-    async fn create_checkpoint(&self, checkpoint_id: &str)->BackupResult<BackupCheckpoint>;
+    //async fn create_checkpoint(&self, checkpoint_id: &str)->BackupResult<BackupCheckpoint>;
     async fn prepare_items(&self, checkpoint_id: &str, callback: Option<Arc<Mutex<NdnProgressCallback>>>)->BackupResult<(Vec<BackupChunkItem>,bool)>;
     //async fn open_item(&self, item_id: &str)->BackupResult<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>>;
     async fn open_item_chunk_reader(&self, checkpoint_id: &str, backup_item: &BackupChunkItem,offset:u64)->BackupResult<ChunkReader>;
@@ -80,7 +80,7 @@ pub trait IBackupChunkTargetProvider {
     //下面的接口将要成为通用的http based的chunk操作接口
     //async fn get_support_chunkid_types(&self)->Result<Vec<String>>;
     async fn alloc_checkpoint(&self, checkpoint: &BackupCheckpoint)->BackupResult<()>;
-    //async fn add_backup_item(&self, checkpoint_id: &str, backup_items: &Vec<BackupItem>)->BackupResult<()>;
+    async fn add_backup_item(&self, checkpoint_id: &str, backup_items: &Vec<BackupChunkItem>)->BackupResult<()>;
     async fn query_check_point_state(&self, checkpoint_id: &str)->BackupResult<(BackupCheckpoint,RemoteBackupCheckPointItemStatus)>;
     //async fn query_not_complete_backup_items(&self, checkpoint_id: &str)->BackupResult<Vec<BackupChunkItem>>;
     async fn remove_checkpoint(&self, checkpoint_id: &str)->BackupResult<()>;

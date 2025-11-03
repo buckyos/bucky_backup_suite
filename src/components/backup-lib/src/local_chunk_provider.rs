@@ -7,9 +7,7 @@ use crate::BuckyBackupError;
 use crate::RemoteBackupCheckPointItemStatus;
 use async_trait::async_trait;
 use log::*;
-use ndn_lib::NdnProgressCallback;
-use ndn_lib::{ChunkHasher, ChunkReadSeek};
-use ndn_lib::{ChunkId, ChunkReader, ChunkWriter, NamedDataMgr, NdnError};
+use ndn_lib::*;
 use serde_json::json;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -29,12 +27,14 @@ use crate::provider::*;
 //待备份的chunk都以文件的形式平摊的保存目录下
 pub struct LocalDirChunkProvider {
     pub dir_path: String,
+    pub named_mgr_id: String,
+    pub is_strict_mode: bool,
 }
 
 impl LocalDirChunkProvider {
-    pub async fn new(dir_path: String) -> BackupResult<Self> {
+    pub async fn new(dir_path: String, named_mgr_id: String) -> BackupResult<Self> {
         info!("new local dir chunk provider, dir_path: {}", dir_path);
-        Ok(LocalDirChunkProvider { dir_path })
+        Ok(LocalDirChunkProvider { dir_path, named_mgr_id, is_strict_mode: false })
     }
 
 }
@@ -64,12 +64,19 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         format!("file:///{}", self.dir_path)
     }
 
-    async fn create_checkpoint(&self, checkpoint_id: &str)->BackupResult<BackupCheckpoint> {
-        unimplemented!()
-    }
 
     async fn prepare_items(&self, checkpoint_id: &str, callback: Option<Arc<Mutex<NdnProgressCallback>>>) -> BackupResult<(Vec<BackupChunkItem>, bool)> {
-        unimplemented!();
+        let mut items = Vec::new();
+        let ndn_mgr_id = Some(self.named_mgr_id.as_str());
+        let file_obj_template = FileObject::new("".to_string(), 0, "".to_string());
+        let mut check_mode = CheckMode::ByQCID;
+        if self.is_strict_mode {
+            check_mode = CheckMode::ByFullHash;
+        }
+        // let dir_object = cacl_dir_object(ndn_mgr_id, self.dir_path.as_str(), &file_obj_template,check_mode,StoreMode::new_local(),None).await?;
+
+        Ok((items, true))
+
     }
 
     async fn open_item_chunk_reader(
@@ -235,6 +242,10 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
     }
 
     async fn alloc_checkpoint(&self, checkpoint: &BackupCheckpoint)->BackupResult<()> {
+        unimplemented!()
+    }
+
+    async fn add_backup_item(&self, checkpoint_id: &str, backup_items: &Vec<BackupChunkItem>)->BackupResult<()> {
         unimplemented!()
     }
 

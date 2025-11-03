@@ -73,15 +73,15 @@ pub struct BackupEngine {
     is_strict_mode: bool,
     task_db: BackupTaskDb,
     task_session: Arc<Mutex<HashMap<String, Arc<Mutex<BackupTaskSession>>>>>,
-    all_chunk_source_providers: Arc<Mutex<HashMap<String, (BackupSourceProviderDesc, BackupChunkSourceCreateFunc)>>>,
-    all_chunk_target_providers: Arc<Mutex<HashMap<String, (BackupTargetProviderDesc, BackupChunkTargetCreateFunc)>>>,
+    all_chunk_source_providers: Arc<Mutex<HashMap<String, (BackupSourceProviderDesc, Arc<Mutex<BackupChunkSourceCreateFunc>>)>>>,
+    all_chunk_target_providers: Arc<Mutex<HashMap<String, (BackupTargetProviderDesc, Arc<Mutex<BackupChunkTargetCreateFunc>>)>>>,
 }
 
 impl BackupEngine {
     pub fn new() -> Self {
         let task_db_path = get_buckyos_service_data_dir("backup_suite").join("bucky_backup.db");
 
-        Self {
+        let result = Self {
             all_plans: Arc::new(Mutex::new(HashMap::new())),
             all_tasks: Arc::new(Mutex::new(HashMap::new())),
             all_checkpoints: Arc::new(Mutex::new(HashMap::new())),
@@ -92,10 +92,41 @@ impl BackupEngine {
             all_chunk_source_providers: Arc::new(Mutex::new(HashMap::new())),
             all_chunk_target_providers: Arc::new(Mutex::new(HashMap::new())),
 
-        }
+        };
+
+
+        return result;
     }
 
     pub async fn start(&self) -> BackupResult<()> {
+        let local_chunk_source_desc = BackupSourceProviderDesc {
+            name: "local filesystem backup source".to_string(),
+            desc: "local filesystem backup source,support use a local filesystem as backup source".to_string(),
+            type_id: "file".to_string(),
+            abilities: vec![ABILITY_CHUNK_LIST.to_string()],
+        };
+
+        self.register_backup_chunk_source_provider(local_chunk_source_desc, Box::new(move |local_path: String| {
+            Box::pin(async move {
+                let result = LocalDirChunkProvider::new(local_path, "backup_local_cache".to_string()).await?;
+                Ok(Box::new(result) as BackupChunkSourceProvider)
+            })
+        })).await?;
+
+        let local_chunk_target_desc = BackupTargetProviderDesc {
+            name: "local filesystem backup target".to_string(),
+            desc: "local filesystem backup target,support use a local filesystem as backup target".to_string(),
+            type_id: "file".to_string(),
+            abilities: vec![ABILITY_CHUNK_LIST.to_string()],
+        };
+
+        self.register_backup_chunk_target_provider(local_chunk_target_desc, Box::new(move |local_path: String| {
+            Box::pin(async move {
+                let result = LocalChunkTargetProvider::new(local_path, "backup_local_storage".to_string()).await?;
+                Ok(Box::new(result) as BackupChunkTargetProvider)
+            })
+        })).await?;
+
         let plans = self.task_db.list_backup_plans().map_err(|e| {
             error!("list backup plans error: {}", e.to_string());
             BuckyBackupError::Failed(e.to_string())
@@ -125,7 +156,7 @@ impl BackupEngine {
         if all_chunk_source_providers.contains_key(&desc.type_id) {
             return Err(BuckyBackupError::Failed(format!("chunk source provider already registered")));
         }
-        all_chunk_source_providers.insert(desc.type_id.clone(), (desc, create_func));
+        all_chunk_source_providers.insert(desc.type_id.clone(), (desc, Arc::new(Mutex::new(create_func))));
         Ok(())
     }
 
@@ -138,7 +169,7 @@ impl BackupEngine {
         if all_chunk_target_providers.contains_key(&desc.type_id) {
             return Err(BuckyBackupError::Failed(format!("chunk target provider already registered")));
         }
-        all_chunk_target_providers.insert(desc.type_id.clone(), (desc, create_func));
+        all_chunk_target_providers.insert(desc.type_id.clone(), (desc, Arc::new(Mutex::new(create_func))));
         Ok(())
     }
 
@@ -533,11 +564,11 @@ impl BackupEngine {
         if create_func.is_none() {
             return Err(BuckyBackupError::NotFound(format!("create chunk backup source failed, unsupported source url scheme: {}", url.scheme())));
         }
-        let (desc, create_func) = create_func.unwrap();
+        let (_desc, create_func) = create_func.unwrap();
         let mut local_path = url.path();
-        //let result = create_func(local_path.to_string()).await?;
-        //Ok(result)
-        unimplemented!()
+        let mut create_func = create_func.lock().await;
+        let result = create_func(local_path.to_string()).await?;
+        Ok(result)
     }
 
     async fn get_chunk_target_provider(
@@ -550,10 +581,11 @@ impl BackupEngine {
         if create_func.is_none() {
             return Err(BuckyBackupError::NotFound(format!("create chunk backup target failed, unsupported target url scheme: {}", url.scheme())));
         }
-        let (desc, create_func) = create_func.unwrap();
-        //let result = create_func(target_url).await?;
-        //Ok(result)
-        unimplemented!()
+        let (_desc, create_func) = create_func.unwrap();
+        let mut local_path = url.path();
+        let mut create_func = create_func.lock().await;
+        let result = create_func(local_path.to_string()).await?;
+        Ok(result)
         // match url.scheme() {
         //     "file" => {
         //         let mut local_path = url.path();
