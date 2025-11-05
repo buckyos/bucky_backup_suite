@@ -26,7 +26,6 @@ pub type BackupResult<T> = std::result::Result<T, BuckyBackupError>;
 #[derive(Debug,Clone,PartialEq)]
 pub enum BackupItemState {
     New,
-    Transmitting,
     Done,
     Failed(String),
 }
@@ -35,7 +34,6 @@ impl ToSql for BackupItemState {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         let s = match self {
             BackupItemState::New => "NEW".to_string(),
-            BackupItemState::Transmitting => "TRANSMITTING".to_string(),
             BackupItemState::Done => "DONE".to_string(),
             BackupItemState::Failed(msg) => format!("FAILED:{}", msg),
         };
@@ -48,7 +46,6 @@ impl FromSql for BackupItemState {
     fn column_result(value: ValueRef<'_>) -> rusqlite::types::FromSqlResult<Self> {
         value.as_str().map(|s| match s {
             "NEW" => BackupItemState::New,
-            "TRANSMITTING" => BackupItemState::Transmitting,
             "DONE" => BackupItemState::Done,
             _ => {
                 if s.starts_with("FAILED:") {
@@ -82,6 +79,16 @@ pub enum CheckPointState {
     //Evaluated,//所有的backup item都计算了hash和diff(如有需要)
     Done,
     Failed(String),
+}
+
+impl CheckPointState {
+    pub fn need_working(&self) -> bool {
+        match self {
+            CheckPointState::Done => false,
+            CheckPointState::Failed(_) => false,
+            _ => true,
+        }
+    }
 }
 
 impl ToSql for CheckPointState {

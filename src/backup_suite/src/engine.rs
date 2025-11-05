@@ -292,13 +292,21 @@ impl BackupEngine {
     // }
 
 
-    async fn complete_backup_checkpoint(
+    async fn update_backup_checkpoint(
         &self,
         checkpoint_id: &str,
         state: CheckPointState,
         owner_task: Arc<Mutex<WorkTask>>,
     ) -> BackupResult<()> {
-        unimplemented!()
+        let all_checkpoints = self.all_checkpoints.lock().await;
+        let checkpoint = all_checkpoints.get(checkpoint_id);
+        if checkpoint.is_some() {
+            let checkpoint = checkpoint.unwrap();
+            let mut real_checkpoint = checkpoint.lock().await;
+            real_checkpoint.state = state.clone();
+        }
+        self.task_db.update_checkpoint_state(checkpoint_id, state)?;
+        Ok(())
     }
 
     async fn complete_backup_item(
@@ -332,12 +340,104 @@ impl BackupEngine {
         source: BackupChunkSourceProvider,
         target: BackupChunkTargetProvider,
     ) -> BackupResult<()> {
-        unimplemented!()
+        let local_checkpoint = self.task_db.load_checkpoint_by_id(checkpoint_id.as_str())?;
+        if !local_checkpoint.state.need_working() {
+            info!("checkpoint {} is not need working, exit backup thread", checkpoint_id);
+            return Ok(());
+        }
+
+        // 保存 state 以便后续使用
+        let checkpoint_state = local_checkpoint.state.clone();
+
+        // 获取或创建 checkpoint Arc
+        let mut all_checkpoints = self.all_checkpoints.lock().await;
+        let checkpoint = all_checkpoints.get(&checkpoint_id).cloned();
+        let checkpoint = if checkpoint.is_some() {
+            checkpoint.unwrap()
+        } else {
+            let checkpoint_arc = Arc::new(Mutex::new(local_checkpoint));
+            all_checkpoints.insert(checkpoint_id.clone(), checkpoint_arc.clone());
+            checkpoint_arc
+        };
+        drop(all_checkpoints);
+
+        // 准备需要的变量
+        let engine = self.clone();
+        let source_url = source.get_source_url();
+        let target_url = target.get_target_url();
+        let task_id = {
+            let task = backup_task.lock().await;
+            task.taskid.clone()
+        };
+        let task_session = Arc::new(Mutex::new(BackupTaskSession::new(task_id)));
+        let backup_task_prepare = backup_task.clone();
+        let backup_task_work = backup_task.clone();
+        let checkpoint_clone = checkpoint.clone();
+        let task_session_prepare = task_session.clone();
+        let task_session_work = task_session.clone();
+
+        if checkpoint_state == CheckPointState::New {
+            //start prepare thread
+            let engine_prepare = engine.clone();
+            let source_url_prepare = source_url.clone();
+            let prepare_thread = tokio::spawn(async move {
+                // 重新创建 source provider
+                let source_prepare = engine_prepare.get_chunk_source_provider(&source_url_prepare).await;
+                if source_prepare.is_err() {
+                    error!("prepare thread: failed to create source provider: {}", source_prepare.err().unwrap());
+                    return;
+                }
+                let source_prepare = source_prepare.unwrap();
+                
+                let prepare_result = BackupEngine::backup_chunk_source_prepare_thread(
+                    engine_prepare,
+                    source_prepare,
+                    backup_task_prepare,
+                    task_session_prepare,
+                    checkpoint_clone,
+                ).await;
+                if prepare_result.is_err() {
+                    error!("prepare thread error: {}", prepare_result.err().unwrap());
+                }
+            });
+
+        }
+
+        //start working thread
+        let engine_work = engine.clone();
+        let source_url_work = source_url.clone();
+        let target_url_work = target_url.clone();
+        let working_thread = tokio::spawn(async move {
+            // 重新创建 source 和 target providers
+            let source_work = engine_work.get_chunk_source_provider(&source_url_work).await;
+            if source_work.is_err() {
+                error!("work thread: failed to create source provider: {}", source_work.err().unwrap());
+                return;
+            }
+            let source_work = source_work.unwrap();
+            
+            let target_work = engine_work.get_chunk_target_provider(&target_url_work).await;
+            if target_work.is_err() {
+                error!("work thread: failed to create target provider: {}", target_work.err().unwrap());
+                return;
+            }
+            let target_work = target_work.unwrap();
+            
+            let working_result = BackupEngine::backup_work_thread(
+                engine_work,
+                source_work,
+                target_work,
+                backup_task_work,
+                task_session_work,
+            ).await;
+            if working_result.is_err() {
+                error!("working thread error: {}", working_result.err().unwrap());
+            }
+        });
+    
+        Ok(())
     }
 
-    pub async fn on_backup_source_prepare_callback() {
-        unimplemented!()
-    }
 
     pub async fn backup_chunk_source_prepare_thread(
         engine: BackupEngine,
@@ -349,16 +449,22 @@ impl BackupEngine {
         let real_checkpoint = checkpoint.lock().await;
         let checkpoint_id = real_checkpoint.checkpoint_id.clone();
         drop(real_checkpoint);
-
+        let mut total_size = 0;
+        let mut this_size = 0;
+        let mut item_count:u64 = 0;
         loop {
-            //TODO:在prepare参数里传入 task的cache_queue,方便在prepare的时候就可以服用io
-            let (mut this_item_list, is_done) = source.prepare_items(checkpoint_id.as_str(),None).await?;
-            //add items to checkpoint
- 
+            let (mut this_item_list, this_size, is_done) = source.prepare_items(checkpoint_id.as_str(),None).await?;
+            engine.task_db.save_itemlist_to_checkpoint(checkpoint_id.as_str(), &this_item_list)?;
+            total_size += this_size;
+            item_count += this_item_list.len() as u64;
             if is_done {
+                
                 let mut real_checkpoint = checkpoint.lock().await;
                 real_checkpoint.state = CheckPointState::Prepared;
-                engine.task_db.update_checkpoint_state(checkpoint_id.as_str(), CheckPointState::Prepared)?;
+                real_checkpoint.total_size = total_size;
+                real_checkpoint.item_count = item_count;
+                engine.task_db.set_checkpoint_ready(checkpoint_id.as_str(), total_size, item_count)?;
+                info!("checkpoint {} set to ready, total_size: {}, item_count: {}", checkpoint_id, total_size, item_count);
                 drop(real_checkpoint);    
                 break;
             }
@@ -366,18 +472,27 @@ impl BackupEngine {
         warn!("checkpoint {} 's prepare thread exit.", checkpoint_id);
         return Ok(());
     }
+
     async fn update_backup_item_state_by_remote_checkpoint_state(
         &self,
         checkpoint_items_state: &RemoteBackupCheckPointItemStatus,
     ) -> BackupResult<()> {
-        unimplemented!()
+        match checkpoint_items_state {
+            RemoteBackupCheckPointItemStatus::NotSupport => {
+                return Ok(());
+            }
+            _ => {
+                unimplemented!()
+            }
+        }
     }
 
     async fn pop_wait_backup_item(
         &self,
         checkpoint_id: &str,
     ) -> BackupResult<Option<BackupChunkItem>> {
-        unimplemented!()
+        self.task_db.pop_wait_backup_item(checkpoint_id)
+            .map_err(|e| BuckyBackupError::Failed(e.to_string()))
     }
 
     pub async fn backup_work_thread(
@@ -398,24 +513,38 @@ impl BackupEngine {
         loop {
             let real_task = backup_task.lock().await;
             if real_task.state != TaskState::Running {
-                info!("backup task {} is not running, exit transfer thread", real_task.taskid);
+                info!("backup task {} is not running, exit transfer thread,task_state: {:?}", real_task.taskid, real_task.state);
                 break;
             }
             drop(real_task);
 
+            let local_checkpoint = engine.task_db.load_checkpoint_by_id(checkpoint_id.as_str())?;
+            if !local_checkpoint.state.need_working() {
+                info!("checkpoint {} is not need working, exit transfer thread", checkpoint_id);
+                break;
+            }
+
+            if local_checkpoint.state == CheckPointState::New {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                info!("checkpoint {} is new, sleep 1 second", checkpoint_id);
+                continue;
+            }
+
+            let mut remote_checkpoint_state = CheckPointState::New;
             let (remote_checkpoint, checkpoint_items_state) = target.query_check_point_state(checkpoint_id.as_str()).await?;
-            //self.update_task_state_by_remote_checkpoint_state(&remote_checkpoint_state);
+            remote_checkpoint_state = remote_checkpoint.state.clone();
             engine.update_backup_item_state_by_remote_checkpoint_state(&checkpoint_items_state).await?;
-            match remote_checkpoint.state {
+            match remote_checkpoint_state {
                 CheckPointState::New => {
                     warn!("checkpoint {} remote state is new, need allocate checkpoint at remote", checkpoint_id);
                     let checkpoint = engine.task_db.load_checkpoint_by_id(checkpoint_id.as_str())?;
+                    //let target check there is enough free space to allocate checkpoint
                     let alloc_result = target.alloc_checkpoint(&checkpoint).await;
                     if alloc_result.is_err() {
                         let err_string = alloc_result.err().unwrap().to_string();
                         warn!("allocate checkpoint {} at backup target error: {}", checkpoint_id, err_string.as_str());
-                        engine.complete_backup_checkpoint(checkpoint_id.as_str(), CheckPointState::Failed(err_string),backup_task.clone()).await?;
-                        continue;
+                        engine.update_backup_checkpoint(checkpoint_id.as_str(), CheckPointState::Failed(err_string),backup_task.clone()).await?;
+                        break;;
                     }
                     
                     warn!("checkpoint {} allocated at backup target.", checkpoint_id);
@@ -427,12 +556,12 @@ impl BackupEngine {
                 }
                 CheckPointState::Done => {
                     warn!("checkpoint {} remote state is done, exit working thread", checkpoint_id);
-                    engine.complete_backup_checkpoint(checkpoint_id.as_str(), CheckPointState::Done,backup_task.clone()).await?;
+                    engine.update_backup_checkpoint(checkpoint_id.as_str(), CheckPointState::Done,backup_task.clone()).await?;
                     break;
                 }
                 CheckPointState::Failed(msg) => {
                     warn!("checkpoint {} remote state is failed: {}, exit working thread", checkpoint_id, msg.as_str());
-                    engine.complete_backup_checkpoint(checkpoint_id.as_str(), CheckPointState::Failed(msg),backup_task.clone()).await?;
+                    engine.update_backup_checkpoint(checkpoint_id.as_str(), CheckPointState::Failed(msg),backup_task.clone()).await?;
                     break;
                 }
                 CheckPointState::WaitTrans => {
@@ -446,12 +575,13 @@ impl BackupEngine {
                     if item.is_some() {
                         let item = item.unwrap();
                         let mut is_item_done = false;
-                        let mut writer = target.open_chunk_writer(checkpoint_id.as_str(), &item.chunk_id).await;
+                        let mut writer = target.open_chunk_writer(checkpoint_id.as_str(), &item.chunk_id, item.size).await;
                         match writer {
                             Ok((mut writer, init_offset)) => {
                                 let mut reader = source.open_item_chunk_reader(checkpoint_id.as_str(), &item,init_offset).await?;
                                 let trans_bytes = tokio::io::copy(&mut reader, &mut writer).await
                                     .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
+                                debug!("backup chunk {} bytes: {}", item.chunk_id.to_string(), trans_bytes);
                                 target.complete_chunk_writer(checkpoint_id.as_str(), &item.chunk_id).await?;
                                 is_item_done = true;
                             }
@@ -479,7 +609,7 @@ impl BackupEngine {
                         //no item to backup, check point completed
                         if checkpoint_items_state == RemoteBackupCheckPointItemStatus::NotSupport {
                             warn!("checkpoint {} remote state is not support checkpoint level check, complete backup checkpoint by all local items done.", checkpoint_id);
-                            engine.complete_backup_checkpoint(checkpoint_id.as_str(), CheckPointState::Done,backup_task.clone()).await?;
+                            engine.update_backup_checkpoint(checkpoint_id.as_str(), CheckPointState::Done,backup_task.clone()).await?;
                             break;
                         } 
                     }
@@ -752,6 +882,7 @@ impl BackupEngine {
         let task_id = real_backup_task.taskid.clone();
         let checkpoint_id = real_backup_task.checkpoint_id.clone();
         let owner_plan_id = real_backup_task.owner_plan_id.clone();
+        drop(real_backup_task);
 
         let all_plans = self.all_plans.lock().await;
         let plan = all_plans.get(&owner_plan_id);
@@ -803,19 +934,19 @@ impl BackupEngine {
 
             //let all_tasks = engine.all_tasks.lock().await;
             // let mut backup_task = all_tasks.get_mut(taskid);
-            let mut real_backup_task = backup_task.lock().await;
-            if task_result.is_err() {
-                info!(
-                    "backup task failed: {} {}",
-                    taskid.as_str(),
-                    task_result.err().unwrap()
-                );
-                real_backup_task.state = TaskState::Failed;
-            } else {
-                info!("backup task done: {} ", taskid.as_str());
-                real_backup_task.state = TaskState::Done;
-            }
-            engine.task_db.update_task(&real_backup_task);
+            // let mut real_backup_task = backup_task.lock().await;
+            // if task_result.is_err() {
+            //     info!(
+            //         "backup task failed: {} {}",
+            //         taskid.as_str(),
+            //         task_result.err().unwrap()
+            //     );
+            //     real_backup_task.state = TaskState::Failed;
+            // } else {
+            //     info!("backup task done: {} ", taskid.as_str());
+            //     real_backup_task.state = TaskState::Done;
+            // }
+            // engine.task_db.update_task(&real_backup_task);
         });
 
         Ok(())

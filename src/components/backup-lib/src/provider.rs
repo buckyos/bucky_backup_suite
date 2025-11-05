@@ -54,7 +54,7 @@ pub trait IBackupChunkSourceProvider {
     //async fn lock_for_backup(&self,source_url: &str)->BackupResult<()>;
     //async fn unlock_for_backup(&self,source_url: &str)->BackupResult<()>;
     //async fn create_checkpoint(&self, checkpoint_id: &str)->BackupResult<BackupCheckpoint>;
-    async fn prepare_items(&self, checkpoint_id: &str, callback: Option<Arc<Mutex<NdnProgressCallback>>>)->BackupResult<(Vec<BackupChunkItem>,bool)>;
+    async fn prepare_items(&self, checkpoint_id: &str, callback: Option<Arc<Mutex<NdnProgressCallback>>>)->BackupResult<(Vec<BackupChunkItem>,u64,bool)>;
     //async fn open_item(&self, item_id: &str)->BackupResult<Pin<Box<dyn ChunkReadSeek + Send + Sync + Unpin>>>;
     async fn open_item_chunk_reader(&self, checkpoint_id: &str, backup_item: &BackupChunkItem,offset:u64)->BackupResult<ChunkReader>;
     async fn open_chunk_reader(&self,chunk_id: &ChunkId,offset:u64)->BackupResult<ChunkReader>;
@@ -86,7 +86,7 @@ pub trait IBackupChunkTargetProvider {
     async fn remove_checkpoint(&self, checkpoint_id: &str)->BackupResult<()>;
 
     //async fn is_chunk_exist(&self, chunk_id: &ChunkId)->BackupResult<(bool,u64)>;
-    async fn open_chunk_writer(&self, checkpoint_id: &str, chunk_id: &ChunkId)->BackupResult<(ChunkWriter,u64)>;
+    async fn open_chunk_writer(&self, checkpoint_id: &str, chunk_id: &ChunkId, chunk_size: u64)->BackupResult<(ChunkWriter,u64)>;
     async fn complete_chunk_writer(&self, checkpoint_id: &str, chunk_id: &ChunkId)->BackupResult<()>;
 
     // restore
