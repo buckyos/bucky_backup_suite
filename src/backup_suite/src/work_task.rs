@@ -1,50 +1,48 @@
-
-use tokio::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::collections::HashMap;
 use crossbeam::queue::SegQueue;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::Mutex;
 
 use anyhow::Result;
-use std::sync::Arc;
 use buckyos_backup_lib::*;
 use log::*;
+use std::sync::Arc;
 
-const MAX_CACHE_SIZE:u64 = 1024*1024*512;
+const MAX_CACHE_SIZE: u64 = 1024 * 1024 * 512;
 
 pub struct ChunkCacheNode {
     pub start_offset: u64,
     pub end_offset: u64,
-    pub cache_pieces: SegQueue<(u64,Vec<u8>)>,
+    pub cache_pieces: SegQueue<(u64, Vec<u8>)>,
 }
 
 impl ChunkCacheNode {
-
-    pub fn add_piece(&mut self,piece:Vec<u8>) {
+    pub fn add_piece(&mut self, piece: Vec<u8>) {
         let piece_len = piece.len() as u64;
         let piece_start_offset = self.end_offset;
-        debug!("add piece [{} - {}] (size: {}) to cache",piece_start_offset, piece_start_offset + piece_len, piece_len);
-        self.cache_pieces.push((piece_start_offset,piece));
+        debug!(
+            "add piece [{} - {}] (size: {}) to cache",
+            piece_start_offset,
+            piece_start_offset + piece_len,
+            piece_len
+        );
+        self.cache_pieces.push((piece_start_offset, piece));
         self.end_offset += piece_len;
+    }
 
-    }    
-
-    pub fn free_piece_before_offset(&mut self, _:u64) -> u64 {
+    pub fn free_piece_before_offset(&mut self, _: u64) -> u64 {
         //TODO: implement
         return 0;
     }
-    
 }
 
 pub struct ChunkTaskCacheMgr {
-    pub total_size : Arc<AtomicU64>,
-    pub max_size : u64,
+    pub total_size: Arc<AtomicU64>,
+    pub max_size: u64,
     chunk_cache: HashMap<String, Arc<Mutex<ChunkCacheNode>>>,
 }
 
-
-
 impl ChunkTaskCacheMgr {
-
     pub fn new() -> Self {
         Self {
             chunk_cache: HashMap::new(),
@@ -53,7 +51,7 @@ impl ChunkTaskCacheMgr {
         }
     }
 
-    pub async fn create_chunk_cache(&mut self,chunk_id:&str,start_offset:u64) -> Result<()> {
+    pub async fn create_chunk_cache(&mut self, chunk_id: &str, start_offset: u64) -> Result<()> {
         if self.chunk_cache.contains_key(chunk_id) {
             return Err(anyhow::anyhow!("Chunk cache already exists"));
         }
@@ -64,34 +62,38 @@ impl ChunkTaskCacheMgr {
             end_offset: start_offset,
             cache_pieces,
         };
-        self.chunk_cache.insert(chunk_id.to_string(), Arc::new(Mutex::new(chunk_cache_node)));
+        self.chunk_cache
+            .insert(chunk_id.to_string(), Arc::new(Mutex::new(chunk_cache_node)));
         Ok(())
     }
 
     //then can access the cache piece
-    pub fn get_chunk_cache_node(&self,chunk_id:&str) -> Option<Arc<Mutex<ChunkCacheNode>>> {
+    pub fn get_chunk_cache_node(&self, chunk_id: &str) -> Option<Arc<Mutex<ChunkCacheNode>>> {
         let result_node = self.chunk_cache.get(chunk_id)?;
         Some(result_node.clone())
     }
 
-    pub async fn free_chunk_cache(&mut self,chunk_id:&str) -> Result<()> {
+    pub async fn free_chunk_cache(&mut self, chunk_id: &str) -> Result<()> {
         if let Some(chunk_cache_node) = self.chunk_cache.remove(chunk_id) {
             let chunk_cache_node = chunk_cache_node.lock().await;
             let mut free_size = 0;
-            while let Some((_piece_start_offset,piece)) = chunk_cache_node.cache_pieces.pop() {
+            while let Some((_piece_start_offset, piece)) = chunk_cache_node.cache_pieces.pop() {
                 free_size += piece.len() as u64;
             }
             self.total_size.fetch_sub(free_size, Ordering::Relaxed);
-            debug!("free {} chunk cache, size: {} MB", chunk_id, free_size / 1024 / 1024);
+            debug!(
+                "free {} chunk cache, size: {} MB",
+                chunk_id,
+                free_size / 1024 / 1024
+            );
             Ok(())
         } else {
             Err(anyhow::anyhow!("Chunk cache not found"))
         }
     }
-
 }
 
-lazy_static::lazy_static!{
+lazy_static::lazy_static! {
     pub static ref CHUNK_TASK_CACHE_MGR: Arc<Mutex<ChunkTaskCacheMgr>> = Arc::new(Mutex::new(ChunkTaskCacheMgr::new()));
 }
 
@@ -214,7 +216,7 @@ lazy_static::lazy_static!{
 //                 debug!("CachedReader::poll_read: read {} bytes", n);
 //                 // 读取到多少就推进 buffer 的指针
 //                 buf.advance(n);
-                
+
 //                 // 用完一次 Future 就清空
 //                 this.read_future = None;
 
@@ -244,14 +246,14 @@ lazy_static::lazy_static!{
 
 pub struct BackupTaskSession {
     pub task_id: String,
-    pub logs:Vec<String>,
+    pub logs: Vec<String>,
 }
 
 impl BackupTaskSession {
-    pub fn new(task_id:String) -> Self {
+    pub fn new(task_id: String) -> Self {
         Self {
             task_id,
-            logs:Vec::new(),
+            logs: Vec::new(),
         }
     }
 }

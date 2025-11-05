@@ -5,7 +5,7 @@ import {
     TaskInfo,
 } from "./task_mgr";
 import {
-    taskManager as taskManagerInner,} from "./mock_task_mgr";
+    taskManager as taskManagerInner,} from "./task_mgr";
 
 export const taskManager = taskManagerInner;
 

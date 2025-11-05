@@ -1,15 +1,14 @@
 #![allow(dead_code)]
 #![allow(unused)]
-use ndn_lib::ChunkId;
-use thiserror::Error;
-use uuid::Uuid;
-use serde_json::{Value, json};
-use rusqlite::{Connection, params, Result as SqlResult};
-use rusqlite::types::{ToSql, FromSql, ValueRef};
+use buckyos_backup_lib::RestoreConfig;
 use buckyos_backup_lib::*;
 use log::*;
-use buckyos_backup_lib::RestoreConfig;
-
+use ndn_lib::ChunkId;
+use rusqlite::types::{FromSql, ToSql, ValueRef};
+use rusqlite::{params, Connection, Result as SqlResult};
+use serde_json::{json, Value};
+use thiserror::Error;
+use uuid::Uuid;
 
 // impl From<ChunkItem> for BackupItem {
 //     fn from(item: ChunkItem) -> Self {
@@ -44,9 +43,15 @@ impl From<BackupDbError> for BuckyBackupError {
     fn from(err: BackupDbError) -> Self {
         match err {
             BackupDbError::NotFound(msg) => BuckyBackupError::NotFound(msg),
-            BackupDbError::InvalidCheckpointId(msg) => BuckyBackupError::Failed(format!("invalid checkpoint id: {}", msg)),
-            BackupDbError::DatabaseError(e) => BuckyBackupError::Failed(format!("database error: {}", e.to_string())),
-            BackupDbError::DataFormatError(msg) => BuckyBackupError::Failed(format!("data format error: {}", msg)),
+            BackupDbError::InvalidCheckpointId(msg) => {
+                BuckyBackupError::Failed(format!("invalid checkpoint id: {}", msg))
+            }
+            BackupDbError::DatabaseError(e) => {
+                BuckyBackupError::Failed(format!("database error: {}", e.to_string()))
+            }
+            BackupDbError::DataFormatError(msg) => {
+                BuckyBackupError::Failed(format!("data format error: {}", msg))
+            }
         }
     }
 }
@@ -81,8 +86,6 @@ impl BackupTarget {
     }
 }
 
-
-
 #[derive(Debug, Clone)]
 pub struct BackupPlanConfig {
     pub source: BackupSource,
@@ -97,7 +100,7 @@ impl BackupPlanConfig {
     pub fn get_checkpiont_type(&self) -> String {
         return self.type_str.clone();
     }
-    
+
     pub fn to_json_value(&self) -> Value {
         let result = json!({
             "source": self.source.get_source_url(),
@@ -110,32 +113,36 @@ impl BackupPlanConfig {
         result
     }
 
-    pub fn chunk2chunk(source:&str,target_url: &str, title: &str, description: &str) -> Self {
+    pub fn chunk2chunk(source: &str, target_url: &str, title: &str, description: &str) -> Self {
         let source = BackupSource::ChunkList(source.to_string());
         let target = BackupTarget::ChunkList(target_url.to_string());
-        Self { 
-            source, 
+        Self {
+            source,
             target,
-            title: title.to_string(), 
-            description: description.to_string() ,
+            title: title.to_string(),
+            description: description.to_string(),
             type_str: "c2c".to_string(),
             last_checkpoint_index: 1024,
         }
     }
 
-    pub fn dir2chunk(source:&str,target_url: &str, title: &str, description: &str) -> Self {
+    pub fn dir2chunk(source: &str, target_url: &str, title: &str, description: &str) -> Self {
         unimplemented!()
     }
 
-    pub fn dir2dir(source:&str,target_url: &str, title: &str, description: &str) -> Self {
+    pub fn dir2dir(source: &str, target_url: &str, title: &str, description: &str) -> Self {
         unimplemented!()
     }
 
     pub fn get_plan_key(&self) -> String {
-        let key =format!("{}-{}-{}",self.type_str, self.source.get_source_url(), self.target.get_target_url());
+        let key = format!(
+            "{}-{}-{}",
+            self.type_str,
+            self.source.get_source_url(),
+            self.target.get_target_url()
+        );
         return key;
     }
-
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -220,8 +227,7 @@ impl FromSql for TaskType {
     }
 }
 
-
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct WorkTask {
     pub taskid: String,
     pub task_type: TaskType,
@@ -238,11 +244,9 @@ pub struct WorkTask {
     pub restore_config: Option<RestoreConfig>,
 }
 
-
-
 impl WorkTask {
     pub fn new(owner_plan_id: &str, checkpoint_id: &str, task_type: TaskType) -> Self {
-        let new_id = format!("task_{}" ,Uuid::new_v4());
+        let new_id = format!("task_{}", Uuid::new_v4());
         Self {
             taskid: new_id.to_string(),
             task_type,
@@ -321,15 +325,21 @@ impl BackupTaskDb {
         db
     }
 
-
     fn init_database(&self) -> Result<()> {
-        let dir = std::path::Path::new(&self.db_path).parent()
-            .ok_or(BackupDbError::DatabaseError(rusqlite::Error::InvalidPath(std::path::PathBuf::from(self.db_path.clone()))))?;
-        std::fs::create_dir_all(dir)
-            .map_err(|_| BackupDbError::DatabaseError(rusqlite::Error::InvalidPath(std::path::PathBuf::from(self.db_path.clone()))))?;
-        
+        let dir =
+            std::path::Path::new(&self.db_path)
+                .parent()
+                .ok_or(BackupDbError::DatabaseError(rusqlite::Error::InvalidPath(
+                    std::path::PathBuf::from(self.db_path.clone()),
+                )))?;
+        std::fs::create_dir_all(dir).map_err(|_| {
+            BackupDbError::DatabaseError(rusqlite::Error::InvalidPath(std::path::PathBuf::from(
+                self.db_path.clone(),
+            )))
+        })?;
+
         let conn = Connection::open(&self.db_path).map_err(BackupDbError::DatabaseError)?;
-        
+
         conn.execute(
             "CREATE TABLE IF NOT EXISTS work_tasks (
                 taskid TEXT PRIMARY KEY,
@@ -432,27 +442,27 @@ impl BackupTaskDb {
 
     pub fn load_task_by_id(&self, taskid: &str) -> Result<WorkTask> {
         let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare(
-            "SELECT * FROM work_tasks WHERE taskid = ?"
-        )?;
-        
-        let task = stmt.query_row(params![taskid], |row| {
-            Ok(WorkTask {
-                taskid: row.get(0)?,
-                task_type: row.get(1)?,
-                owner_plan_id: row.get(2)?,
-                checkpoint_id: row.get(3)?,
-                total_size: row.get(4)?,
-                completed_size: row.get(5)?,
-                state: row.get(6)?,
-                create_time: row.get(7)?,
-                update_time: row.get(8)?,
-                item_count: row.get(9)?,
-                completed_item_count: row.get(10)?,
-                wait_transfer_item_count: row.get(11)?,
-                restore_config: row.get(12)?,
+        let mut stmt = conn.prepare("SELECT * FROM work_tasks WHERE taskid = ?")?;
+
+        let task = stmt
+            .query_row(params![taskid], |row| {
+                Ok(WorkTask {
+                    taskid: row.get(0)?,
+                    task_type: row.get(1)?,
+                    owner_plan_id: row.get(2)?,
+                    checkpoint_id: row.get(3)?,
+                    total_size: row.get(4)?,
+                    completed_size: row.get(5)?,
+                    state: row.get(6)?,
+                    create_time: row.get(7)?,
+                    update_time: row.get(8)?,
+                    item_count: row.get(9)?,
+                    completed_item_count: row.get(10)?,
+                    wait_transfer_item_count: row.get(11)?,
+                    restore_config: row.get(12)?,
+                })
             })
-        }).map_err(|_| BackupDbError::NotFound(taskid.to_string()))?;
+            .map_err(|_| BackupDbError::NotFound(taskid.to_string()))?;
 
         Ok(task)
     }
@@ -483,7 +493,10 @@ impl BackupTaskDb {
     pub fn update_task(&self, task: &WorkTask) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         let new_task_state;
-        if task.state == TaskState::Done || task.state == TaskState::Failed || task.state == TaskState::Pending {
+        if task.state == TaskState::Done
+            || task.state == TaskState::Failed
+            || task.state == TaskState::Pending
+        {
             new_task_state = task.state.clone();
         } else {
             new_task_state = TaskState::Paused;
@@ -522,49 +535,45 @@ impl BackupTaskDb {
         Ok(())
     }
 
-
     pub fn load_checkpoint_by_id(&self, checkpoint_id: &str) -> Result<LocalBackupCheckpoint> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT checkpoint_id,checkpoint_type, checkpoint_name, prev_checkpoint_id, state, extra_info, create_time, last_update_time, item_list_id, item_count, total_size, owner_plan_id, crpyto_config, crypto_key, org_item_list_id FROM checkpoints WHERE checkpoint_id = ?"
         )?;
-        
-        let checkpoint = stmt.query_row(params![checkpoint_id], |row| {
 
-            let checkpoint = BackupCheckpoint {
-                checkpoint_type: row.get(1)?,
-                checkpoint_name: row.get(2)?,
-                prev_checkpoint_id: row.get(3)?,
-                state: row.get(4)?,
-                extra_info: row.get(5)?,
-                create_time: row.get(6)?,
-                last_update_time: row.get(7)?,
-                item_list_id: row.get(8)?,
-                item_count: row.get(9)?,
-                total_size: row.get(10)?,
-            };
-            Ok(LocalBackupCheckpoint {
-                checkpoint: checkpoint,
-                checkpoint_id: row.get(0)?,
-                owner_plan_id: row.get(11)?,
-                crpyto_config: row.get(12)?,
-                crypto_key: row.get(13)?,
-                org_item_list_id: row.get(14)?,
+        let checkpoint = stmt
+            .query_row(params![checkpoint_id], |row| {
+                let checkpoint = BackupCheckpoint {
+                    checkpoint_type: row.get(1)?,
+                    checkpoint_name: row.get(2)?,
+                    prev_checkpoint_id: row.get(3)?,
+                    state: row.get(4)?,
+                    extra_info: row.get(5)?,
+                    create_time: row.get(6)?,
+                    last_update_time: row.get(7)?,
+                    item_list_id: row.get(8)?,
+                    item_count: row.get(9)?,
+                    total_size: row.get(10)?,
+                };
+                Ok(LocalBackupCheckpoint {
+                    checkpoint: checkpoint,
+                    checkpoint_id: row.get(0)?,
+                    owner_plan_id: row.get(11)?,
+                    crpyto_config: row.get(12)?,
+                    crypto_key: row.get(13)?,
+                    org_item_list_id: row.get(14)?,
+                })
             })
-        }).map_err(|_| BackupDbError::InvalidCheckpointId(checkpoint_id.to_string()))?;
+            .map_err(|_| BackupDbError::InvalidCheckpointId(checkpoint_id.to_string()))?;
 
         Ok(checkpoint)
     }
-
 
     pub fn cancel_task(&self, taskid: &str) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE work_tasks SET state = ? WHERE taskid = ?",
-            params![
-                TaskState::Failed,
-                taskid
-            ],
+            params![TaskState::Failed, taskid],
         )?;
 
         if rows_affected == 0 {
@@ -591,7 +600,11 @@ impl BackupTaskDb {
         Ok(())
     }
 
-    pub fn save_itemlist_to_checkpoint(&self, checkpoint_id: &str, item_list: &Vec<BackupChunkItem>) -> Result<()> {
+    pub fn save_itemlist_to_checkpoint(
+        &self,
+        checkpoint_id: &str,
+        item_list: &Vec<BackupChunkItem>,
+    ) -> Result<()> {
         let mut conn = Connection::open(&self.db_path)?;
         let tx = conn.transaction()?;
 
@@ -629,7 +642,11 @@ impl BackupTaskDb {
         }
 
         tx.commit()?;
-        info!("taskdb.save_item_list_to_checkpoint: {} {} items", checkpoint_id, item_list.len());
+        info!(
+            "taskdb.save_item_list_to_checkpoint: {} {} items",
+            checkpoint_id,
+            item_list.len()
+        );
         Ok(())
     }
 
@@ -658,7 +675,11 @@ impl BackupTaskDb {
         Ok(())
     }
 
-    pub fn update_checkpoint_state(&self, checkpoint_id: &str, state: CheckPointState) -> Result<()> {
+    pub fn update_checkpoint_state(
+        &self,
+        checkpoint_id: &str,
+        state: CheckPointState,
+    ) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE checkpoints SET state = ? WHERE checkpoint_id = ?",
@@ -667,14 +688,21 @@ impl BackupTaskDb {
         Ok(())
     }
 
-    pub fn set_checkpoint_ready(&self, checkpoint_id: &str, total_size: u64, item_count: u64) -> Result<()> {
+    pub fn set_checkpoint_ready(
+        &self,
+        checkpoint_id: &str,
+        total_size: u64,
+        item_count: u64,
+    ) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE checkpoints SET total_size = ?, item_count = ?, state = 'PREPARED',last_update_time = ? WHERE checkpoint_id = ?",
             params![total_size, item_count, buckyos_kit::buckyos_get_unix_timestamp() as u64, checkpoint_id],
         )?;
         if rows_affected == 0 {
-            return Err(BackupDbError::InvalidCheckpointId(checkpoint_id.to_string()));
+            return Err(BackupDbError::InvalidCheckpointId(
+                checkpoint_id.to_string(),
+            ));
         }
         Ok(())
     }
@@ -682,7 +710,7 @@ impl BackupTaskDb {
     // pub fn update_checkpoint(&self, checkpoint: &LocalBackupCheckpoint) -> Result<()> {
     //     let conn = Connection::open(&self.db_path)?;
     //     let rows_affected = conn.execute(
-    //         "UPDATE checkpoints SET 
+    //         "UPDATE checkpoints SET
     //             depend_checkpoint_id = ?2,
     //             prev_checkpoint_id = ?3,
     //             state = ?4,
@@ -717,12 +745,17 @@ impl BackupTaskDb {
         )?;
 
         if rows_affected == 0 {
-            return Err(BackupDbError::InvalidCheckpointId(checkpoint_id.to_string()));
+            return Err(BackupDbError::InvalidCheckpointId(
+                checkpoint_id.to_string(),
+            ));
         }
         Ok(())
     }
 
-    pub fn load_backup_chunk_items_by_checkpoint(&self, checkpoint_id: &str) -> Result<Vec<BackupChunkItem>> {
+    pub fn load_backup_chunk_items_by_checkpoint(
+        &self,
+        checkpoint_id: &str,
+    ) -> Result<Vec<BackupChunkItem>> {
         unimplemented!()
     }
 
@@ -732,11 +765,11 @@ impl BackupTaskDb {
             "SELECT item_id, chunk_id, size,last_update_time FROM backup_items WHERE checkpoint_id = ? AND state = 'NEW'  ORDER BY last_update_time LIMIT 1"
         )?;
         let item = stmt.query_row(params![checkpoint_id], |row| {
-            let chunk_id_str:String = row.get(1)?;
+            let chunk_id_str: String = row.get(1)?;
             let chunk_id = ChunkId::new(&chunk_id_str).unwrap();
             Ok(BackupChunkItem {
                 item_id: row.get(0)?,
-                chunk_id: chunk_id,  
+                chunk_id: chunk_id,
                 local_chunk_id: None,
                 size: row.get(2)?,
                 state: BackupItemState::New,
@@ -753,36 +786,39 @@ impl BackupTaskDb {
                 return Err(BackupDbError::DatabaseError(e));
             }
         }
-
     }
 
     pub fn check_is_checkpoint_items_all_done(&self, checkpoint_id: &str) -> Result<bool> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
-            "SELECT COUNT(*) FROM backup_items WHERE checkpoint_id = ? AND state != 'DONE'"
+            "SELECT COUNT(*) FROM backup_items WHERE checkpoint_id = ? AND state != 'DONE'",
         )?;
-        let count: i32 = stmt.query_row(params![checkpoint_id], |row| {
-            row.get(0)
-        })?;
+        let count: i32 = stmt.query_row(params![checkpoint_id], |row| row.get(0))?;
         Ok(count == 0)
     }
 
-
-    pub fn update_backup_item_state(&self, checkpoint_id: &str, item_id: &str, state: BackupItemState) -> Result<()> {
-        info!("taskdb.update_backup_item_state: {} {} {:?}", checkpoint_id, item_id, state);
+    pub fn update_backup_item_state(
+        &self,
+        checkpoint_id: &str,
+        item_id: &str,
+        state: BackupItemState,
+    ) -> Result<()> {
+        info!(
+            "taskdb.update_backup_item_state: {} {} {:?}",
+            checkpoint_id, item_id, state
+        );
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE backup_items SET state = ?1 
             WHERE checkpoint_id = ?2 AND item_id = ?3",
-            params![
-                state,
-                checkpoint_id,
-                item_id,
-            ],
+            params![state, checkpoint_id, item_id,],
         )?;
 
         if rows_affected == 0 {
-            return Err(BackupDbError::NotFound(format!("{}/{}", checkpoint_id, item_id)));
+            return Err(BackupDbError::NotFound(format!(
+                "{}/{}",
+                checkpoint_id, item_id
+            )));
         }
 
         Ok(())
@@ -867,31 +903,32 @@ impl BackupTaskDb {
     pub fn list_backup_plans(&self) -> Result<Vec<BackupPlanConfig>> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare("SELECT * FROM backup_plans")?;
-        
-        let plans = stmt.query_map([], |row| {
-            let source_type: String = row.get(1)?;
-            let source_url: String = row.get(2)?;
-            let target_type: String = row.get(3)?;
-            let target_url: String = row.get(4)?;
-            
-            Ok(BackupPlanConfig {
-                source: match source_type.as_str() {
-                    "directory" => BackupSource::Directory(source_url),
-                    "chunklist" => BackupSource::ChunkList(source_url),
-                    _ => panic!("Invalid source type in database"),
-                },
-                target: match target_type.as_str() {
-                    "directory" => BackupTarget::Directory(target_url),
-                    "chunklist" => BackupTarget::ChunkList(target_url),
-                    _ => panic!("Invalid target type in database"),
-                },
-                title: row.get(5)?,
-                description: row.get(6)?,
-                type_str: row.get(7)?,
-                last_checkpoint_index: row.get(8)?,
-            })
-        })?
-        .collect::<SqlResult<Vec<BackupPlanConfig>>>()?;
+
+        let plans = stmt
+            .query_map([], |row| {
+                let source_type: String = row.get(1)?;
+                let source_url: String = row.get(2)?;
+                let target_type: String = row.get(3)?;
+                let target_url: String = row.get(4)?;
+
+                Ok(BackupPlanConfig {
+                    source: match source_type.as_str() {
+                        "directory" => BackupSource::Directory(source_url),
+                        "chunklist" => BackupSource::ChunkList(source_url),
+                        _ => panic!("Invalid source type in database"),
+                    },
+                    target: match target_type.as_str() {
+                        "directory" => BackupTarget::Directory(target_url),
+                        "chunklist" => BackupTarget::ChunkList(target_url),
+                        _ => panic!("Invalid target type in database"),
+                    },
+                    title: row.get(5)?,
+                    description: row.get(6)?,
+                    type_str: row.get(7)?,
+                    last_checkpoint_index: row.get(8)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<BackupPlanConfig>>>()?;
 
         Ok(plans)
     }
@@ -909,14 +946,20 @@ impl BackupTaskDb {
             _ => sql = "SELECT taskid FROM work_tasks",
         }
         let mut stmt = conn.prepare(sql)?;
-        let tasks = stmt.query_map([], |row| {      
-            Ok(row.get(0)?)
-        })?
-        .collect::<SqlResult<Vec<String>>>()?;
+        let tasks = stmt
+            .query_map([], |row| Ok(row.get(0)?))?
+            .collect::<SqlResult<Vec<String>>>()?;
         Ok(tasks)
     }
 
-    pub fn add_worktask_log(&self, timestamp: u64, level: &str, owner_task: &str, log_content: &str, log_event_type: &str) -> Result<()> {
+    pub fn add_worktask_log(
+        &self,
+        timestamp: u64,
+        level: &str,
+        owner_task: &str,
+        log_content: &str,
+        log_event_type: &str,
+    ) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         conn.execute(
             "INSERT INTO worktask_log (timestamp, level, owner_task, log_content, log_event_type) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -925,22 +968,26 @@ impl BackupTaskDb {
         Ok(())
     }
 
-    pub fn get_worktask_logs(&self, owner_task: &str) -> Result<Vec<(u64, String, String, String, String)>> {
+    pub fn get_worktask_logs(
+        &self,
+        owner_task: &str,
+    ) -> Result<Vec<(u64, String, String, String, String)>> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
             "SELECT timestamp, level, owner_task, log_content, log_event_type FROM worktask_log WHERE owner_task = ?"
         )?;
-        
-        let logs = stmt.query_map(params![owner_task], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        })?
-        .collect::<SqlResult<Vec<(u64, String, String, String, String)>>>()?;
+
+        let logs = stmt
+            .query_map(params![owner_task], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })?
+            .collect::<SqlResult<Vec<(u64, String, String, String, String)>>>()?;
 
         Ok(logs)
     }
@@ -984,11 +1031,11 @@ impl BackupTaskDb {
     // pub fn load_restore_items_by_task(&self, owner_taskid: &str,state: &BackupItemState) -> Result<Vec<BackupChunkItem>> {
     //     let conn = Connection::open(&self.db_path)?;
     //     let mut stmt = conn.prepare(
-    //         "SELECT item_id, item_type, chunk_id, quick_hash, state, size, 
+    //         "SELECT item_id, item_type, chunk_id, quick_hash, state, size,
     //                 last_modify_time, create_time, progress, diff_info
     //          FROM restore_items WHERE owner_taskid = ? AND state = ?"
     //     )?;
-        
+
     //     let items = stmt.query_map(params![owner_taskid, state], |row| {
     //         Ok(BackupChunkItem {
     //             item_id: row.get(0)?,
@@ -1013,7 +1060,7 @@ impl BackupTaskDb {
     //     info!("taskdb.update_restore_item: {} {} {:?}", owner_taskid, item.item_id, item.state);
     //     let conn = Connection::open(&self.db_path)?;
     //     let rows_affected = conn.execute(
-    //         "UPDATE restore_items SET 
+    //         "UPDATE restore_items SET
     //             item_type = ?1,
     //             chunk_id = ?2,
     //             quick_hash = ?3,
@@ -1042,21 +1089,28 @@ impl BackupTaskDb {
     //     Ok(())
     // }
 
-    pub fn update_restore_item_state(&self, owner_taskid: &str, item_id: &str, state: BackupItemState) -> Result<()> {
-        info!("taskdb.update_restore_item_state: {} {} {:?}", owner_taskid, item_id, state);
+    pub fn update_restore_item_state(
+        &self,
+        owner_taskid: &str,
+        item_id: &str,
+        state: BackupItemState,
+    ) -> Result<()> {
+        info!(
+            "taskdb.update_restore_item_state: {} {} {:?}",
+            owner_taskid, item_id, state
+        );
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE restore_items SET state = ?1 
             WHERE owner_taskid = ?2 AND item_id = ?3",
-            params![
-                state,
-                owner_taskid,
-                item_id,
-            ],
+            params![state, owner_taskid, item_id,],
         )?;
 
         if rows_affected == 0 {
-            return Err(BackupDbError::NotFound(format!("{}/{}", owner_taskid, item_id)));
+            return Err(BackupDbError::NotFound(format!(
+                "{}/{}",
+                owner_taskid, item_id
+            )));
         }
 
         Ok(())
@@ -1065,12 +1119,12 @@ impl BackupTaskDb {
     // pub fn load_wait_transfer_restore_items(&self, owner_taskid: &str) -> Result<Vec<BackupChunkItem>> {
     //     let conn = Connection::open(&self.db_path)?;
     //     let mut stmt = conn.prepare(
-    //         "SELECT item_id, item_type, chunk_id, quick_hash, size, 
+    //         "SELECT item_id, item_type, chunk_id, quick_hash, size,
     //                 last_modify_time, create_time, progress, diff_info
-    //          FROM restore_items 
+    //          FROM restore_items
     //          WHERE owner_taskid = ? AND state = ?"
     //     )?;
-        
+
     //     let items = stmt.query_map(
     //         params![
     //             owner_taskid,
@@ -1101,8 +1155,8 @@ impl BackupTaskDb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::path::Path;
+    use tempfile::tempdir;
 
     fn setup_test_db() -> (BackupTaskDb, String) {
         let db_path = "/tmp/test.db".to_string();
@@ -1114,7 +1168,7 @@ mod tests {
     #[test]
     fn test_create_and_load_task() {
         let (db, _) = setup_test_db();
-        
+
         // Create a test task
         let task = WorkTask::new("test_plan", "test_checkpoint", TaskType::Backup);
         db.create_task(&task).unwrap();
@@ -1130,7 +1184,7 @@ mod tests {
     #[test]
     fn test_update_task() {
         let (db, _) = setup_test_db();
-        
+
         // Create initial task
         let mut task = WorkTask::new("test_plan", "test_checkpoint", TaskType::Backup);
         db.create_task(&task).unwrap();
@@ -1149,7 +1203,7 @@ mod tests {
     #[test]
     fn test_task_state_transitions() {
         let (db, _) = setup_test_db();
-        
+
         // Create task
         let task = WorkTask::new("test_plan", "test_checkpoint", TaskType::Backup);
         let task_id = task.taskid.clone();
@@ -1175,11 +1229,17 @@ mod tests {
     #[test]
     fn test_checkpoint_operations() {
         let (db, _) = setup_test_db();
-        
-        let checkpoint = BackupCheckpoint::new(CHECKPOINT_TYPE_CHUNK.to_string(), "test_checkpoint".to_string(), None, None);
+
+        let checkpoint = BackupCheckpoint::new(
+            CHECKPOINT_TYPE_CHUNK.to_string(),
+            "test_checkpoint".to_string(),
+            None,
+            None,
+        );
         let checkpoint_id = uuid::Uuid::new_v4().to_string();
         // Create checkpoint
-        let local_checkpoint = LocalBackupCheckpoint::new(checkpoint, checkpoint_id.clone(), "test_plan".to_string());
+        let local_checkpoint =
+            LocalBackupCheckpoint::new(checkpoint, checkpoint_id.clone(), "test_plan".to_string());
         db.create_checkpoint(&local_checkpoint).unwrap();
 
         // Load and verify
@@ -1188,7 +1248,8 @@ mod tests {
         assert_eq!(loaded_cp.owner_plan_id, "test_plan");
 
         // Update checkpoint
-        db.update_checkpoint_state(&checkpoint_id, CheckPointState::Prepared).unwrap();
+        db.update_checkpoint_state(&checkpoint_id, CheckPointState::Prepared)
+            .unwrap();
 
         // Verify update
         let loaded_cp = db.load_checkpoint_by_id(&checkpoint_id).unwrap();
@@ -1198,7 +1259,7 @@ mod tests {
     #[test]
     fn test_error_handling() {
         let (db, _) = setup_test_db();
-        
+
         // Test loading non-existent task
         let result = db.load_task_by_id("non_existent_task");
         assert!(matches!(result, Err(BackupDbError::NotFound(_))));
@@ -1208,5 +1269,3 @@ mod tests {
         assert!(matches!(result, Err(BackupDbError::InvalidCheckpointId(_))));
     }
 }
-
-
