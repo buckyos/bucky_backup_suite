@@ -24,7 +24,7 @@ def strip_and_copy_rust_file(rust_target_dir, name, dest, need_dir=False):
     os.system(f"strip {os.path.join(dest, name)}")
 
 def copy_web_apps(src, target):
-    dist_dir = os.path.join(src_dir, src, "dist")
+    dist_dir = os.path.join(src_dir, src, "build")
     os.makedirs(target, exist_ok=True)
     print(f'copying vite build {dist_dir} to {target}')
     shutil.rmtree(target)
@@ -36,7 +36,7 @@ def copy_files(rust_target_dir):
     # code to copy files
     bin = "backup_suite"
     strip_and_copy_rust_file(rust_target_dir, bin, root_bin_dir, True)
-    copy_web_apps("webui/src", os.path.join(root_bin_dir, "backup_suite","webui"))
+    copy_web_apps("webui", os.path.join(root_bin_dir, "backup_suite","webui"))
 
     print("Files copied successfully!")
 

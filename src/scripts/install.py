@@ -22,12 +22,12 @@ def install():
         print(f'copying rootfs to {install_root_dir}')
         shutil.copytree(os.path.join(src_dir, "rootfs"), install_root_dir)
     else:
-        bin_dir = os.path.join(install_root_dir, "bin")
+        bin_dir = os.path.join(install_root_dir, "bin/backup_suite")
         print(f'updating files in {bin_dir}')
         if os.path.exists(bin_dir):
             shutil.rmtree(bin_dir)
         #just update bin
-        shutil.copytree(os.path.join(src_dir, "rootfs/bin"), bin_dir)
+        shutil.copytree(os.path.join(src_dir, "rootfs/bin/backup_suite"), bin_dir)
 
 if __name__ == "__main__":
     install()
