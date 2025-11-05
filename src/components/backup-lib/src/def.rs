@@ -1,8 +1,7 @@
 use ndn_lib::ChunkId;
-use thiserror::Error;
+use rusqlite::types::{FromSql, ToSql, ValueRef};
 use std::ops::{Deref, DerefMut};
-use rusqlite::types::{ToSql, FromSql, ValueRef};
-
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum BuckyBackupError {
@@ -23,7 +22,7 @@ pub enum BuckyBackupError {
 pub type BackupResult<T> = std::result::Result<T, BuckyBackupError>;
 
 //use tokio::fs::AsyncReadExt;
-#[derive(Debug,Clone,PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BackupItemState {
     New,
     Done,
@@ -58,22 +57,20 @@ impl FromSql for BackupItemState {
     }
 }
 
-
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub struct BackupChunkItem {
-    pub item_id: String,//对source来说，可以用item_id来唯一的标示一个待备份的item,一般是文件的相对路径
-    pub chunk_id:ChunkId,
-    pub local_chunk_id:Option<ChunkId>,//original chunk id before crypto
-    pub state:BackupItemState,
-    pub size:u64,
-    pub last_update_time:u64,
+    pub item_id: String, //对source来说，可以用item_id来唯一的标示一个待备份的item,一般是文件的相对路径
+    pub chunk_id: ChunkId,
+    pub local_chunk_id: Option<ChunkId>, //original chunk id before crypto
+    pub state: BackupItemState,
+    pub size: u64,
+    pub last_update_time: u64,
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CheckPointState {
     New,
-    Prepared,//local ok
+    Prepared, //local ok
     WaitTrans,
     Working,
     //Evaluated,//所有的backup item都计算了hash和diff(如有需要)
@@ -120,24 +117,28 @@ impl FromSql for CheckPointState {
 
 pub const CHECKPOINT_TYPE_CHUNK: &str = "c2c";
 
-
 //remote checkpoint,which will be sent to backup service and stored in backup service
 pub struct BackupCheckpoint {
     pub checkpoint_type: String,
     pub checkpoint_name: String,
     pub prev_checkpoint_id: Option<String>,
     pub state: CheckPointState,
-    pub extra_info:String,
+    pub extra_info: String,
     pub create_time: u64,
     pub last_update_time: u64,
-    
+
     pub item_list_id: String,
     pub item_count: u64,
     pub total_size: u64,
 }
 
 impl BackupCheckpoint {
-    pub fn new(checkpoint_type: String, checkpoint_name: String, prev_checkpoint_id: Option<String>, items:Option<&Vec<BackupChunkItem>>) -> Self {
+    pub fn new(
+        checkpoint_type: String,
+        checkpoint_name: String,
+        prev_checkpoint_id: Option<String>,
+        items: Option<&Vec<BackupChunkItem>>,
+    ) -> Self {
         let now = buckyos_kit::buckyos_get_unix_timestamp();
         if items.is_some() {
             let items = items.unwrap();
@@ -163,7 +164,7 @@ impl BackupCheckpoint {
                 state: CheckPointState::New,
                 extra_info: String::new(),
                 create_time: now,
-                last_update_time:now,
+                last_update_time: now,
                 item_list_id: String::new(),
                 item_count: 0,
                 total_size: 0,
@@ -183,14 +184,13 @@ pub enum RemoteBackupCheckPointItemStatus {
     Complete(Vec<String>),
 }
 
-
 pub struct LocalBackupCheckpoint {
-    pub checkpoint:BackupCheckpoint,
-    pub checkpoint_id:String,
+    pub checkpoint: BackupCheckpoint,
+    pub checkpoint_id: String,
     pub owner_plan_id: String,
-    pub crpyto_config:String,
-    pub crypto_key:String,
-    pub org_item_list_id:String,
+    pub crpyto_config: String,
+    pub crypto_key: String,
+    pub org_item_list_id: String,
 }
 
 impl Deref for LocalBackupCheckpoint {
@@ -219,4 +219,3 @@ impl LocalBackupCheckpoint {
         }
     }
 }
-

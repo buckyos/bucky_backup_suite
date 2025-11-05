@@ -1,9 +1,7 @@
-mod provider;
-mod local_chunk_provider;
 mod def;
-
+mod local_chunk_provider;
+mod provider;
 
 pub use def::*;
-pub use provider::*;
 pub use local_chunk_provider::*;
-
+pub use provider::*;

@@ -1,30 +1,30 @@
 #![allow(unused)]
+use async_channel::{bounded, Receiver, Sender};
+use ignore::WalkBuilder;
+use rusqlite::{Connection, OptionalExtension, Result as SqliteResult};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use rusqlite::{Connection, Result as SqliteResult, OptionalExtension};
-use sha2::{Sha256, Digest};
-use async_channel::{bounded, Sender, Receiver};
-use ignore::WalkBuilder;
 use tokio::io::AsyncReadExt;
-use serde::{Serialize, Deserialize};
 
 // 文件扫描状态
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum ScanStatus {
-    Pending,           // 等待扫描
-    SmallFileScanned, // 小文件已完成扫描
-    LargeFilePending, // 大文件等待处理
-    DiffPending,      // 需要进行diff比较
-    Completed,        // 扫描完成
-    Failed,           // 扫描失败
+    Pending,            // 等待扫描
+    SmallFileScanned,   // 小文件已完成扫描
+    LargeFilePending,   // 大文件等待处理
+    DiffPending,        // 需要进行diff比较
+    Completed,          // 扫描完成
+    Failed,             // 扫描失败
     FirstPassCompleted, // 第一遍扫描完成
 }
 
 // 添加新的元信息结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MetaInfo {
-    mode: u32,      // 文件权限模式 (Linux permissions)
+    mode: u32,                   // 文件权限模式 (Linux permissions)
     metadata: serde_json::Value, // 额外的metadata以JSON格式存储
 }
 
@@ -45,7 +45,7 @@ struct FileInfo {
     hash: Option<String>,
     status: ScanStatus,
     last_hash: Option<String>, // 上次扫描的hash值
-    meta_info: MetaInfo,  // 添加元信息字段
+    meta_info: MetaInfo,       // 添加元信息字段
 }
 
 #[derive(Debug)]
@@ -62,8 +62,8 @@ pub struct ScanConfig {
     ignore_patterns: Vec<String>,
     custom_ignore_file: Option<PathBuf>,
     respect_gitignore: bool,
-    min_file_size: u64,    // 小于此大小的文件直接忽略
-    max_file_size: u64,    // 大于此大小的文件进入大文件队列
+    min_file_size: u64, // 小于此大小的文件直接忽略
+    max_file_size: u64, // 大于此大小的文件进入大文件队列
     root_dir: Option<PathBuf>,
 }
 
@@ -79,7 +79,7 @@ impl Default for ScanConfig {
             ],
             custom_ignore_file: None,
             respect_gitignore: true,
-            min_file_size: 1024,        // 1KB
+            min_file_size: 1024,              // 1KB
             max_file_size: 100 * 1024 * 1024, // 100MB
             root_dir: None,
         }
@@ -153,18 +153,18 @@ impl DirSource {
     // 第一遍扫描:快速扫描所有文件和目录
     async fn first_pass_scan(&self, dir: &Path) -> Result<DirInfo, Box<dyn Error>> {
         let mut walker = WalkBuilder::new(dir);
-        
+
         // 配置忽略规则
         if self.config.respect_gitignore {
             walker.git_ignore(true);
             walker.git_global(true);
         }
-        
+
         // 添加自定义忽略规则
         for pattern in &self.config.ignore_patterns {
             walker.add_ignore(pattern);
         }
-        
+
         // 如果有自定义忽略文件
         if let Some(ignore_file) = &self.config.custom_ignore_file {
             walker.add_custom_ignore_filename(ignore_file);
@@ -182,7 +182,7 @@ impl DirSource {
         for entry in walker.build() {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 dir_info.subdirs_count += 1;
                 // 创建目录信息
@@ -197,7 +197,7 @@ impl DirSource {
             } else {
                 let metadata = fs::metadata(&path).await?;
                 let size = metadata.len();
-                
+
                 // 检查文件大小是否在处理范围内
                 if size < self.config.min_file_size {
                     continue;
@@ -214,7 +214,7 @@ impl DirSource {
 
                 // 检查是否存在上次的hash
                 let last_hash = self.get_last_hash(&path)?;
-                
+
                 let file_info = FileInfo {
                     path: path.to_path_buf(),
                     size,
@@ -240,7 +240,7 @@ impl DirSource {
         // 更新目录状态为已完成第一遍扫描
         dir_info.status = ScanStatus::FirstPassCompleted;
         self.save_dir_info(&dir_info)?;
-        
+
         Ok(dir_info)
     }
 
@@ -270,36 +270,40 @@ impl DirSource {
     pub async fn start(&mut self) -> Result<(), Box<dyn Error>> {
         // 初始化
         self.init().await?;
-        
+
         // 第一遍扫描
         self.first_pass_scan(Path::new(&self.path)).await?;
-        
+
         // 第二遍扫描
         self.second_pass_scan().await?;
-        
+
         // 第三遍扫描
         self.third_pass_scan().await?;
-        
+
         Ok(())
     }
 
     // 处理小文件
     async fn process_small_file(&self, file_info: &FileInfo) -> Result<(), Box<dyn Error>> {
         let mut hasher = Sha256::new();
-        
+
         // 只将 mode 添加到哈希计算中
         hasher.update(&file_info.meta_info.mode.to_le_bytes());
-        
+
         // 计算文件内容的哈希
         let content_hash = self.calculate_file_hash(&file_info.path).await?;
         hasher.update(content_hash.as_bytes());
-        
+
         let final_hash = format!("{:x}", hasher.finalize());
-        
+
         // 检查是否需要diff
         if let Some(last_hash) = &file_info.last_hash {
             if last_hash != &final_hash {
-                self.update_file_status(&file_info.path, ScanStatus::DiffPending, Some(final_hash))?;
+                self.update_file_status(
+                    &file_info.path,
+                    ScanStatus::DiffPending,
+                    Some(final_hash),
+                )?;
                 return Ok(());
             }
         }
@@ -352,12 +356,11 @@ impl DirSource {
         if let Some(conn) = &self.db_conn {
             let mut stmt = conn.prepare(
                 "SELECT status, total_size, files_count, subdirs_count 
-                FROM directories WHERE path = ?1"
+                FROM directories WHERE path = ?1",
             )?;
-            
-            let dir_info = stmt.query_row(
-                [path.to_string_lossy().to_string()],
-                |row| {
+
+            let dir_info = stmt
+                .query_row([path.to_string_lossy().to_string()], |row| {
                     Ok(DirInfo {
                         path: path.to_path_buf(),
                         status: serde_json::from_str(&row.get::<_, String>(0)?).unwrap(),
@@ -365,8 +368,8 @@ impl DirSource {
                         files_count: row.get(2)?,
                         subdirs_count: row.get(3)?,
                     })
-                },
-            ).optional()?;
+                })
+                .optional()?;
 
             Ok(dir_info)
         } else {
@@ -379,7 +382,7 @@ impl DirSource {
         let mut file = tokio::fs::File::open(path).await?;
         let mut hasher = Sha256::new();
         let mut buffer = [0; 8192]; // 8KB buffer
-        
+
         loop {
             let n = file.read(&mut buffer).await?;
             if n == 0 {
@@ -387,7 +390,7 @@ impl DirSource {
             }
             hasher.update(&buffer[..n]);
         }
-        
+
         let result = hasher.finalize();
         Ok(format!("{:x}", result))
     }
@@ -417,10 +420,9 @@ impl DirSource {
     fn get_files_by_status(&self, status: ScanStatus) -> Result<Vec<FileInfo>, Box<dyn Error>> {
         let mut files = Vec::new();
         if let Some(conn) = &self.db_conn {
-            let mut stmt = conn.prepare(
-                "SELECT path, size, hash, last_hash FROM files WHERE status = ?1"
-            )?;
-            
+            let mut stmt =
+                conn.prepare("SELECT path, size, hash, last_hash FROM files WHERE status = ?1")?;
+
             let rows = stmt.query_map([format!("{:?}", status)], |row| {
                 Ok(FileInfo {
                     path: PathBuf::from(row.get::<_, String>(0)?),
@@ -444,10 +446,10 @@ impl DirSource {
 
     // 更新文件状态
     fn update_file_status(
-        &self, 
-        path: &Path, 
+        &self,
+        path: &Path,
         status: ScanStatus,
-        hash: Option<String>
+        hash: Option<String>,
     ) -> Result<(), Box<dyn Error>> {
         if let Some(conn) = &self.db_conn {
             conn.execute(
@@ -465,11 +467,13 @@ impl DirSource {
     // 获取文件的上次哈希值
     fn get_last_hash(&self, path: &Path) -> Result<Option<String>, Box<dyn Error>> {
         if let Some(conn) = &self.db_conn {
-            let hash = conn.query_row(
-                "SELECT hash FROM files WHERE path = ?1",
-                [path.to_string_lossy().to_string()],
-                |row| row.get(0)
-            ).optional()?;
+            let hash = conn
+                .query_row(
+                    "SELECT hash FROM files WHERE path = ?1",
+                    [path.to_string_lossy().to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
             Ok(hash)
         } else {
             Ok(None)
@@ -478,7 +482,7 @@ impl DirSource {
 
     // fn process_symlink(&self, link_path: &Path) -> Result<(), Error> {
     //     let target = fs::read_link(link_path)?;
-        
+
     //     // 如果目标路径在根目录下
     //     if self.is_under_root_dir(&target) {
     //         // 存储相对路径,这会影响目录的hash值
@@ -498,20 +502,19 @@ impl DirSource {
             false
         }
     }
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs::File;
     use std::io::Write;
+    use tempfile::TempDir;
 
     // 创建测试目录结构的辅助函数
     fn create_test_directory() -> Result<TempDir, Box<dyn Error>> {
         let temp_dir = TempDir::new()?;
-        
+
         // 创建一些测试文件
         let small_file_path = temp_dir.path().join("small.txt");
         let mut small_file = File::create(small_file_path)?;
@@ -544,21 +547,18 @@ mod tests {
     #[tokio::test]
     async fn test_first_pass_scan() -> Result<(), Box<dyn Error>> {
         let temp_dir = create_test_directory()?;
-        let mut dir_source = DirSource::new(
-            temp_dir.path().to_string_lossy().to_string(),
-            None
-        );
-        
+        let mut dir_source = DirSource::new(temp_dir.path().to_string_lossy().to_string(), None);
+
         // 初始化
         dir_source.init().await?;
-        
+
         // 执行第一遍扫描
         let dir_info = dir_source.first_pass_scan(temp_dir.path()).await?;
-        
+
         // 验证扫描结果
         assert_eq!(dir_info.status, ScanStatus::FirstPassCompleted);
         assert_eq!(dir_info.subdirs_count, 1); // 一个子目录
-        assert_eq!(dir_info.files_count, 3);   // 三个文件
+        assert_eq!(dir_info.files_count, 3); // 三个文件
         assert!(dir_info.total_size > 0);
 
         Ok(())
@@ -567,29 +567,23 @@ mod tests {
     #[tokio::test]
     async fn test_file_hash_calculation() -> Result<(), Box<dyn Error>> {
         let temp_dir = create_test_directory()?;
-        let dir_source = DirSource::new(
-            temp_dir.path().to_string_lossy().to_string(),
-            None
-        );
+        let dir_source = DirSource::new(temp_dir.path().to_string_lossy().to_string(), None);
 
         // 计算小文件的哈希值
         let small_file_path = temp_dir.path().join("small.txt");
         let hash = dir_source.calculate_file_hash(&small_file_path).await?;
-        
+
         // 验证哈希值不为空且长度正确 (SHA-256 produces 64 character hex string)
         assert_eq!(hash.len(), 64);
-        
+
         Ok(())
     }
 
     #[tokio::test]
     async fn test_database_operations() -> Result<(), Box<dyn Error>> {
         let temp_dir = create_test_directory()?;
-        let mut dir_source = DirSource::new(
-            temp_dir.path().to_string_lossy().to_string(),
-            None
-        );
-        
+        let mut dir_source = DirSource::new(temp_dir.path().to_string_lossy().to_string(), None);
+
         // 初始化数据库
         dir_source.init().await?;
 
@@ -620,7 +614,7 @@ mod tests {
         dir_source.update_file_status(
             &test_file_path,
             ScanStatus::Completed,
-            Some(String::from("new_hash"))
+            Some(String::from("new_hash")),
         )?;
 
         // 验证更新后的状态

@@ -5,9 +5,9 @@ use crate::BackupChunkItem;
 use crate::BackupItemState;
 use crate::BackupResult;
 use crate::BuckyBackupError;
-use crate::CHECKPOINT_TYPE_CHUNK;
 use crate::CheckPointState;
 use crate::RemoteBackupCheckPointItemStatus;
+use crate::CHECKPOINT_TYPE_CHUNK;
 use async_trait::async_trait;
 use log::*;
 use ndn_lib::*;
@@ -39,9 +39,12 @@ pub struct LocalDirChunkProvider {
 impl LocalDirChunkProvider {
     pub async fn new(dir_path: String, named_mgr_id: String) -> BackupResult<Self> {
         info!("new local dir chunk provider, dir_path: {}", dir_path);
-        Ok(LocalDirChunkProvider { dir_path: PathBuf::from(dir_path), named_mgr_id, is_strict_mode: false })
+        Ok(LocalDirChunkProvider {
+            dir_path: PathBuf::from(dir_path),
+            named_mgr_id,
+            is_strict_mode: false,
+        })
     }
-
 }
 
 #[async_trait]
@@ -57,7 +60,7 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         Ok(result)
     }
 
-    fn is_support(&self, ability:&str)->bool {
+    fn is_support(&self, ability: &str) -> bool {
         ability == ABILITY_LOCAL
     }
 
@@ -69,8 +72,11 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         format!("file:///{}", self.dir_path.to_string_lossy())
     }
 
-
-    async fn prepare_items(&self, checkpoint_id: &str, callback: Option<Arc<Mutex<NdnProgressCallback>>>) -> BackupResult<(Vec<BackupChunkItem>, u64,bool)> {
+    async fn prepare_items(
+        &self,
+        checkpoint_id: &str,
+        callback: Option<Arc<Mutex<NdnProgressCallback>>>,
+    ) -> BackupResult<(Vec<BackupChunkItem>, u64, bool)> {
         let items = Arc::new(Mutex::new(Vec::<BackupChunkItem>::new()));
         let ndn_mgr_id = Some(self.named_mgr_id.as_str());
         let file_obj_template = FileObject::new("".to_string(), 0, "".to_string());
@@ -85,55 +91,79 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         let items_clone = items.clone();
         let base_dir_path_clone = base_dir_path.clone();
         let mut total_size = 0;
-        let ndn_callback: Option<Arc<Mutex<NdnProgressCallback>>> = Some(Arc::new(Mutex::new(Box::new(move |inner_path:String,action:NdnAction| {
-            let items_ref = items_clone.clone();
-            let base_dir_path = base_dir_path_clone.clone();
-            let callback_clone = callback.clone();
-            Box::pin(async move {
-                debug!("ndn_callback: {} {}", inner_path, action.to_string());
-                let now = buckyos_kit::buckyos_get_unix_timestamp();
-                match action {
-                    NdnAction::ChunkOK(chunk_id, chunk_size) => {
-                        //将inner_path转换为相对路径,路径看起来是 
-                        // dirA/fileA/start:end -> chunk_id (大文件)
-                        // dirA/fileB -> chunk_id (小文件)
-                        let relative_path = Path::new(&inner_path).strip_prefix(&base_dir_path);
-                        if relative_path.is_err() {
-                            return Err(NdnError::InvalidState(format!("relative path error: {}", inner_path)));
-                        }
-                        let relative_path = relative_path.unwrap().to_string_lossy().to_string();
-                        let backup_item = BackupChunkItem {
-                            item_id: relative_path,
-                            chunk_id: chunk_id,
-                            local_chunk_id: None,
-                            state: BackupItemState::New,
-                            size: chunk_size,
-                            last_update_time: now,
-                        };
+        let ndn_callback: Option<Arc<Mutex<NdnProgressCallback>>> = Some(Arc::new(Mutex::new(
+            Box::new(move |inner_path: String, action: NdnAction| {
+                let items_ref = items_clone.clone();
+                let base_dir_path = base_dir_path_clone.clone();
+                let callback_clone = callback.clone();
+                Box::pin(async move {
+                    debug!("ndn_callback: {} {}", inner_path, action.to_string());
+                    let now = buckyos_kit::buckyos_get_unix_timestamp();
+                    match action {
+                        NdnAction::ChunkOK(chunk_id, chunk_size) => {
+                            //将inner_path转换为相对路径,路径看起来是
+                            // dirA/fileA/start:end -> chunk_id (大文件)
+                            // dirA/fileB -> chunk_id (小文件)
+                            let relative_path = Path::new(&inner_path).strip_prefix(&base_dir_path);
+                            if relative_path.is_err() {
+                                return Err(NdnError::InvalidState(format!(
+                                    "relative path error: {}",
+                                    inner_path
+                                )));
+                            }
+                            let relative_path =
+                                relative_path.unwrap().to_string_lossy().to_string();
+                            let backup_item = BackupChunkItem {
+                                item_id: relative_path,
+                                chunk_id: chunk_id,
+                                local_chunk_id: None,
+                                state: BackupItemState::New,
+                                size: chunk_size,
+                                last_update_time: now,
+                            };
 
-                        items_ref.lock().await.push(backup_item);
-                        total_size += chunk_size;
-                        Ok(ProgressCallbackResult::Continue)
-                    },
-                    NdnAction::FileOK(file_id, file_size) => {
-                        if callback_clone.is_some() {
-                            let callback_clone = callback_clone.unwrap();
-                            let mut callback_clone = callback_clone.lock().await;
-                            let ret = callback_clone(inner_path, NdnAction::FileOK(file_id, file_size)).await?;
-                            drop(callback_clone);
-                            return Ok(ret);
+                            items_ref.lock().await.push(backup_item);
+                            total_size += chunk_size;
+                            Ok(ProgressCallbackResult::Continue)
                         }
-                        Ok(ProgressCallbackResult::Continue)
-                    },
-                    _ => {
-                        return Ok(ProgressCallbackResult::Continue);
+                        NdnAction::FileOK(file_id, file_size) => {
+                            if callback_clone.is_some() {
+                                let callback_clone = callback_clone.unwrap();
+                                let mut callback_clone = callback_clone.lock().await;
+                                let ret = callback_clone(
+                                    inner_path,
+                                    NdnAction::FileOK(file_id, file_size),
+                                )
+                                .await?;
+                                drop(callback_clone);
+                                return Ok(ret);
+                            }
+                            Ok(ProgressCallbackResult::Continue)
+                        }
+                        _ => {
+                            return Ok(ProgressCallbackResult::Continue);
+                        }
                     }
-                }
-    
-            }) as Pin<Box<dyn std::future::Future<Output = NdnResult<ProgressCallbackResult>> + Send + 'static>>
-        }))));
+                })
+                    as Pin<
+                        Box<
+                            dyn std::future::Future<Output = NdnResult<ProgressCallbackResult>>
+                                + Send
+                                + 'static,
+                        >,
+                    >
+            }),
+        )));
 
-        let ret = cacl_dir_object(ndn_mgr_id, &self.dir_path.as_path(), &file_obj_template, &check_mode,StoreMode::new_local(),ndn_callback).await;
+        let ret = cacl_dir_object(
+            ndn_mgr_id,
+            &self.dir_path.as_path(),
+            &file_obj_template,
+            &check_mode,
+            StoreMode::new_local(),
+            ndn_callback,
+        )
+        .await;
         if ret.is_err() {
             return Err(BuckyBackupError::Failed(ret.err().unwrap().to_string()));
         }
@@ -147,7 +177,6 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
             }
         };
         Ok((items_vec, total_size, true))
-
     }
 
     async fn open_item_chunk_reader(
@@ -156,12 +185,17 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         backup_item: &BackupChunkItem,
         offset: u64,
     ) -> BackupResult<ChunkReader> {
-        let reader = NamedDataMgr::open_chunk_reader(Some(&self.named_mgr_id.as_str()), &backup_item.chunk_id, offset, true)
-            .await
-            .map_err(|e| {
-                warn!("open_item_chunk_reader error:{}", e.to_string());
-                BuckyBackupError::TryLater(e.to_string())
-            })?;
+        let reader = NamedDataMgr::open_chunk_reader(
+            Some(&self.named_mgr_id.as_str()),
+            &backup_item.chunk_id,
+            offset,
+            true,
+        )
+        .await
+        .map_err(|e| {
+            warn!("open_item_chunk_reader error:{}", e.to_string());
+            BuckyBackupError::TryLater(e.to_string())
+        })?;
         Ok(Box::pin(reader.0))
     }
 
@@ -170,22 +204,30 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         chunk_id: &ChunkId,
         offset: u64,
     ) -> BackupResult<ChunkReader> {
-        let reader = NamedDataMgr::open_chunk_reader(Some(&self.named_mgr_id.as_str()), chunk_id, offset, true)
-            .await
-            .map_err(|e| {
-                warn!("open_chunk_reader error:{}", e.to_string());
-                BuckyBackupError::TryLater(e.to_string())
-            })?;
+        let reader = NamedDataMgr::open_chunk_reader(
+            Some(&self.named_mgr_id.as_str()),
+            chunk_id,
+            offset,
+            true,
+        )
+        .await
+        .map_err(|e| {
+            warn!("open_chunk_reader error:{}", e.to_string());
+            BuckyBackupError::TryLater(e.to_string())
+        })?;
         Ok(Box::pin(reader.0))
     }
 
     //for resotre
-    async fn add_checkpoint(&self, checkpoint: &BackupCheckpoint)->BackupResult<()> {
+    async fn add_checkpoint(&self, checkpoint: &BackupCheckpoint) -> BackupResult<()> {
         unimplemented!()
     }
 
-    
-    async fn init_for_restore(&self, restore_config: &RestoreConfig, checkpoint_id: &str) -> BackupResult<String> {
+    async fn init_for_restore(
+        &self,
+        restore_config: &RestoreConfig,
+        checkpoint_id: &str,
+    ) -> BackupResult<String> {
         unimplemented!()
     }
 
@@ -202,7 +244,7 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
 
 pub struct LocalChunkTargetProvider {
     pub dir_path: String,
-    pub named_mgr_id: String, 
+    pub named_mgr_id: String,
 }
 
 impl LocalChunkTargetProvider {
@@ -214,14 +256,30 @@ impl LocalChunkTargetProvider {
             let the_named_mgr = the_named_mgr.unwrap();
             let the_named_mgr = the_named_mgr.lock().await;
             if the_named_mgr.get_base_dir() != root_path {
-                return Err(BuckyBackupError::Failed(format!("named_mgr {} base_dir not match: {}", named_mgr_id, the_named_mgr.get_base_dir().to_string_lossy())));
+                return Err(BuckyBackupError::Failed(format!(
+                    "named_mgr {} base_dir not match: {}",
+                    named_mgr_id,
+                    the_named_mgr.get_base_dir().to_string_lossy()
+                )));
             }
         } else {
             drop(mgr_map);
-            let named_mgr = NamedDataMgr::get_named_data_mgr_by_path(root_path).await
-                .map_err(|e| BuckyBackupError::NeedProcess(format!("get named data mgr by path error: {}", e.to_string())))?;
-            NamedDataMgr::set_mgr_by_id(Some(&named_mgr_id.as_str()), named_mgr).await
-                .map_err(|e| BuckyBackupError::NeedProcess(format!("set named data mgr by id error: {}", e.to_string())))?;
+            let named_mgr = NamedDataMgr::get_named_data_mgr_by_path(root_path)
+                .await
+                .map_err(|e| {
+                    BuckyBackupError::NeedProcess(format!(
+                        "get named data mgr by path error: {}",
+                        e.to_string()
+                    ))
+                })?;
+            NamedDataMgr::set_mgr_by_id(Some(&named_mgr_id.as_str()), named_mgr)
+                .await
+                .map_err(|e| {
+                    BuckyBackupError::NeedProcess(format!(
+                        "set named data mgr by id error: {}",
+                        e.to_string()
+                    ))
+                })?;
         }
 
         //create named data mgr ,if exists, return error.
@@ -255,17 +313,24 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         Ok(())
     }
 
-    async fn alloc_checkpoint(&self, checkpoint: &BackupCheckpoint)->BackupResult<()> {
+    async fn alloc_checkpoint(&self, checkpoint: &BackupCheckpoint) -> BackupResult<()> {
         //check free space
         //if free space is not enough, return error
         return Ok(());
     }
 
-    async fn add_backup_item(&self, checkpoint_id: &str, backup_items: &Vec<BackupChunkItem>)->BackupResult<()> {
+    async fn add_backup_item(
+        &self,
+        checkpoint_id: &str,
+        backup_items: &Vec<BackupChunkItem>,
+    ) -> BackupResult<()> {
         return Ok(());
     }
 
-    async fn query_check_point_state(&self, checkpoint_id: &str)->BackupResult<(BackupCheckpoint,RemoteBackupCheckPointItemStatus)> {
+    async fn query_check_point_state(
+        &self,
+        checkpoint_id: &str,
+    ) -> BackupResult<(BackupCheckpoint, RemoteBackupCheckPointItemStatus)> {
         //return Ok((BackupCheckpoint::new(), RemoteBackupCheckPointItemStatus::NotSupport));
         let checkpoint = BackupCheckpoint {
             checkpoint_type: CHECKPOINT_TYPE_CHUNK.to_string(),
@@ -282,7 +347,7 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         Ok((checkpoint, RemoteBackupCheckPointItemStatus::NotSupport))
     }
 
-    async fn remove_checkpoint(&self, checkpoint_id: &str)->BackupResult<()> {
+    async fn remove_checkpoint(&self, checkpoint_id: &str) -> BackupResult<()> {
         unimplemented!()
     }
 
@@ -292,17 +357,21 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         chunk_id: &ChunkId,
         chunk_size: u64,
     ) -> BackupResult<(ChunkWriter, u64)> {
-        let (writer, _progress) = NamedDataMgr::open_chunk_writer(Some(&self.named_mgr_id.as_str()), chunk_id, 0, 0)
-            .await
-            .map_err(|e| match e {
-                NdnError::AlreadyExists(msg) => BuckyBackupError::AlreadyDone(msg),
-                _ => BuckyBackupError::Failed(e.to_string()),
-            })?;
+        let (writer, _progress) =
+            NamedDataMgr::open_chunk_writer(Some(&self.named_mgr_id.as_str()), chunk_id, 0, 0)
+                .await
+                .map_err(|e| match e {
+                    NdnError::AlreadyExists(msg) => BuckyBackupError::AlreadyDone(msg),
+                    _ => BuckyBackupError::Failed(e.to_string()),
+                })?;
         Ok((writer, 0))
-        
     }
 
-    async fn complete_chunk_writer(&self, checkpoint_id: &str, chunk_id: &ChunkId) -> BackupResult<()> {
+    async fn complete_chunk_writer(
+        &self,
+        checkpoint_id: &str,
+        chunk_id: &ChunkId,
+    ) -> BackupResult<()> {
         NamedDataMgr::complete_chunk_writer(Some(&self.named_mgr_id.as_str()), chunk_id)
             .await
             .map_err(|e| {
@@ -316,13 +385,18 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         chunk_id: &ChunkId,
         offset: u64,
     ) -> BackupResult<ChunkReader> {
-        let reader = NamedDataMgr::open_chunk_reader(Some(&self.named_mgr_id.as_str()), chunk_id, offset, false)
-            .await
-            .map_err(|e| {
-                warn!("open_chunk_reader_for_restore error:{}", e.to_string());
-                BuckyBackupError::TryLater(e.to_string())
-            })?;
-        
+        let reader = NamedDataMgr::open_chunk_reader(
+            Some(&self.named_mgr_id.as_str()),
+            chunk_id,
+            offset,
+            false,
+        )
+        .await
+        .map_err(|e| {
+            warn!("open_chunk_reader_for_restore error:{}", e.to_string());
+            BuckyBackupError::TryLater(e.to_string())
+        })?;
+
         Ok(Box::pin(reader.0))
     }
 }
