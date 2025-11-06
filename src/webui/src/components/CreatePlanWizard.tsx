@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import {
     BackupPlanInfo,
+    BackupPlanType,
     BackupTargetInfo,
     DirectoryNode,
     DirectoryPurpose,
@@ -324,7 +325,7 @@ export function CreatePlanWizard({
                 plan_id: "", // to be assigned by backend
                 title: planData.name,
                 description: planData.description,
-                type_str: "",
+                type_str: BackupPlanType.C2C,
                 last_checkpoint_index: -1,
                 source_type: SourceType.DIRECTORY,
                 source: planData.directories[0],

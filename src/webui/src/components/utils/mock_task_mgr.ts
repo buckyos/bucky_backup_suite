@@ -2,6 +2,7 @@
 import {
     BackupLog,
     BackupPlanInfo,
+    BackupPlanType,
     BackupTargetInfo,
     BackupTaskManager,
     DirectoryNode,
@@ -1118,7 +1119,7 @@ export class FakeTaskManager extends BackupTaskManager {
     }
 
     async createBackupPlan(params: {
-        type_str: string;
+        type_str: BackupPlanType;
         source_type: SourceType;
         source: string;
         target_type: TargetType;

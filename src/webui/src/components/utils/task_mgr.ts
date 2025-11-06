@@ -51,11 +51,15 @@ export enum SourceType {
     DIRECTORY = "DIRECTORY",
 }
 
+export enum BackupPlanType {
+    C2C = "c2c"
+}
+
 export interface BackupPlanInfo {
     plan_id: string;
     title: string;
     description: string;
-    type_str: string;
+    type_str: BackupPlanType;
     last_checkpoint_index: number;
     source_type: SourceType;
     source: string;
@@ -296,7 +300,7 @@ export class BackupTaskManager {
     }
 
     async createBackupPlan(params: {
-        type_str: string;
+        type_str: BackupPlanType;
         source_type: SourceType;
         source: string;
         target_type: TargetType;
@@ -735,18 +739,21 @@ export function callInInterval(
     interval: number,
     setIntervalHandle: (intervalHandle: number | null) => boolean
 ) {
-    let isStop = false;
-    let intervalHandle: number | undefined;
-    const tick = async () => {
-        if (isStop) return;
-        await callback();
-        if (intervalHandle) {
-            clearInterval(intervalHandle);
-        }
-        intervalHandle = window.setInterval(tick, interval);
-        isStop = setIntervalHandle(intervalHandle);
-    };
-    tick();
+    const timerDisable = true;
+    if (!timerDisable) {
+        let isStop = false;
+        let intervalHandle: number | undefined;
+        const tick = async () => {
+            if (isStop) return;
+            await callback();
+            if (intervalHandle) {
+                clearInterval(intervalHandle);
+            }
+            intervalHandle = window.setInterval(tick, interval);
+            isStop = setIntervalHandle(intervalHandle);
+        };
+        tick();
+    }
 }
 
 // Export a singleton instance
