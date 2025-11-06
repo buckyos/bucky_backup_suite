@@ -2,6 +2,7 @@
 .VSCodeCounter
 *.exe
 cargo.lock
+Cargo.lock
 target/
 src/scripts/__pycache__/
 src/webui/src/dist/index.d.ts
