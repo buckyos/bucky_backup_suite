@@ -4,23 +4,158 @@ use crate::task_db::{BackupPlanConfig, TaskState, TaskType};
 use ::kRPC::*;
 use async_trait::async_trait;
 use buckyos_backup_lib::RestoreConfig;
-use buckyos_kit::get_buckyos_system_bin_dir;
+use buckyos_kit::{get_buckyos_service_data_dir, get_buckyos_system_bin_dir};
 use cyfs_gateway_lib::*;
 use cyfs_warp::*;
 use log::*;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fs;
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::result::Result;
+use std::sync::Arc;
+use tokio::sync::Mutex as AsyncMutex;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BackupTargetRecord {
+    target_id: String,
+    target_type: String,
+    url: String,
+    name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default = "default_target_state")]
+    state: String,
+    #[serde(default)]
+    used: u64,
+    #[serde(default)]
+    total: u64,
+    #[serde(default)]
+    last_error: String,
+    #[serde(default)]
+    config: Option<Value>,
+}
+
+fn default_target_state() -> String {
+    "UNKNOWN".to_string()
+}
+
+impl BackupTargetRecord {
+    fn new(
+        target_id: String,
+        target_type: &str,
+        url: &str,
+        name: &str,
+        description: Option<&str>,
+        config: Option<Value>,
+    ) -> Self {
+        Self {
+            target_id,
+            target_type: target_type.to_string(),
+            url: url.to_string(),
+            name: name.to_string(),
+            description: description.unwrap_or_default().to_string(),
+            state: default_target_state(),
+            used: 0,
+            total: 0,
+            last_error: String::new(),
+            config,
+        }
+    }
+
+    fn to_json_value(&self) -> Value {
+        let mut value = json!({
+            "target_id": self.target_id,
+            "target_type": self.target_type,
+            "url": self.url,
+            "name": self.name,
+            "description": self.description,
+            "state": self.state,
+            "used": self.used,
+            "total": self.total,
+            "last_error": self.last_error,
+        });
+        if let Some(cfg) = &self.config {
+            value["config"] = cfg.clone();
+        }
+        value
+    }
+}
 
 #[derive(Clone)]
-struct WebControlServer {}
+struct WebControlServer {
+    targets: Arc<AsyncMutex<HashMap<String, BackupTargetRecord>>>,
+    target_storage_path: Arc<PathBuf>,
+}
 
 impl WebControlServer {
     fn new() -> Self {
-        Self {}
+        let data_dir = get_buckyos_service_data_dir("backup_suite");
+        if let Err(e) = fs::create_dir_all(&data_dir) {
+            warn!("failed to ensure backup_suite data directory exists: {}", e);
+        }
+        let storage_path = data_dir.join("backup_targets.json");
+        let initial_targets = Self::load_targets_from_disk(&storage_path);
+        Self {
+            targets: Arc::new(AsyncMutex::new(initial_targets)),
+            target_storage_path: Arc::new(storage_path),
+        }
+    }
+
+    fn load_targets_from_disk(path: &Path) -> HashMap<String, BackupTargetRecord> {
+        if !path.exists() {
+            return HashMap::new();
+        }
+        match fs::read_to_string(path) {
+            Ok(content) => {
+                if content.trim().is_empty() {
+                    return HashMap::new();
+                }
+                match serde_json::from_str::<Vec<BackupTargetRecord>>(&content) {
+                    Ok(list) => list
+                        .into_iter()
+                        .map(|record| (record.target_id.clone(), record))
+                        .collect(),
+                    Err(err) => {
+                        warn!(
+                            "failed to parse stored backup targets from {}: {}",
+                            path.display(),
+                            err
+                        );
+                        HashMap::new()
+                    }
+                }
+            }
+            Err(err) => {
+                warn!(
+                    "failed to read stored backup targets from {}: {}",
+                    path.display(),
+                    err
+                );
+                HashMap::new()
+            }
+        }
+    }
+
+    fn persist_targets(
+        &self,
+        targets: &HashMap<String, BackupTargetRecord>,
+    ) -> Result<(), RPCErrors> {
+        let list: Vec<_> = targets.values().cloned().collect();
+        let serialized = serde_json::to_string_pretty(&list)
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+
+        if let Some(parent) = self.target_storage_path.as_ref().parent() {
+            fs::create_dir_all(parent).map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+        }
+
+        fs::write(self.target_storage_path.as_ref(), serialized)
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+        Ok(())
     }
 
     async fn create_backup_plan(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -112,6 +247,220 @@ impl WebControlServer {
         let mut result = plan.to_json_value();
         let is_running = engine.is_plan_have_running_backup_task(plan_id).await;
         result["is_running"] = json!(is_running);
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
+    }
+
+    async fn create_backup_target(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let target_type_value = req.params.get("target_type");
+        let target_url_value = req.params.get("url");
+        let name_value = req.params.get("name");
+
+        if target_type_value.is_none() || target_url_value.is_none() || name_value.is_none() {
+            return Err(RPCErrors::ParseRequestError(
+                "target_type, url, name are required".to_string(),
+            ));
+        }
+
+        let target_type = target_type_value.unwrap().as_str().ok_or_else(|| {
+            RPCErrors::ParseRequestError("target_type must be a string".to_string())
+        })?;
+        let target_url = target_url_value
+            .unwrap()
+            .as_str()
+            .ok_or_else(|| RPCErrors::ParseRequestError("url must be a string".to_string()))?;
+        let target_name = name_value
+            .unwrap()
+            .as_str()
+            .ok_or_else(|| RPCErrors::ParseRequestError("name must be a string".to_string()))?;
+
+        let description = req.params.get("description").and_then(|v| v.as_str());
+        let config_value = req.params.get("config").cloned();
+        let config = match config_value {
+            Some(Value::Null) | None => None,
+            Some(value) => Some(value),
+        };
+
+        let target_id = Uuid::new_v4().to_string();
+        let record = BackupTargetRecord::new(
+            target_id.clone(),
+            target_type,
+            target_url,
+            target_name,
+            description,
+            config,
+        );
+
+        let mut targets = self.targets.lock().await;
+        targets.insert(target_id, record.clone());
+        self.persist_targets(&targets)?;
+        drop(targets);
+
+        let result = record.to_json_value();
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
+    }
+
+    async fn list_backup_target(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let targets = self.targets.lock().await;
+        let target_ids: Vec<String> = targets.keys().cloned().collect();
+        drop(targets);
+
+        let result = json!({ "targets": target_ids });
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
+    }
+
+    async fn get_backup_target(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let target_id_value = req.params.get("target_id");
+        if target_id_value.is_none() {
+            return Err(RPCErrors::ParseRequestError(
+                "target_id is required".to_string(),
+            ));
+        }
+        let target_id = target_id_value.unwrap().as_str().ok_or_else(|| {
+            RPCErrors::ParseRequestError("target_id must be a string".to_string())
+        })?;
+
+        let targets = self.targets.lock().await;
+        let record = targets.get(target_id).ok_or_else(|| {
+            RPCErrors::ReasonError(format!("backup target {} not found", target_id))
+        })?;
+        let result = record.to_json_value();
+        drop(targets);
+
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
+    }
+
+    async fn update_backup_target(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let target_id_value = req.params.get("target_id");
+        if target_id_value.is_none() {
+            return Err(RPCErrors::ParseRequestError(
+                "target_id is required".to_string(),
+            ));
+        }
+        let target_id = target_id_value.unwrap().as_str().ok_or_else(|| {
+            RPCErrors::ParseRequestError("target_id must be a string".to_string())
+        })?;
+
+        let mut targets = self.targets.lock().await;
+        let record = targets.get_mut(target_id).ok_or_else(|| {
+            RPCErrors::ReasonError(format!("backup target {} not found", target_id))
+        })?;
+
+        if let Some(value) = req.params.get("target_type") {
+            if !value.is_null() {
+                let target_type = value.as_str().ok_or_else(|| {
+                    RPCErrors::ParseRequestError("target_type must be a string".to_string())
+                })?;
+                record.target_type = target_type.to_string();
+            }
+        }
+
+        if let Some(value) = req.params.get("url") {
+            if !value.is_null() {
+                let target_url = value.as_str().ok_or_else(|| {
+                    RPCErrors::ParseRequestError("url must be a string".to_string())
+                })?;
+                record.url = target_url.to_string();
+            }
+        }
+
+        if let Some(value) = req.params.get("name") {
+            if !value.is_null() {
+                let target_name = value.as_str().ok_or_else(|| {
+                    RPCErrors::ParseRequestError("name must be a string".to_string())
+                })?;
+                record.name = target_name.to_string();
+            }
+        }
+
+        if let Some(value) = req.params.get("description") {
+            if !value.is_null() {
+                let description = value.as_str().ok_or_else(|| {
+                    RPCErrors::ParseRequestError("description must be a string".to_string())
+                })?;
+                record.description = description.to_string();
+            }
+        }
+
+        if let Some(value) = req.params.get("state") {
+            if !value.is_null() {
+                let state = value.as_str().ok_or_else(|| {
+                    RPCErrors::ParseRequestError("state must be a string".to_string())
+                })?;
+                record.state = state.to_string();
+            }
+        }
+
+        if let Some(value) = req.params.get("used") {
+            if !value.is_null() {
+                let used = match value {
+                    Value::Number(num) => num.as_u64().ok_or_else(|| {
+                        RPCErrors::ParseRequestError(
+                            "used must be a non-negative integer".to_string(),
+                        )
+                    })?,
+                    Value::String(s) => s.parse::<u64>().map_err(|_| {
+                        RPCErrors::ParseRequestError(
+                            "used must be a non-negative integer".to_string(),
+                        )
+                    })?,
+                    _ => {
+                        return Err(RPCErrors::ParseRequestError(
+                            "used must be a non-negative integer".to_string(),
+                        ))
+                    }
+                };
+                record.used = used;
+            }
+        }
+
+        if let Some(value) = req.params.get("total") {
+            if !value.is_null() {
+                let total = match value {
+                    Value::Number(num) => num.as_u64().ok_or_else(|| {
+                        RPCErrors::ParseRequestError(
+                            "total must be a non-negative integer".to_string(),
+                        )
+                    })?,
+                    Value::String(s) => s.parse::<u64>().map_err(|_| {
+                        RPCErrors::ParseRequestError(
+                            "total must be a non-negative integer".to_string(),
+                        )
+                    })?,
+                    _ => {
+                        return Err(RPCErrors::ParseRequestError(
+                            "total must be a non-negative integer".to_string(),
+                        ))
+                    }
+                };
+                record.total = total;
+            }
+        }
+
+        if let Some(value) = req.params.get("last_error") {
+            if !value.is_null() {
+                let last_error = value.as_str().ok_or_else(|| {
+                    RPCErrors::ParseRequestError("last_error must be a string".to_string())
+                })?;
+                record.last_error = last_error.to_string();
+            }
+        }
+
+        if let Some(value) = req.params.get("config") {
+            if value.is_null() {
+                record.config = None;
+            } else {
+                record.config = Some(value.clone());
+            }
+        }
+
+        let updated_snapshot = record.to_json_value();
+        self.persist_targets(&targets)?;
+        drop(targets);
+
+        let result = json!({
+            "result": "success",
+            "target": updated_snapshot,
+        });
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
@@ -664,6 +1013,10 @@ impl InnerServiceHandler for WebControlServer {
             "create_backup_plan" => self.create_backup_plan(req).await,
             "list_backup_plan" => self.list_backup_plan(req).await,
             "get_backup_plan" => self.get_backup_plan(req).await,
+            "create_backup_target" => self.create_backup_target(req).await,
+            "list_backup_target" => self.list_backup_target(req).await,
+            "get_backup_target" => self.get_backup_target(req).await,
+            "update_backup_target" => self.update_backup_target(req).await,
             "create_backup_task" => self.create_backup_task(req).await,
             "create_restore_task" => self.create_restore_task(req).await,
             "get_task_info" => self.get_task_info(req).await,
