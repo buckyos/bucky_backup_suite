@@ -6,7 +6,9 @@ use log::*;
 use ndn_lib::ChunkId;
 use rusqlite::types::{FromSql, ToSql, ValueRef};
 use rusqlite::{params, Connection, Result as SqlResult};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::convert::TryFrom;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -83,6 +85,72 @@ impl BackupTarget {
             BackupTarget::Directory(url) => url.as_str(),
             BackupTarget::ChunkList(url) => url.as_str(),
         }
+    }
+}
+
+fn default_target_state() -> String {
+    "UNKNOWN".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupTargetRecord {
+    pub target_id: String,
+    pub target_type: String,
+    pub url: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_target_state")]
+    pub state: String,
+    #[serde(default)]
+    pub used: u64,
+    #[serde(default)]
+    pub total: u64,
+    #[serde(default)]
+    pub last_error: String,
+    #[serde(default)]
+    pub config: Option<Value>,
+}
+
+impl BackupTargetRecord {
+    pub fn new(
+        target_id: String,
+        target_type: &str,
+        url: &str,
+        name: &str,
+        description: Option<&str>,
+        config: Option<Value>,
+    ) -> Self {
+        Self {
+            target_id,
+            target_type: target_type.to_string(),
+            url: url.to_string(),
+            name: name.to_string(),
+            description: description.unwrap_or_default().to_string(),
+            state: default_target_state(),
+            used: 0,
+            total: 0,
+            last_error: String::new(),
+            config,
+        }
+    }
+
+    pub fn to_json_value(&self) -> Value {
+        let mut value = json!({
+            "target_id": self.target_id,
+            "target_type": self.target_type,
+            "url": self.url,
+            "name": self.name,
+            "description": self.description,
+            "state": self.state,
+            "used": self.used,
+            "total": self.total,
+            "last_error": self.last_error,
+        });
+        if let Some(cfg) = &self.config {
+            value["config"] = cfg.clone();
+        }
+        value
     }
 }
 
@@ -451,6 +519,22 @@ impl BackupTaskDb {
                 last_modify_time INTEGER NOT NULL,
                 create_time INTEGER NOT NULL,
                 PRIMARY KEY (item_id, owner_taskid)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS backup_targets (
+                target_id TEXT PRIMARY KEY,
+                target_type TEXT NOT NULL,
+                url TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                state TEXT NOT NULL DEFAULT 'UNKNOWN',
+                used INTEGER NOT NULL DEFAULT 0,
+                total INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                config TEXT
             )",
             [],
         )?;
@@ -987,6 +1071,199 @@ impl BackupTaskDb {
             .collect::<SqlResult<Vec<BackupPlanConfig>>>()?;
 
         Ok(plans)
+    }
+
+    pub fn create_backup_target(&self, target: &BackupTargetRecord) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        let used = i64::try_from(target.used).map_err(|_| {
+            BackupDbError::DataFormatError("target.used exceeds i64 range".to_string())
+        })?;
+        let total = i64::try_from(target.total).map_err(|_| {
+            BackupDbError::DataFormatError("target.total exceeds i64 range".to_string())
+        })?;
+        let config_str = match &target.config {
+            Some(value) => Some(
+                serde_json::to_string(value)
+                    .map_err(|e| BackupDbError::DataFormatError(e.to_string()))?,
+            ),
+            None => None,
+        };
+
+        conn.execute(
+            "INSERT INTO backup_targets (
+                target_id,
+                target_type,
+                url,
+                name,
+                description,
+                state,
+                used,
+                total,
+                last_error,
+                config
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                target.target_id,
+                target.target_type,
+                target.url,
+                target.name,
+                target.description,
+                target.state,
+                used,
+                total,
+                target.last_error,
+                config_str,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_backup_target_ids(&self) -> Result<Vec<String>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt =
+            conn.prepare("SELECT target_id FROM backup_targets ORDER BY name COLLATE NOCASE")?;
+        let targets = stmt
+            .query_map([], |row| Ok(row.get(0)?))?
+            .collect::<SqlResult<Vec<String>>>()?;
+        Ok(targets)
+    }
+
+    pub fn get_backup_target(&self, target_id: &str) -> Result<BackupTargetRecord> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT
+                target_id,
+                target_type,
+                url,
+                name,
+                description,
+                state,
+                used,
+                total,
+                last_error,
+                config
+            FROM backup_targets WHERE target_id = ?",
+        )?;
+
+        let row = stmt
+            .query_row(params![target_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                ))
+            })
+            .map_err(|err| match err {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    BackupDbError::NotFound(target_id.to_string())
+                }
+                _ => BackupDbError::DatabaseError(err),
+            })?;
+
+        let (
+            target_id,
+            target_type,
+            url,
+            name,
+            description,
+            state,
+            used_raw,
+            total_raw,
+            last_error,
+            config_raw,
+        ) = row;
+
+        let config = match config_raw {
+            Some(text) => Some(
+                serde_json::from_str(&text)
+                    .map_err(|e| BackupDbError::DataFormatError(e.to_string()))?,
+            ),
+            None => None,
+        };
+
+        Ok(BackupTargetRecord {
+            target_id,
+            target_type,
+            url,
+            name,
+            description,
+            state,
+            used: u64::try_from(used_raw).map_err(|_| {
+                BackupDbError::DataFormatError("target.used stored value is negative".to_string())
+            })?,
+            total: u64::try_from(total_raw).map_err(|_| {
+                BackupDbError::DataFormatError("target.total stored value is negative".to_string())
+            })?,
+            last_error,
+            config,
+        })
+    }
+
+    pub fn update_backup_target(&self, target: &BackupTargetRecord) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        let used = i64::try_from(target.used).map_err(|_| {
+            BackupDbError::DataFormatError("target.used exceeds i64 range".to_string())
+        })?;
+        let total = i64::try_from(target.total).map_err(|_| {
+            BackupDbError::DataFormatError("target.total exceeds i64 range".to_string())
+        })?;
+        let config_str = match &target.config {
+            Some(value) => Some(
+                serde_json::to_string(value)
+                    .map_err(|e| BackupDbError::DataFormatError(e.to_string()))?,
+            ),
+            None => None,
+        };
+
+        let rows_affected = conn.execute(
+            "UPDATE backup_targets SET
+                target_type = ?2,
+                url = ?3,
+                name = ?4,
+                description = ?5,
+                state = ?6,
+                used = ?7,
+                total = ?8,
+                last_error = ?9,
+                config = ?10
+            WHERE target_id = ?1",
+            params![
+                target.target_id,
+                target.target_type,
+                target.url,
+                target.name,
+                target.description,
+                target.state,
+                used,
+                total,
+                target.last_error,
+                config_str,
+            ],
+        )?;
+
+        if rows_affected == 0 {
+            return Err(BackupDbError::NotFound(target.target_id.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn remove_backup_target(&self, target_id: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        let rows_affected = conn.execute(
+            "DELETE FROM backup_targets WHERE target_id = ?",
+            params![target_id],
+        )?;
+        if rows_affected == 0 {
+            return Err(BackupDbError::NotFound(target_id.to_string()));
+        }
+        Ok(())
     }
 
     //return all task ids

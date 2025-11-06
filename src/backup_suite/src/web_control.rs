@@ -1,6 +1,8 @@
 #![allow(unused)]
 use crate::engine::*;
-use crate::task_db::{BackupPlanConfig, TaskState, TaskType};
+use crate::task_db::{
+    BackupDbError, BackupPlanConfig, BackupTargetRecord, BackupTaskDb, TaskState, TaskType,
+};
 use ::kRPC::*;
 use async_trait::async_trait;
 use buckyos_backup_lib::RestoreConfig;
@@ -16,33 +18,7 @@ use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::result::Result;
-use std::sync::Arc;
-use tokio::sync::Mutex as AsyncMutex;
 use uuid::Uuid;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct BackupTargetRecord {
-    target_id: String,
-    target_type: String,
-    url: String,
-    name: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default = "default_target_state")]
-    state: String,
-    #[serde(default)]
-    used: u64,
-    #[serde(default)]
-    total: u64,
-    #[serde(default)]
-    last_error: String,
-    #[serde(default)]
-    config: Option<Value>,
-}
-
-fn default_target_state() -> String {
-    "UNKNOWN".to_string()
-}
 
 #[derive(Debug, Serialize)]
 struct DirectoryChild {
@@ -51,52 +27,9 @@ struct DirectoryChild {
     is_directory: bool,
 }
 
-impl BackupTargetRecord {
-    fn new(
-        target_id: String,
-        target_type: &str,
-        url: &str,
-        name: &str,
-        description: Option<&str>,
-        config: Option<Value>,
-    ) -> Self {
-        Self {
-            target_id,
-            target_type: target_type.to_string(),
-            url: url.to_string(),
-            name: name.to_string(),
-            description: description.unwrap_or_default().to_string(),
-            state: default_target_state(),
-            used: 0,
-            total: 0,
-            last_error: String::new(),
-            config,
-        }
-    }
-
-    fn to_json_value(&self) -> Value {
-        let mut value = json!({
-            "target_id": self.target_id,
-            "target_type": self.target_type,
-            "url": self.url,
-            "name": self.name,
-            "description": self.description,
-            "state": self.state,
-            "used": self.used,
-            "total": self.total,
-            "last_error": self.last_error,
-        });
-        if let Some(cfg) = &self.config {
-            value["config"] = cfg.clone();
-        }
-        value
-    }
-}
-
 #[derive(Clone)]
 struct WebControlServer {
-    targets: Arc<AsyncMutex<HashMap<String, BackupTargetRecord>>>,
-    target_storage_path: Arc<PathBuf>,
+    task_db: BackupTaskDb,
 }
 
 impl WebControlServer {
@@ -106,63 +39,66 @@ impl WebControlServer {
             warn!("failed to ensure backup_suite data directory exists: {}", e);
         }
         let storage_path = data_dir.join("backup_targets.json");
-        let initial_targets = Self::load_targets_from_disk(&storage_path);
-        Self {
-            targets: Arc::new(AsyncMutex::new(initial_targets)),
-            target_storage_path: Arc::new(storage_path),
+        let task_db_path = data_dir.join("bucky_backup.db");
+        let task_db = BackupTaskDb::new(task_db_path.to_str().unwrap());
+        if let Err(err) = Self::migrate_legacy_targets(&task_db, &storage_path) {
+            warn!(
+                "failed to migrate legacy backup targets from {}: {}",
+                storage_path.display(),
+                err
+            );
         }
+        Self { task_db }
     }
 
-    fn load_targets_from_disk(path: &Path) -> HashMap<String, BackupTargetRecord> {
-        if !path.exists() {
-            return HashMap::new();
+    fn migrate_legacy_targets(
+        task_db: &BackupTaskDb,
+        legacy_path: &Path,
+    ) -> std::result::Result<(), String> {
+        if !legacy_path.exists() {
+            return Ok(());
         }
-        match fs::read_to_string(path) {
-            Ok(content) => {
-                if content.trim().is_empty() {
-                    return HashMap::new();
-                }
-                match serde_json::from_str::<Vec<BackupTargetRecord>>(&content) {
-                    Ok(list) => list
-                        .into_iter()
-                        .map(|record| (record.target_id.clone(), record))
-                        .collect(),
-                    Err(err) => {
-                        warn!(
-                            "failed to parse stored backup targets from {}: {}",
-                            path.display(),
-                            err
-                        );
-                        HashMap::new()
-                    }
-                }
+
+        let existing = task_db
+            .list_backup_target_ids()
+            .map_err(|e| e.to_string())?;
+        if !existing.is_empty() {
+            return Ok(());
+        }
+
+        let content = fs::read_to_string(legacy_path).map_err(|e| e.to_string())?;
+        if content.trim().is_empty() {
+            Self::mark_legacy_file_migrated(legacy_path)?;
+            return Ok(());
+        }
+
+        let records: Vec<BackupTargetRecord> =
+            serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+        for record in records {
+            match task_db.get_backup_target(&record.target_id) {
+                Ok(_) => task_db
+                    .update_backup_target(&record)
+                    .map_err(|e| e.to_string())?,
+                Err(BackupDbError::NotFound(_)) => task_db
+                    .create_backup_target(&record)
+                    .map_err(|e| e.to_string())?,
+                Err(err) => return Err(err.to_string()),
             }
-            Err(err) => {
-                warn!(
-                    "failed to read stored backup targets from {}: {}",
-                    path.display(),
-                    err
-                );
-                HashMap::new()
-            }
-        }
-    }
-
-    fn persist_targets(
-        &self,
-        targets: &HashMap<String, BackupTargetRecord>,
-    ) -> Result<(), RPCErrors> {
-        let list: Vec<_> = targets.values().cloned().collect();
-        let serialized = serde_json::to_string_pretty(&list)
-            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
-
-        if let Some(parent) = self.target_storage_path.as_ref().parent() {
-            fs::create_dir_all(parent).map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
         }
 
-        fs::write(self.target_storage_path.as_ref(), serialized)
-            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+        Self::mark_legacy_file_migrated(legacy_path)?;
         Ok(())
+    }
+
+    fn mark_legacy_file_migrated(path: &Path) -> std::result::Result<(), String> {
+        let mut backup_path = path.to_path_buf();
+        backup_path.set_extension("json.bak");
+        if backup_path.exists() {
+            fs::remove_file(path).map_err(|e| e.to_string())
+        } else {
+            fs::rename(path, &backup_path).map_err(|e| e.to_string())
+        }
     }
 
     async fn create_backup_plan(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -210,11 +146,15 @@ impl WebControlServer {
         };
 
         // Lookup target details by target_id
-        let target_record = {
-            let targets = self.targets.lock().await;
-            targets.get(&target_id).cloned()
-        }
-        .ok_or_else(|| RPCErrors::ReasonError(format!("backup target {} not found", target_id)))?;
+        let target_record =
+            self.task_db
+                .get_backup_target(&target_id)
+                .map_err(|err| match err {
+                    BackupDbError::NotFound(_) => {
+                        RPCErrors::ReasonError(format!("backup target {} not found", target_id))
+                    }
+                    _ => RPCErrors::ReasonError(err.to_string()),
+                })?;
 
         if target_record.target_type != requested_target_type {
             warn!(
@@ -292,6 +232,30 @@ impl WebControlServer {
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
+    async fn remove_backup_target(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let target_id_value = req.params.get("target_id");
+        if target_id_value.is_none() {
+            return Err(RPCErrors::ParseRequestError(
+                "target_id is required".to_string(),
+            ));
+        }
+        let target_id = target_id_value.unwrap().as_str().ok_or_else(|| {
+            RPCErrors::ParseRequestError("target_id must be a string".to_string())
+        })?;
+
+        self.task_db
+            .remove_backup_target(target_id)
+            .map_err(|err| match err {
+                BackupDbError::NotFound(_) => {
+                    RPCErrors::ReasonError(format!("backup target {} not found", target_id))
+                }
+                _ => RPCErrors::ReasonError(err.to_string()),
+            })?;
+
+        let result = json!({ "result": "success" });
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
+    }
+
     async fn list_backup_plan(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
         let engine = DEFAULT_ENGINE.lock().await;
         let plans = engine
@@ -364,19 +328,19 @@ impl WebControlServer {
             config,
         );
 
-        let mut targets = self.targets.lock().await;
-        targets.insert(target_id, record.clone());
-        self.persist_targets(&targets)?;
-        drop(targets);
+        self.task_db
+            .create_backup_target(&record)
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
 
         let result = record.to_json_value();
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
     async fn list_backup_target(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
-        let targets = self.targets.lock().await;
-        let target_ids: Vec<String> = targets.keys().cloned().collect();
-        drop(targets);
+        let target_ids = self
+            .task_db
+            .list_backup_target_ids()
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
 
         let result = json!({ "targets": target_ids });
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
@@ -393,12 +357,16 @@ impl WebControlServer {
             RPCErrors::ParseRequestError("target_id must be a string".to_string())
         })?;
 
-        let targets = self.targets.lock().await;
-        let record = targets.get(target_id).ok_or_else(|| {
-            RPCErrors::ReasonError(format!("backup target {} not found", target_id))
-        })?;
+        let record = self
+            .task_db
+            .get_backup_target(target_id)
+            .map_err(|err| match err {
+                BackupDbError::NotFound(_) => {
+                    RPCErrors::ReasonError(format!("backup target {} not found", target_id))
+                }
+                _ => RPCErrors::ReasonError(err.to_string()),
+            })?;
         let result = record.to_json_value();
-        drop(targets);
 
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
@@ -414,11 +382,15 @@ impl WebControlServer {
             RPCErrors::ParseRequestError("target_id must be a string".to_string())
         })?;
 
-        let mut targets = self.targets.lock().await;
-        let record = targets.get_mut(target_id).ok_or_else(|| {
-            RPCErrors::ReasonError(format!("backup target {} not found", target_id))
-        })?;
-
+        let mut record = self
+            .task_db
+            .get_backup_target(target_id)
+            .map_err(|err| match err {
+                BackupDbError::NotFound(_) => {
+                    RPCErrors::ReasonError(format!("backup target {} not found", target_id))
+                }
+                _ => RPCErrors::ReasonError(err.to_string()),
+            })?;
         if let Some(value) = req.params.get("target_type") {
             if !value.is_null() {
                 let target_type = value.as_str().ok_or_else(|| {
@@ -528,8 +500,9 @@ impl WebControlServer {
         }
 
         let updated_snapshot = record.to_json_value();
-        self.persist_targets(&targets)?;
-        drop(targets);
+        self.task_db
+            .update_backup_target(&record)
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
 
         let result = json!({
             "result": "success",
@@ -1259,6 +1232,7 @@ impl InnerServiceHandler for WebControlServer {
             "list_backup_target" => self.list_backup_target(req).await,
             "get_backup_target" => self.get_backup_target(req).await,
             "update_backup_target" => self.update_backup_target(req).await,
+            "remove_backup_target" => self.remove_backup_target(req).await,
             "create_backup_task" => self.create_backup_task(req).await,
             "create_restore_task" => self.create_restore_task(req).await,
             "get_task_info" => self.get_task_info(req).await,
