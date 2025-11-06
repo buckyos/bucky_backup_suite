@@ -598,6 +598,7 @@ function RunningTaskTabContent({
             {uncompleteTasks!.map((task) => {
                 const taskProgress = TaskMgrHelper.taskProgress(task);
                 const taskRemainStr = TaskMgrHelper.taskRemainingStr(task);
+                console.log("TaskList: plans: ", plans, "task:", task);
                 return (
                     <Card
                         key={task.taskid}

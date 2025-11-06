@@ -182,7 +182,7 @@ impl WebControlServer {
             "c2c" => {
                 let mut config = BackupPlanConfig::chunk2chunk(
                     &source_url_for_engine,
-                    target_record.url.as_str(),
+                    target_record.target_id.as_str(),
                     &title,
                     &description,
                 );
@@ -215,6 +215,8 @@ impl WebControlServer {
             "source_type": source_type,
             "source": display_source,
             "target_type": target_record.target_type,
+            "target_name": target_record.name,
+            "target_url": target_record.url,
             "target": target_id,
             "title": title,
             "description": description,
@@ -282,9 +284,16 @@ impl WebControlServer {
             .get_backup_plan(plan_id)
             .await
             .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+        let target_record = engine
+            .get_target_record(plan.target.as_str())
+            .await
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
         let mut result = plan.to_json_value();
         let is_running = engine.is_plan_have_running_backup_task(plan_id).await;
         result["is_running"] = json!(is_running);
+        result["target_type"] = json!(target_record.target_type);
+        result["target_url"] = json!(target_record.url);
+        result["target_name"] = json!(target_record.name);
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 

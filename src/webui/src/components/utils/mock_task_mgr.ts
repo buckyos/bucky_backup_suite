@@ -1130,8 +1130,13 @@ export class FakeTaskManager extends BackupTaskManager {
         priority: number;
         reserved_versions: number;
     }): Promise<string> {
+        const targetInfo = this.target_list.targets.find(
+            (t) => t.target_id === params.target
+        );
         const result = {
             ...params,
+            target_name: targetInfo?.name,
+            target_url: targetInfo?.url,
             plan_id: `plan_${this.plan_list.next_plan_id++}`,
             last_checkpoint_index: -1,
             last_run_time: 0,

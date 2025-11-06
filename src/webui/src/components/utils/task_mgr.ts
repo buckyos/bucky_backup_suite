@@ -65,6 +65,8 @@ export interface BackupPlanInfo {
     source: string;
     target: string;
     target_type: TargetType;
+    target_name?: string;
+    target_url?: string;
     last_run_time?: number; //unix timestamp (UTC)
     policy_disabled?: boolean;
     policy: PlanPolicy[];
@@ -322,6 +324,7 @@ export class BackupTaskManager {
 
     async listBackupPlans(): Promise<string[]> {
         const result = await this.rpc_client.call("list_backup_plan", {});
+        console.log("listBackupPlans: ", result);
         return result.backup_plans;
     }
 
@@ -330,6 +333,7 @@ export class BackupTaskManager {
             plan_id: planId,
         });
         result.plan_id = planId;
+        console.log("getBackupPlan: ", result);
         return result;
     }
 

@@ -73,21 +73,6 @@ impl BackupSource {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum BackupTarget {
-    Directory(String),
-    ChunkList(String),
-}
-
-impl BackupTarget {
-    pub fn get_target_url(&self) -> &str {
-        match self {
-            BackupTarget::Directory(url) => url.as_str(),
-            BackupTarget::ChunkList(url) => url.as_str(),
-        }
-    }
-}
-
 fn default_target_state() -> String {
     "UNKNOWN".to_string()
 }
@@ -157,7 +142,7 @@ impl BackupTargetRecord {
 #[derive(Debug, Clone)]
 pub struct BackupPlanConfig {
     pub source: BackupSource,
-    pub target: BackupTarget,
+    pub target: String,
     pub title: String,
     pub description: String,
     pub type_str: String,
@@ -174,7 +159,7 @@ impl BackupPlanConfig {
     pub fn to_json_value(&self) -> Value {
         let result = json!({
             "source": self.source.get_source_url(),
-            "target": self.target.get_target_url(),
+            "target": self.target,
             "title": self.title,
             "description": self.description,
             "type_str": self.type_str,
@@ -185,12 +170,11 @@ impl BackupPlanConfig {
         result
     }
 
-    pub fn chunk2chunk(source: &str, target_url: &str, title: &str, description: &str) -> Self {
+    pub fn chunk2chunk(source: &str, target_id: &str, title: &str, description: &str) -> Self {
         let source = BackupSource::ChunkList(source.to_string());
-        let target = BackupTarget::ChunkList(target_url.to_string());
         Self {
             source,
-            target,
+            target: target_id.to_string(),
             title: title.to_string(),
             description: description.to_string(),
             type_str: "c2c".to_string(),
@@ -200,11 +184,11 @@ impl BackupPlanConfig {
         }
     }
 
-    pub fn dir2chunk(source: &str, target_url: &str, title: &str, description: &str) -> Self {
+    pub fn dir2chunk(source: &str, target_id: &str, title: &str, description: &str) -> Self {
         unimplemented!()
     }
 
-    pub fn dir2dir(source: &str, target_url: &str, title: &str, description: &str) -> Self {
+    pub fn dir2dir(source: &str, target_id: &str, title: &str, description: &str) -> Self {
         unimplemented!()
     }
 
@@ -213,7 +197,7 @@ impl BackupPlanConfig {
             "{}-{}-{}",
             self.type_str,
             self.source.get_source_url(),
-            self.target.get_target_url()
+            self.target
         );
         return key;
     }
@@ -459,6 +443,7 @@ impl BackupTaskDb {
                 plan_id TEXT PRIMARY KEY,
                 source_type TEXT NOT NULL,
                 source_url TEXT NOT NULL,
+                target_id TEXT NOT NULL,
                 target_type TEXT NOT NULL,
                 target_url TEXT NOT NULL,
                 title TEXT NOT NULL,
@@ -478,6 +463,29 @@ impl BackupTaskDb {
         );
         let _ = conn.execute(
             "ALTER TABLE backup_plans ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE backup_plans ADD COLUMN target_id TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE backup_plans SET target_id = target_url WHERE target_id IS NULL OR target_id = ''",
+            [],
+        );
+        let _ = conn.execute(
+            "UPDATE backup_plans
+                SET target_id = (
+                    SELECT target_id FROM backup_targets
+                    WHERE backup_targets.url = backup_plans.target_url
+                    LIMIT 1
+                )
+             WHERE target_url IS NOT NULL
+               AND target_id = target_url
+               AND EXISTS (
+                    SELECT 1 FROM backup_targets
+                    WHERE backup_targets.url = backup_plans.target_url
+                )",
             [],
         );
 
@@ -930,11 +938,13 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let policy_str = serde_json::to_string(&plan.policy)
             .map_err(|e| BackupDbError::DataFormatError(e.to_string()))?;
+        let target_record = self.get_backup_target(&plan.target)?;
         conn.execute(
             "INSERT INTO backup_plans (
                 plan_id,
                 source_type,
                 source_url,
+                target_id,
                 target_type,
                 target_url,
                 title,
@@ -943,7 +953,7 @@ impl BackupTaskDb {
                 last_checkpoint_index,
                 policy,
                 priority
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 plan.get_plan_key(),
                 match &plan.source {
@@ -951,11 +961,9 @@ impl BackupTaskDb {
                     BackupSource::ChunkList(_) => "chunklist",
                 },
                 plan.source.get_source_url(),
-                match &plan.target {
-                    BackupTarget::Directory(_) => "directory",
-                    BackupTarget::ChunkList(_) => "chunklist",
-                },
-                plan.target.get_target_url(),
+                plan.target.as_str(),
+                target_record.target_type,
+                target_record.url,
                 plan.title,
                 plan.description,
                 plan.type_str,
@@ -971,18 +979,20 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let policy_str = serde_json::to_string(&plan.policy)
             .map_err(|e| BackupDbError::DataFormatError(e.to_string()))?;
+        let target_record = self.get_backup_target(&plan.target)?;
         let rows_affected = conn.execute(
             "UPDATE backup_plans SET 
                 source_type = ?2,
                 source_url = ?3,
-                target_type = ?4,
-                target_url = ?5,
-                title = ?6,
-                description = ?7,
-                type_str = ?8,
-                last_checkpoint_index = ?9,
-                policy = ?10,
-                priority = ?11
+                target_id = ?4,
+                target_type = ?5,
+                target_url = ?6,
+                title = ?7,
+                description = ?8,
+                type_str = ?9,
+                last_checkpoint_index = ?10,
+                policy = ?11,
+                priority = ?12
             WHERE plan_id = ?1",
             params![
                 plan.get_plan_key(),
@@ -991,11 +1001,9 @@ impl BackupTaskDb {
                     BackupSource::ChunkList(_) => "chunklist",
                 },
                 plan.source.get_source_url(),
-                match &plan.target {
-                    BackupTarget::Directory(_) => "directory",
-                    BackupTarget::ChunkList(_) => "chunklist",
-                },
-                plan.target.get_target_url(),
+                plan.target.as_str(),
+                target_record.target_type,
+                target_record.url,
                 plan.title,
                 plan.description,
                 plan.type_str,
@@ -1026,17 +1034,34 @@ impl BackupTaskDb {
 
     pub fn list_backup_plans(&self) -> Result<Vec<BackupPlanConfig>> {
         let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare("SELECT * FROM backup_plans")?;
+        let mut stmt = conn.prepare(
+            "SELECT
+                plan_id,
+                source_type,
+                source_url,
+                target_id,
+                target_type,
+                target_url,
+                title,
+                description,
+                type_str,
+                last_checkpoint_index,
+                policy,
+                priority
+            FROM backup_plans",
+        )?;
 
         let plans = stmt
             .query_map([], |row| {
                 let plan_id: String = row.get(0)?;
                 let source_type: String = row.get(1)?;
                 let source_url: String = row.get(2)?;
-                let target_type: String = row.get(3)?;
-                let target_url: String = row.get(4)?;
-                let policy_json: String = row.get(9)?;
-                let priority: i64 = row.get(10)?;
+                let target_id: String = row
+                    .get::<_, Option<String>>(3)?
+                    .unwrap_or_default();
+                let target_url: String = row.get(5)?;
+                let policy_json: String = row.get(10)?;
+                let priority: i64 = row.get(11)?;
 
                 let policy_value = match serde_json::from_str(&policy_json) {
                     Ok(value) => value,
@@ -1049,21 +1074,27 @@ impl BackupTaskDb {
                     }
                 };
 
+                let target = if target_id.is_empty() {
+                    warn!(
+                        "backup plan {} missing target_id in database, falling back to target_url",
+                        plan_id
+                    );
+                    target_url.clone()
+                } else {
+                    target_id
+                };
+
                 Ok(BackupPlanConfig {
                     source: match source_type.as_str() {
                         "directory" => BackupSource::Directory(source_url),
                         "chunklist" => BackupSource::ChunkList(source_url),
                         _ => panic!("Invalid source type in database"),
                     },
-                    target: match target_type.as_str() {
-                        "directory" => BackupTarget::Directory(target_url),
-                        "chunklist" => BackupTarget::ChunkList(target_url),
-                        _ => panic!("Invalid target type in database"),
-                    },
-                    title: row.get(5)?,
-                    description: row.get(6)?,
-                    type_str: row.get(7)?,
-                    last_checkpoint_index: row.get(8)?,
+                    target,
+                    title: row.get(6)?,
+                    description: row.get(7)?,
+                    type_str: row.get(8)?,
+                    last_checkpoint_index: row.get(9)?,
                     policy: policy_value,
                     priority,
                 })

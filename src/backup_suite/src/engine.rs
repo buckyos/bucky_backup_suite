@@ -68,6 +68,7 @@ pub struct BackupEngine {
     all_plans: Arc<Mutex<HashMap<String, Arc<Mutex<BackupPlanConfig>>>>>,
     all_tasks: Arc<Mutex<HashMap<String, Arc<Mutex<WorkTask>>>>>,
     all_checkpoints: Arc<Mutex<HashMap<String, Arc<Mutex<LocalBackupCheckpoint>>>>>,
+    all_targets: Arc<Mutex<HashMap<String, Arc<Mutex<BackupTargetRecord>>>>>,
     small_file_content_cache: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     is_strict_mode: bool,
     task_db: BackupTaskDb,
@@ -104,6 +105,7 @@ impl BackupEngine {
             all_plans: Arc::new(Mutex::new(HashMap::new())),
             all_tasks: Arc::new(Mutex::new(HashMap::new())),
             all_checkpoints: Arc::new(Mutex::new(HashMap::new())),
+            all_targets: Arc::new(Mutex::new(HashMap::new())),
             task_db: BackupTaskDb::new(task_db_path.to_str().unwrap()),
             small_file_content_cache: Arc::new(Mutex::new(HashMap::new())),
             is_strict_mode: false,
@@ -159,6 +161,29 @@ impl BackupEngine {
             }),
         )
         .await?;
+
+        let target_ids = self.task_db.list_backup_target_ids().map_err(|e| {
+            error!("list backup targets error: {}", e.to_string());
+            BuckyBackupError::Failed(e.to_string())
+        })?;
+        {
+            let mut all_targets = self.all_targets.lock().await;
+            for target_id in target_ids {
+                match self.task_db.get_backup_target(&target_id) {
+                    Ok(record) => {
+                        all_targets
+                            .insert(target_id.clone(), Arc::new(Mutex::new(record)));
+                    }
+                    Err(err) => {
+                        warn!(
+                            "load backup target {} failed: {}",
+                            target_id,
+                            err.to_string()
+                        );
+                    }
+                }
+            }
+        }
 
         let plans = self.task_db.list_backup_plans().map_err(|e| {
             error!("list backup plans error: {}", e.to_string());
@@ -229,6 +254,7 @@ impl BackupEngine {
 
     //return planid
     pub async fn create_backup_plan(&self, plan_config: BackupPlanConfig) -> BackupResult<String> {
+        self.get_target_record(plan_config.target.as_str()).await?;
         let plan_key = plan_config.get_plan_key();
         let mut all_plans = self.all_plans.lock().await;
         if all_plans.contains_key(&plan_key) {
@@ -917,6 +943,63 @@ impl BackupEngine {
         // }
     }
 
+    pub async fn get_target_record(&self, target_id: &str) -> BackupResult<BackupTargetRecord> {
+        if let Some(cached) = {
+            let all_targets = self.all_targets.lock().await;
+            all_targets.get(target_id).cloned()
+        } {
+            let record = cached.lock().await.clone();
+            return Ok(record);
+        }
+
+        match self.task_db.get_backup_target(target_id) {
+            Ok(record) => {
+                let mut all_targets = self.all_targets.lock().await;
+                all_targets.insert(
+                    target_id.to_string(),
+                    Arc::new(Mutex::new(record.clone())),
+                );
+                Ok(record)
+            }
+            Err(BackupDbError::NotFound(_)) => {
+                if let Ok(parsed) = Url::parse(target_id) {
+                    warn!(
+                        "target {} not found in database, using fallback from url",
+                        target_id
+                    );
+                    let fallback = BackupTargetRecord::new(
+                        target_id.to_string(),
+                        parsed.scheme(),
+                        target_id,
+                        target_id,
+                        Some("legacy target"),
+                        None,
+                    );
+                    let mut all_targets = self.all_targets.lock().await;
+                    all_targets.insert(
+                        fallback.target_id.clone(),
+                        Arc::new(Mutex::new(fallback.clone())),
+                    );
+                    Ok(fallback)
+                } else {
+                    Err(BuckyBackupError::NotFound(format!(
+                        "target {} not found",
+                        target_id
+                    )))
+                }
+            }
+            Err(err) => Err(BuckyBackupError::Failed(err.to_string())),
+        }
+    }
+
+    async fn get_chunk_target_provider_by_id(
+        &self,
+        target_id: &str,
+    ) -> BackupResult<BackupChunkTargetProvider> {
+        let record = self.get_target_record(target_id).await?;
+        self.get_chunk_target_provider(record.url.as_str()).await
+    }
+
     pub async fn list_backup_tasks(&self, filter: &str) -> BackupResult<Vec<String>> {
         self.task_db.list_worktasks(filter).map_err(|e| {
             let err_str = e.to_string();
@@ -987,7 +1070,7 @@ impl BackupEngine {
             .get_chunk_source_provider(plan.source.get_source_url())
             .await?;
         let target_provider = self
-            .get_chunk_target_provider(plan.target.get_target_url())
+            .get_chunk_target_provider_by_id(plan.target.as_str())
             .await?;
 
         drop(plan);
@@ -1088,7 +1171,7 @@ impl BackupEngine {
             .get_chunk_source_provider(plan.source.get_source_url())
             .await?;
         let target_provider = self
-            .get_chunk_target_provider(plan.target.get_target_url())
+            .get_chunk_target_provider_by_id(plan.target.as_str())
             .await?;
 
         drop(plan);
@@ -1205,9 +1288,22 @@ mod tests {
 
         let engine = BackupEngine::new();
         engine.start().await.unwrap();
+        let target_id = "test_target";
+        let target_record = BackupTargetRecord::new(
+            target_id.to_string(),
+            "file",
+            "file:///tmp/bucky_backup_result",
+            "test target",
+            Some("test target for unit"),
+            None,
+        );
+        engine
+            .task_db
+            .create_backup_target(&target_record)
+            .unwrap();
         let new_plan = BackupPlanConfig::chunk2chunk(
             "file:///Users/liuzhicong/Downloads",
-            "file:///tmp/bucky_backup_result",
+            target_id,
             "testc2c",
             "testc2c desc",
         );

@@ -27,6 +27,7 @@ export class TaskMgrHelper {
     }
 
     static formatSize(size: number): string {
+        if (typeof size !== 'number') return "NAN";
         if (size < 0) return "0 B";
         const units = ["B", "KB", "MB", "GB", "TB"];
         let unitIndex = 0;
