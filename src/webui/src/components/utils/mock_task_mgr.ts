@@ -1581,8 +1581,8 @@ export class FakeTaskManager extends BackupTaskManager {
     }
 
     async listDirChildren(
-        purpose: DirectoryPurpose,
         path?: string,
+        purpose?: DirectoryPurpose,
         options?: {
             only_dirs?: boolean;
             only_files?: boolean;

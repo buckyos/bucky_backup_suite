@@ -301,8 +301,8 @@ export function RestoreWizard({
             setTargetError(null);
             try {
                 const dirs = await taskManager.listDirChildren(
-                    DirectoryPurpose.RESTORE_TARGET,
                     targetCurrentPath ?? undefined,
+                    DirectoryPurpose.RESTORE_TARGET,
                     { only_dirs: true }
                 );
 

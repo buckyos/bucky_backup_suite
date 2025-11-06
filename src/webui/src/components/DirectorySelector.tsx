@@ -51,7 +51,7 @@ export function DirectorySelector({
     const loadDirectories = async (path?: string) => {
         setLoading(true);
         try {
-            const dirs = await taskManager.listDirChildren(purpose, path, {
+            const dirs = await taskManager.listDirChildren(path, purpose, {
                 only_dirs: true,
             });
             if (!path) {

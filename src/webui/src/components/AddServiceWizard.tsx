@@ -120,8 +120,8 @@ export function AddServiceWizard({
             setDirectoriesError(null);
             try {
                 const result = await taskManager.listDirChildren(
-                    DirectoryPurpose.BACKUP_TARGET,
                     currentDirectoryPath ?? undefined,
+                    DirectoryPurpose.BACKUP_TARGET,
                     { only_dirs: true }
                 );
                 if (!cancelled) {

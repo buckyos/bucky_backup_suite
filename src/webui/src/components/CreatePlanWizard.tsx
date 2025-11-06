@@ -176,8 +176,8 @@ export function CreatePlanWizard({
             setDirectoriesError(null);
             try {
                 const result = await taskManager.listDirChildren(
-                    DirectoryPurpose.BACKUP_SOURCE,
                     currentDirectoryPath ?? undefined,
+                    DirectoryPurpose.BACKUP_SOURCE,
                     { only_dirs: true }
                 );
                 if (!cancelled) {
