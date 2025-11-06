@@ -94,6 +94,8 @@ pub struct BackupPlanConfig {
     pub description: String,
     pub type_str: String,
     pub last_checkpoint_index: u64,
+    pub policy: Value,
+    pub priority: i64,
 }
 
 impl BackupPlanConfig {
@@ -109,6 +111,8 @@ impl BackupPlanConfig {
             "description": self.description,
             "type_str": self.type_str,
             "last_checkpoint_index": self.last_checkpoint_index,
+            "policy": self.policy.clone(),
+            "priority": self.priority,
         });
         result
     }
@@ -123,6 +127,8 @@ impl BackupPlanConfig {
             description: description.to_string(),
             type_str: "c2c".to_string(),
             last_checkpoint_index: 1024,
+            policy: Value::Array(vec![]),
+            priority: 0,
         }
     }
 
@@ -390,10 +396,22 @@ impl BackupTaskDb {
                 title TEXT NOT NULL,
                 description TEXT NOT NULL,
                 type_str TEXT NOT NULL,
-                last_checkpoint_index INTEGER NOT NULL
+                last_checkpoint_index INTEGER NOT NULL,
+                policy TEXT NOT NULL DEFAULT '[]',
+                priority INTEGER NOT NULL DEFAULT 0
             )",
             [],
         )?;
+
+        // Ensure new columns exist for older databases
+        let _ = conn.execute(
+            "ALTER TABLE backup_plans ADD COLUMN policy TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE backup_plans ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS backup_items (
@@ -826,8 +844,22 @@ impl BackupTaskDb {
 
     pub fn create_backup_plan(&self, plan: &BackupPlanConfig) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
+        let policy_str = serde_json::to_string(&plan.policy)
+            .map_err(|e| BackupDbError::DataFormatError(e.to_string()))?;
         conn.execute(
-            "INSERT INTO backup_plans VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO backup_plans (
+                plan_id,
+                source_type,
+                source_url,
+                target_type,
+                target_url,
+                title,
+                description,
+                type_str,
+                last_checkpoint_index,
+                policy,
+                priority
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 plan.get_plan_key(),
                 match &plan.source {
@@ -844,6 +876,8 @@ impl BackupTaskDb {
                 plan.description,
                 plan.type_str,
                 plan.last_checkpoint_index,
+                policy_str,
+                plan.priority,
             ],
         )?;
         Ok(())
@@ -851,6 +885,8 @@ impl BackupTaskDb {
 
     pub fn update_backup_plan(&self, plan: &BackupPlanConfig) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
+        let policy_str = serde_json::to_string(&plan.policy)
+            .map_err(|e| BackupDbError::DataFormatError(e.to_string()))?;
         let rows_affected = conn.execute(
             "UPDATE backup_plans SET 
                 source_type = ?2,
@@ -860,7 +896,9 @@ impl BackupTaskDb {
                 title = ?6,
                 description = ?7,
                 type_str = ?8,
-                last_checkpoint_index = ?9
+                last_checkpoint_index = ?9,
+                policy = ?10,
+                priority = ?11
             WHERE plan_id = ?1",
             params![
                 plan.get_plan_key(),
@@ -878,6 +916,8 @@ impl BackupTaskDb {
                 plan.description,
                 plan.type_str,
                 plan.last_checkpoint_index,
+                policy_str,
+                plan.priority,
             ],
         )?;
 
@@ -906,10 +946,24 @@ impl BackupTaskDb {
 
         let plans = stmt
             .query_map([], |row| {
+                let plan_id: String = row.get(0)?;
                 let source_type: String = row.get(1)?;
                 let source_url: String = row.get(2)?;
                 let target_type: String = row.get(3)?;
                 let target_url: String = row.get(4)?;
+                let policy_json: String = row.get(9)?;
+                let priority: i64 = row.get(10)?;
+
+                let policy_value = match serde_json::from_str(&policy_json) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        warn!(
+                            "failed to parse policy json for plan {}: {}. Using empty array.",
+                            plan_id, err
+                        );
+                        Value::Array(vec![])
+                    }
+                };
 
                 Ok(BackupPlanConfig {
                     source: match source_type.as_str() {
@@ -926,6 +980,8 @@ impl BackupTaskDb {
                     description: row.get(6)?,
                     type_str: row.get(7)?,
                     last_checkpoint_index: row.get(8)?,
+                    policy: policy_value,
+                    priority,
                 })
             })?
             .collect::<SqlResult<Vec<BackupPlanConfig>>>()?;

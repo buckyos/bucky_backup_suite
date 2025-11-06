@@ -44,6 +44,13 @@ fn default_target_state() -> String {
     "UNKNOWN".to_string()
 }
 
+#[derive(Debug, Serialize)]
+struct DirectoryChild {
+    name: String,
+    #[serde(rename = "isDirectory")]
+    is_directory: bool,
+}
+
 impl BackupTargetRecord {
     fn new(
         target_id: String,
@@ -159,50 +166,88 @@ impl WebControlServer {
     }
 
     async fn create_backup_plan(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
-        let source_type = req.params.get("source_type");
-        let source_url = req.params.get("source");
-        let target_type = req.params.get("target_type");
-        let target_url = req.params.get("target");
-        let title = req.params.get("title");
-        let description = req.params.get("description");
-        let type_str = req.params.get("type_str");
+        let params = &req.params;
+        let extract_string = |key: &str| -> Result<String, RPCErrors> {
+            params
+                .get(key)
+                .ok_or_else(|| RPCErrors::ParseRequestError(format!("{} is required", key)))?
+                .as_str()
+                .map(|s| s.to_string())
+                .ok_or_else(|| RPCErrors::ParseRequestError(format!("{} must be a string", key)))
+        };
 
-        if type_str.is_none()
-            || source_type.is_none()
-            || source_url.is_none()
-            || target_type.is_none()
-            || target_url.is_none()
-        {
-            return Err(RPCErrors::ParseRequestError(
-                "type_str, source_type, source_url, target_type, target_url are required"
-                    .to_string(),
-            ));
+        let type_str = extract_string("type_str")?;
+        let source_type = extract_string("source_type")?;
+        let source_raw = extract_string("source")?;
+        let requested_target_type = extract_string("target_type")?;
+        let target_id = extract_string("target")?;
+        let title = extract_string("title")?;
+        let description = extract_string("description")?;
+
+        // Resolve source into a file URL for the engine while keeping a display-friendly path
+        let (source_url_for_engine, display_source) = if source_raw.starts_with("file://") {
+            let parsed = url::Url::parse(&source_raw).map_err(|_| {
+                RPCErrors::ParseRequestError("source must be a valid file URL".to_string())
+            })?;
+            let source_path = parsed.to_file_path().map_err(|_| {
+                RPCErrors::ParseRequestError(
+                    "source must point to a local filesystem path".to_string(),
+                )
+            })?;
+            (
+                source_raw.clone(),
+                source_path.to_string_lossy().to_string(),
+            )
+        } else {
+            let resolved_path = resolve_requested_path(&source_raw);
+            let file_url = url::Url::from_file_path(&resolved_path).map_err(|_| {
+                RPCErrors::ParseRequestError(format!("invalid source path: {}", source_raw))
+            })?;
+            (
+                file_url.to_string(),
+                resolved_path.to_string_lossy().to_string(),
+            )
+        };
+
+        // Lookup target details by target_id
+        let target_record = {
+            let targets = self.targets.lock().await;
+            targets.get(&target_id).cloned()
+        }
+        .ok_or_else(|| RPCErrors::ReasonError(format!("backup target {} not found", target_id)))?;
+
+        if target_record.target_type != requested_target_type {
+            warn!(
+                "create_backup_plan: target type mismatch for target {} (request: {}, actual: {})",
+                target_id, requested_target_type, target_record.target_type
+            );
         }
 
-        let type_str = type_str.unwrap().as_str().unwrap();
-        let source_type = source_type.unwrap().as_str().unwrap();
-        let source_url = source_url.unwrap().as_str().unwrap();
-        let target_type = target_type.unwrap().as_str().unwrap();
-        let target_url = target_url.unwrap().as_str().unwrap();
+        let policy_value = params
+            .get("policy")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(vec![]));
+        let priority_value = params.get("priority").and_then(|v| v.as_i64()).unwrap_or(0);
+        let reserved_versions_value = params
+            .get("reserved_versions")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let policy_disabled = params
+            .get("policy_disabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-        if title.is_none() || description.is_none() {
-            return Err(RPCErrors::ParseRequestError(
-                "title, description are required".to_string(),
-            ));
-        }
-
-        let title = title.unwrap().as_str().unwrap();
-        let description = description.unwrap().as_str().unwrap();
-        let plan_id: String;
-        let engine = DEFAULT_ENGINE.lock().await;
-        match type_str {
+        // Build plan config according to type
+        let mut plan_config = match type_str.as_str() {
             "c2c" => {
-                let new_plan =
-                    BackupPlanConfig::chunk2chunk(source_url, target_url, title, description);
-                plan_id = engine
-                    .create_backup_plan(new_plan)
-                    .await
-                    .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+                let mut config = BackupPlanConfig::chunk2chunk(
+                    &source_url_for_engine,
+                    target_record.url.as_str(),
+                    &title,
+                    &description,
+                );
+                config.last_checkpoint_index = 0;
+                config
             }
             _ => {
                 return Err(RPCErrors::ParseRequestError(format!(
@@ -210,10 +255,39 @@ impl WebControlServer {
                     type_str
                 )));
             }
-        }
+        };
+        plan_config.policy = policy_value.clone();
+        plan_config.priority = priority_value;
+
+        // Create plan via engine
+        let engine = DEFAULT_ENGINE.lock().await;
+        let last_checkpoint_index = plan_config.last_checkpoint_index;
+        let plan_id = engine
+            .create_backup_plan(plan_config)
+            .await
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+        drop(engine);
+        let now = chrono::Utc::now().timestamp_millis();
 
         let result = json!({
-            "plan_id": plan_id
+            "plan_id": plan_id,
+            "type_str": type_str,
+            "source_type": source_type,
+            "source": display_source,
+            "target_type": target_record.target_type,
+            "target": target_id,
+            "title": title,
+            "description": description,
+            "policy": policy_value,
+            "policy_disabled": policy_disabled,
+            "priority": priority_value,
+            "reserved_versions": reserved_versions_value,
+            "last_checkpoint_index": last_checkpoint_index,
+            "last_run_time": Value::Null,
+            "create_time": now,
+            "update_time": now,
+            "total_backup": 0,
+            "total_size": 0,
         });
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
@@ -797,6 +871,52 @@ impl WebControlServer {
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
+    async fn list_directory_children(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let path_value = req.params.get("path");
+        let path_opt = match path_value {
+            Some(Value::Null) | None => None,
+            Some(Value::String(s)) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            Some(_) => {
+                return Err(RPCErrors::ParseRequestError(
+                    "path must be a string if provided".to_string(),
+                ));
+            }
+        };
+
+        let entries: Vec<DirectoryChild> = match path_opt {
+            Some(path_str) => {
+                let resolved_path = resolve_requested_path(&path_str);
+                match fs::metadata(&resolved_path) {
+                    Ok(metadata) => {
+                        if metadata.is_dir() {
+                            list_directory_entries_for_path(&resolved_path)?
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    Err(err) => {
+                        warn!(
+                            "list_directory_children unable to stat path {}: {}",
+                            resolved_path.display(),
+                            err
+                        );
+                        Vec::new()
+                    }
+                }
+            }
+            None => list_root_children()?,
+        };
+
+        Ok(RPCResponse::new(RPCResult::Success(json!(entries)), req.id))
+    }
+
     async fn validate_path(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
         let path = req.params.get("path");
         if path.is_none() {
@@ -1002,6 +1122,128 @@ fn parse_task_type_from_str(value: &str) -> Option<TaskType> {
     }
 }
 
+fn list_root_children() -> Result<Vec<DirectoryChild>, RPCErrors> {
+    #[cfg(windows)]
+    {
+        Ok(list_windows_drive_roots())
+    }
+    #[cfg(not(windows))]
+    {
+        list_directory_entries_for_path(Path::new("/"))
+    }
+}
+
+fn list_directory_entries_for_path(path: &Path) -> Result<Vec<DirectoryChild>, RPCErrors> {
+    let read_dir = fs::read_dir(path).map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+    let mut entries = Vec::new();
+
+    for entry_result in read_dir {
+        match entry_result {
+            Ok(entry) => {
+                let file_type = match entry.file_type() {
+                    Ok(ft) => ft,
+                    Err(err) => {
+                        warn!(
+                            "list_directory_children failed to read file type for {}: {}",
+                            entry.path().display(),
+                            err
+                        );
+                        continue;
+                    }
+                };
+                let name = entry.file_name().to_string_lossy().into_owned();
+                entries.push(DirectoryChild {
+                    name,
+                    is_directory: file_type.is_dir(),
+                });
+            }
+            Err(err) => {
+                warn!(
+                    "list_directory_children failed to read entry in {}: {}",
+                    path.display(),
+                    err
+                );
+            }
+        }
+    }
+
+    entries.sort_by(|a, b| match (a.is_directory, b.is_directory) {
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+    });
+    Ok(entries)
+}
+
+fn resolve_requested_path(raw: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        resolve_requested_path_windows(raw)
+    }
+    #[cfg(not(windows))]
+    {
+        resolve_requested_path_unix(raw)
+    }
+}
+
+#[cfg(windows)]
+fn resolve_requested_path_windows(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return PathBuf::from("\\");
+    }
+
+    let mut normalized = trimmed.replace('/', "\\");
+    if normalized == "\\" {
+        return PathBuf::from("\\");
+    }
+    if normalized.len() == 2 && normalized.ends_with(':') {
+        normalized.push('\\');
+        return PathBuf::from(normalized);
+    }
+    if !normalized.contains(':') && !normalized.starts_with('\\') {
+        normalized = format!("\\{}", normalized);
+    }
+    while normalized.len() > 3 && normalized.ends_with('\\') {
+        normalized.pop();
+    }
+    PathBuf::from(normalized)
+}
+
+#[cfg(not(windows))]
+fn resolve_requested_path_unix(raw: &str) -> PathBuf {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "/" {
+        return PathBuf::from("/");
+    }
+
+    let mut buf = PathBuf::from("/");
+    for segment in trimmed
+        .replace('\\', "/")
+        .split('/')
+        .filter(|s| !s.is_empty())
+    {
+        buf.push(segment);
+    }
+    buf
+}
+
+#[cfg(windows)]
+fn list_windows_drive_roots() -> Vec<DirectoryChild> {
+    let mut drives = Vec::new();
+    for letter in b'A'..=b'Z' {
+        let drive = format!("{}:\\", letter as char);
+        if Path::new(&drive).is_dir() {
+            drives.push(DirectoryChild {
+                name: format!("{}:", letter as char),
+                is_directory: true,
+            });
+        }
+    }
+    drives.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    drives
+}
+
 #[async_trait]
 impl InnerServiceHandler for WebControlServer {
     async fn handle_rpc_call(
@@ -1023,6 +1265,7 @@ impl InnerServiceHandler for WebControlServer {
             "resume_backup_task" => self.resume_backup_task(req).await,
             "pause_backup_task" => self.pause_backup_task(req).await,
             "list_backup_task" => self.list_backup_task(req).await,
+            "list_directory_children" => self.list_directory_children(req).await,
             "validate_path" => self.validate_path(req).await,
             "is_plan_running" => self.is_plan_running(req).await,
             _ => Err(RPCErrors::UnknownMethod(req.method)),
