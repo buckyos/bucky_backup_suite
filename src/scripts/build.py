@@ -25,6 +25,7 @@ if __name__ == "__main__":
     skip_install = False
     system = platform.system()
     arch = platform.machine()
+    print(f"system: {system}, arch: {arch}")
     target = ""
     if system == "Linux" and arch == "AMD64":
         target = "x86_64-unknown-linux-musl"
@@ -32,6 +33,8 @@ if __name__ == "__main__":
         target = "x86_64-pc-windows-msvc"
     elif system == "Linux" and arch == "aarch64":
         target = "aarch64-unknown-linux-gnu"
+    elif system == "Darwin" and arch == "arm64":
+        target = "aarch64-apple-darwin"
 
     for arg in sys.argv:
         if arg == "--no-build-web-apps":
