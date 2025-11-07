@@ -113,7 +113,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
     };
 
     const getServiceIcon = (type: TargetType) => {
-        return type === TargetType.LOCAL ? HardDrive : Network;
+        return type === TargetType.FILE ? HardDrive : Network;
     };
 
     const handleEdit = (serviceInfo: BackupTargetInfo, currentName: string) => {
@@ -367,7 +367,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                             </p>
                                             <p className="font-medium">
                                                 {service.target_type ===
-                                                TargetType.LOCAL
+                                                TargetType.FILE
                                                     ? "本地目录"
                                                     : "NDN网络"}
                                             </p>
@@ -536,7 +536,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                                 {
                                     services.filter(
                                         (s) =>
-                                            s.target_type === TargetType.LOCAL
+                                            s.target_type === TargetType.FILE
                                     ).length
                                 }
                             </p>

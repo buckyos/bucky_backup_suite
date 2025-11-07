@@ -311,10 +311,41 @@ impl WebControlServer {
         let target_type = target_type_value.unwrap().as_str().ok_or_else(|| {
             RPCErrors::ParseRequestError("target_type must be a string".to_string())
         })?;
-        let target_url = target_url_value
-            .unwrap()
-            .as_str()
-            .ok_or_else(|| RPCErrors::ParseRequestError("url must be a string".to_string()))?;
+        let target_url = {
+            let mut target_url = target_url_value
+                .unwrap()
+                .as_str()
+                .ok_or_else(|| RPCErrors::ParseRequestError("url must be a string".to_string()))?
+                .to_string();
+
+            #[cfg(not(windows))]
+            {
+                if (target_type == "file") {
+                    if (!target_url.starts_with("/")) {
+                        target_url = "/".to_string() + target_url.as_str();
+                    }
+                }
+            }
+
+            // Check target_url
+            if target_url.starts_with("file://") {
+                let parsed = url::Url::parse(target_url.as_str()).map_err(|_| {
+                    RPCErrors::ParseRequestError("source must be a valid file URL".to_string())
+                })?;
+                parsed.to_file_path().map_err(|_| {
+                    RPCErrors::ParseRequestError(
+                        "source must point to a local filesystem path".to_string(),
+                    )
+                })?;
+            } else {
+                let resolved_path = resolve_requested_path(target_url.as_str());
+                url::Url::from_file_path(&resolved_path).map_err(|_| {
+                    RPCErrors::ParseRequestError(format!("invalid source path: {}", target_url))
+                })?;
+            };
+
+            target_url
+        };
         let target_name = name_value
             .unwrap()
             .as_str()
@@ -331,7 +362,7 @@ impl WebControlServer {
         let record = BackupTargetRecord::new(
             target_id.clone(),
             target_type,
-            target_url,
+            target_url.as_str(),
             target_name,
             description,
             config,
@@ -1091,7 +1122,7 @@ fn parse_task_state_from_str(value: &str) -> Option<TaskState> {
         "PENDING" => Some(TaskState::Pending),
         "PAUSED" => Some(TaskState::Paused),
         "DONE" => Some(TaskState::Done),
-        "FAILED" => Some(TaskState::Failed),
+        "FAILED" => Some(TaskState::Failed("".to_string())),
         _ => None,
     }
 }
@@ -1111,7 +1142,10 @@ fn list_root_children() -> Result<Vec<DirectoryChild>, RPCErrors> {
     }
     #[cfg(not(windows))]
     {
-        list_directory_entries_for_path(Path::new("/"))
+        Ok(vec![DirectoryChild {
+            name: "/".to_string(),
+            is_directory: true,
+        }])
     }
 }
 

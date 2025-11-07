@@ -87,7 +87,7 @@ export enum TargetState {
 }
 
 export enum TargetType {
-    LOCAL = "LOCAL",
+    FILE = "file",
     NDN = "NDN",
 }
 
@@ -417,13 +417,17 @@ export class BackupTaskManager {
                 }
             } else {
                 const old_task = this.uncomplete_tasks.get(taskId);
-                if (result.state === TaskState.FAILED) {
+                const taskStateParts = (result.state as String).split(":");
+                const taskState = taskStateParts[0];
+                const errMsg = taskStateParts[1];
+                if (taskState === TaskState.FAILED) {
                     if (old_task && old_task.state !== TaskState.FAILED) {
                         await this.emitTaskEvent(
                             TaskEventType.FAIL_TASK,
                             result
                         );
                     }
+                    result.error = errMsg;
                 }
                 const now = Date.now();
                 let speed_im = old_task

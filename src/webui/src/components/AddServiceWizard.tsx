@@ -69,7 +69,7 @@ export function AddServiceWizard({
     const [currentStep, setCurrentStep] = useState(1);
 
     // 表单数据
-    const [serviceType, setServiceType] = useState(TargetType.LOCAL);
+    const [serviceType, setServiceType] = useState(TargetType.FILE);
     const [serviceName, setServiceName] = useState("");
     const [localPath, setLocalPath] = useState("");
     const [ndnUrl, setNdnUrl] = useState("");
@@ -109,7 +109,7 @@ export function AddServiceWizard({
     };
 
     useEffect(() => {
-        if (serviceType !== TargetType.LOCAL) {
+        if (serviceType !== TargetType.FILE) {
             return;
         }
 
@@ -149,7 +149,7 @@ export function AddServiceWizard({
     }, [currentDirectoryPath, serviceType, directoryRequestId]);
 
     useEffect(() => {
-        if (serviceType !== TargetType.LOCAL) {
+        if (serviceType !== TargetType.FILE) {
             return;
         }
         const nextPath = currentDirectoryPath ?? "";
@@ -177,7 +177,7 @@ export function AddServiceWizard({
     const handleComplete = () => {
         let url = "";
         switch (serviceType) {
-            case TargetType.LOCAL:
+            case TargetType.FILE:
                 url = localPath;
                 break;
             case TargetType.NDN:
@@ -193,7 +193,7 @@ export function AddServiceWizard({
             case 1:
                 return true;
             case 2:
-                if (serviceType === TargetType.LOCAL) {
+                if (serviceType === TargetType.FILE) {
                     return serviceName.trim() !== "" && localPath.trim() !== "";
                 } else if (serviceType === TargetType.NDN) {
                     return serviceName.trim() !== "" && ndnUrl.trim() !== "";
@@ -221,11 +221,11 @@ export function AddServiceWizard({
                         <div className="grid gap-4">
                             <Card
                                 className={`cursor-pointer transition-all border-2 ${
-                                    serviceType === TargetType.LOCAL
+                                    serviceType === TargetType.FILE
                                         ? "border-primary bg-primary/5"
                                         : "border-border hover:border-primary/50"
                                 }`}
-                                onClick={() => setServiceType(TargetType.LOCAL)}
+                                onClick={() => setServiceType(TargetType.FILE)}
                             >
                                 <CardContent className="p-6">
                                     <div className="flex items-center gap-4">
@@ -295,7 +295,7 @@ export function AddServiceWizard({
                                 />
                             </div>
 
-                            {serviceType === TargetType.LOCAL && (
+                            {serviceType === TargetType.FILE && (
                                 <div className="space-y-3">
                                     <Label>目标路径 *</Label>
                                     <div className="space-y-2">
@@ -442,7 +442,7 @@ export function AddServiceWizard({
                                             </span>
                                             <span className="text-sm font-medium">
                                                 {serviceType ===
-                                                TargetType.LOCAL
+                                                TargetType.FILE
                                                     ? "本地存储"
                                                     : "NDN存储"}
                                             </span>
@@ -458,13 +458,13 @@ export function AddServiceWizard({
                                         <div className="flex justify-between">
                                             <span className="text-sm text-muted-foreground">
                                                 {serviceType ===
-                                                TargetType.LOCAL
+                                                TargetType.FILE
                                                     ? "存储路径:"
                                                     : "节点地址:"}
                                             </span>
                                             <span className="text-sm font-medium">
                                                 {serviceType ===
-                                                TargetType.LOCAL
+                                                TargetType.FILE
                                                     ? localPath
                                                     : ndnUrl}
                                             </span>

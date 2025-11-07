@@ -421,6 +421,7 @@ function refreshFilterTasks(
                     await refreshAllPlans();
                 }
             }
+            console.log("tasks: ", taskInfos);
             setFilterTasks(taskInfos);
             setAllTaskCount(total);
 

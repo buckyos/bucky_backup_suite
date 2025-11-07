@@ -86,7 +86,7 @@ export class FakeTaskManager extends BackupTaskManager {
         };
 
         const primaryTarget = addTarget({
-            target_type: TargetType.LOCAL,
+            target_type: TargetType.FILE,
             url: "file:///mnt/backup/nas",
             name: "Office NAS",
             description: "Primary network storage for workstation backups",
@@ -108,7 +108,7 @@ export class FakeTaskManager extends BackupTaskManager {
         });
 
         const portableTarget = addTarget({
-            target_type: TargetType.LOCAL,
+            target_type: TargetType.FILE,
             url: "file:///media/usb/vault",
             name: "Portable Vault",
             description: "Rotating USB drive for monthly exports",

@@ -209,17 +209,17 @@ pub enum TaskState {
     Pending,
     Paused,
     Done,
-    Failed,
+    Failed(String),
 }
 
 impl TaskState {
-    pub fn to_string(&self) -> &str {
+    pub fn to_string(&self) -> String {
         match self {
-            TaskState::Running => "RUNNING",
-            TaskState::Pending => "PENDING",
-            TaskState::Paused => "PAUSED",
-            TaskState::Done => "DONE",
-            TaskState::Failed => "FAILED",
+            TaskState::Running => "RUNNING".to_string(),
+            TaskState::Pending => "PENDING".to_string(),
+            TaskState::Paused => "PAUSED".to_string(),
+            TaskState::Done => "DONE".to_string(),
+            TaskState::Failed(msg) => format!("FAILED:{}", msg.as_str()),
         }
     }
 }
@@ -227,11 +227,11 @@ impl TaskState {
 impl ToSql for TaskState {
     fn to_sql(&self) -> rusqlite::Result<rusqlite::types::ToSqlOutput<'_>> {
         let s = match self {
-            TaskState::Running => "RUNNING",
-            TaskState::Pending => "PENDING",
-            TaskState::Paused => "PAUSED",
-            TaskState::Done => "DONE",
-            TaskState::Failed => "FAILED",
+            TaskState::Running => "RUNNING".to_string(),
+            TaskState::Pending => "PENDING".to_string(),
+            TaskState::Paused => "PAUSED".to_string(),
+            TaskState::Done => "DONE".to_string(),
+            TaskState::Failed(msg) => format!("FAILED:{}", msg.as_str()),
         };
         Ok(s.into())
     }
@@ -244,8 +244,15 @@ impl FromSql for TaskState {
             "PENDING" => TaskState::Pending,
             "PAUSED" => TaskState::Paused,
             "DONE" => TaskState::Done,
-            "FAILED" => TaskState::Failed,
-            _ => TaskState::Failed, // 默认失败状态
+            _ => {
+                let state = s.split_once(|c| c == ':');
+                if let Some((state, msg)) = state {
+                    if state == "FAILED" {
+                        return TaskState::Failed(msg.to_string());
+                    }
+                }
+                TaskState::Failed("UNKNOWN".to_string()) // 默认失败状态
+            }
         })
     }
 }
@@ -401,12 +408,12 @@ impl BackupTaskDb {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS work_tasks (
                 taskid TEXT PRIMARY KEY,
-                task_type task_type NOT NULL,
+                task_type TEXT NOT NULL,
                 owner_plan_id TEXT NOT NULL,
                 checkpoint_id TEXT NOT NULL,
                 total_size INTEGER NOT NULL,
                 completed_size INTEGER NOT NULL,
-                state task_state NOT NULL,
+                state TEXT NOT NULL,
                 create_time INTEGER NOT NULL,
                 update_time INTEGER NOT NULL,
                 item_count INTEGER NOT NULL,
@@ -465,10 +472,7 @@ impl BackupTaskDb {
             "ALTER TABLE backup_plans ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
             [],
         );
-        let _ = conn.execute(
-            "ALTER TABLE backup_plans ADD COLUMN target_id TEXT",
-            [],
-        );
+        let _ = conn.execute("ALTER TABLE backup_plans ADD COLUMN target_id TEXT", []);
         let _ = conn.execute(
             "UPDATE backup_plans SET target_id = target_url WHERE target_id IS NULL OR target_id = ''",
             [],
@@ -603,14 +607,12 @@ impl BackupTaskDb {
     pub fn update_task(&self, task: &WorkTask) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         let new_task_state;
-        if task.state == TaskState::Done
-            || task.state == TaskState::Failed
-            || task.state == TaskState::Pending
-        {
-            new_task_state = task.state.clone();
-        } else {
-            new_task_state = TaskState::Paused;
-        }
+        match task.state {
+            TaskState::Done | TaskState::Failed(_) => {
+                new_task_state = task.state.clone();
+            }
+            _ => new_task_state = TaskState::Paused,
+        };
         let rows_affected = conn.execute(
             "UPDATE work_tasks SET 
                 task_type = ?2,
@@ -683,7 +685,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE work_tasks SET state = ? WHERE taskid = ?",
-            params![TaskState::Failed, taskid],
+            params![TaskState::Failed("CANCEL".to_string()), taskid],
         )?;
 
         if rows_affected == 0 {
@@ -1056,9 +1058,7 @@ impl BackupTaskDb {
                 let plan_id: String = row.get(0)?;
                 let source_type: String = row.get(1)?;
                 let source_url: String = row.get(2)?;
-                let target_id: String = row
-                    .get::<_, Option<String>>(3)?
-                    .unwrap_or_default();
+                let target_id: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
                 let target_url: String = row.get(5)?;
                 let policy_json: String = row.get(10)?;
                 let priority: i64 = row.get(11)?;

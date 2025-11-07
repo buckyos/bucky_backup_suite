@@ -171,8 +171,7 @@ impl BackupEngine {
             for target_id in target_ids {
                 match self.task_db.get_backup_target(&target_id) {
                     Ok(record) => {
-                        all_targets
-                            .insert(target_id.clone(), Arc::new(Mutex::new(record)));
+                        all_targets.insert(target_id.clone(), Arc::new(Mutex::new(record)));
                     }
                     Err(err) => {
                         warn!(
@@ -378,14 +377,34 @@ impl BackupEngine {
         state: CheckPointState,
         owner_task: Arc<Mutex<WorkTask>>,
     ) -> BackupResult<()> {
-        let all_checkpoints = self.all_checkpoints.lock().await;
-        let checkpoint = all_checkpoints.get(checkpoint_id);
-        if checkpoint.is_some() {
-            let checkpoint = checkpoint.unwrap();
-            let mut real_checkpoint = checkpoint.lock().await;
-            real_checkpoint.state = state.clone();
+        {
+            let all_checkpoints = self.all_checkpoints.lock().await;
+            let checkpoint = all_checkpoints.get(checkpoint_id);
+            if checkpoint.is_some() {
+                let checkpoint = checkpoint.unwrap();
+                let mut real_checkpoint = checkpoint.lock().await;
+                real_checkpoint.state = state.clone();
+            }
+            self.task_db
+                .update_checkpoint_state(checkpoint_id, state.clone())?;
         }
-        self.task_db.update_checkpoint_state(checkpoint_id, state)?;
+
+        {
+            let mut real_task = owner_task.lock().await;
+            let mut new_task_state = None;
+            match state {
+                CheckPointState::Done => match real_task.state {
+                    TaskState::Done => {}
+                    _ => new_task_state = Some(TaskState::Done),
+                },
+                CheckPointState::Failed(msg) => new_task_state = Some(TaskState::Failed(msg)),
+                _ => {}
+            }
+            if let Some(new_state) = new_task_state {
+                real_task.state = new_state;
+                self.task_db.update_task(&real_task)?;
+            }
+        }
         Ok(())
     }
 
@@ -955,10 +974,7 @@ impl BackupEngine {
         match self.task_db.get_backup_target(target_id) {
             Ok(record) => {
                 let mut all_targets = self.all_targets.lock().await;
-                all_targets.insert(
-                    target_id.to_string(),
-                    Arc::new(Mutex::new(record.clone())),
-                );
+                all_targets.insert(target_id.to_string(), Arc::new(Mutex::new(record.clone())));
                 Ok(record)
             }
             Err(BackupDbError::NotFound(_)) => {
@@ -997,7 +1013,17 @@ impl BackupEngine {
         target_id: &str,
     ) -> BackupResult<BackupChunkTargetProvider> {
         let record = self.get_target_record(target_id).await?;
-        self.get_chunk_target_provider(record.url.as_str()).await
+        let url = if record.target_type == "file" {
+            if record.url.starts_with("file://") {
+                record.url
+            } else {
+                let file_url = url::Url::from_file_path(record.url.as_str()).unwrap();
+                file_url.to_string()
+            }
+        } else {
+            record.url
+        };
+        self.get_chunk_target_provider(url.as_str()).await
     }
 
     pub async fn list_backup_tasks(&self, filter: &str) -> BackupResult<Vec<String>> {
@@ -1107,12 +1133,9 @@ impl BackupEngine {
 
             let mut real_restore_task = restore_task.lock().await;
             if task_result.is_err() {
-                info!(
-                    "restore task failed: {} {}",
-                    taskid.as_str(),
-                    task_result.err().unwrap()
-                );
-                real_restore_task.state = TaskState::Failed;
+                let err = task_result.err().unwrap();
+                info!("restore task failed: {} {}", taskid.as_str(), err);
+                real_restore_task.state = TaskState::Failed(format!("Restore failed: {}", err));
             } else {
                 info!("restore task done: {} ", taskid.as_str());
                 real_restore_task.state = TaskState::Done;
@@ -1292,15 +1315,12 @@ mod tests {
         let target_record = BackupTargetRecord::new(
             target_id.to_string(),
             "file",
-            "file:///tmp/bucky_backup_result",
+            "/tmp/bucky_backup_result",
             "test target",
             Some("test target for unit"),
             None,
         );
-        engine
-            .task_db
-            .create_backup_target(&target_record)
-            .unwrap();
+        engine.task_db.create_backup_target(&target_record).unwrap();
         let new_plan = BackupPlanConfig::chunk2chunk(
             "file:///Users/liuzhicong/Downloads",
             target_id,
