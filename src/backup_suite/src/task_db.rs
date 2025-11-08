@@ -4,8 +4,8 @@ use buckyos_backup_lib::RestoreConfig;
 use buckyos_backup_lib::*;
 use log::*;
 use ndn_lib::ChunkId;
-use rusqlite::types::{FromSql, ToSql, ValueRef};
-use rusqlite::{params, Connection, Result as SqlResult};
+use rusqlite::types::{FromSql, ToSql, Value as SqlValue, ValueRef};
+use rusqlite::{params, params_from_iter, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::TryFrom;
@@ -290,6 +290,31 @@ impl FromSql for TaskType {
             _ => TaskType::Backup, // 默认备份类型
         })
     }
+}
+
+#[derive(Clone, Copy)]
+pub enum TaskOrderField {
+    CreateTime,
+    UpdateTime,
+    CompleteTime,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum SortOrder {
+    Asc,
+    Desc,
+}
+
+#[derive(Default, Clone)]
+pub struct TaskListQuery {
+    pub legacy_filter: Option<String>,
+    pub states: Vec<TaskState>,
+    pub types: Vec<TaskType>,
+    pub owner_plan_ids: Vec<String>,
+    pub owner_plan_titles: Vec<String>,
+    pub order_by: Vec<(TaskOrderField, SortOrder)>,
+    pub offset: usize,
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1295,6 +1320,162 @@ impl BackupTaskDb {
             return Err(BackupDbError::NotFound(target_id.to_string()));
         }
         Ok(())
+    }
+
+    pub fn query_task_ids(&self, query: &TaskListQuery) -> Result<(Vec<String>, usize)> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut from_clause = String::from(" FROM work_tasks");
+        if !query.owner_plan_titles.is_empty() {
+            from_clause.push_str(
+                " LEFT JOIN backup_plans ON backup_plans.plan_id = work_tasks.owner_plan_id",
+            );
+        }
+
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<SqlValue> = Vec::new();
+
+        if let Some(filter) = query.legacy_filter.as_deref() {
+            match filter {
+                "running" => conditions.push("work_tasks.state = 'RUNNING'".to_string()),
+                "paused" => conditions.push("work_tasks.state = 'PAUSED'".to_string()),
+                "failed" => conditions.push("work_tasks.state LIKE 'FAILED%'".to_string()),
+                "pending" => conditions.push("work_tasks.state = 'PENDING'".to_string()),
+                "done" => conditions.push("work_tasks.state = 'DONE'".to_string()),
+                _ => {}
+            }
+        }
+
+        if !query.states.is_empty() {
+            let mut state_clauses: Vec<String> = Vec::new();
+            let mut include_failed = false;
+            for state in &query.states {
+                match state {
+                    TaskState::Failed(_) => include_failed = true,
+                    _ => {
+                        state_clauses.push("work_tasks.state = ?".to_string());
+                        params.push(SqlValue::from(state.to_string()));
+                    }
+                }
+            }
+            if include_failed {
+                state_clauses.push("work_tasks.state LIKE 'FAILED%'".to_string());
+            }
+            if !state_clauses.is_empty() {
+                conditions.push(format!("({})", state_clauses.join(" OR ")));
+            }
+        }
+
+        if !query.types.is_empty() {
+            let placeholders = vec!["?"; query.types.len()].join(", ");
+            conditions.push(format!("work_tasks.task_type IN ({})", placeholders));
+            for ty in &query.types {
+                params.push(SqlValue::from(ty.to_string().to_owned()));
+            }
+        }
+
+        if !query.owner_plan_ids.is_empty() {
+            let placeholders = vec!["?"; query.owner_plan_ids.len()].join(", ");
+            conditions.push(format!("work_tasks.owner_plan_id IN ({})", placeholders));
+            for plan_id in &query.owner_plan_ids {
+                params.push(SqlValue::from(plan_id.clone()));
+            }
+        }
+
+        if !query.owner_plan_titles.is_empty() {
+            let mut title_clauses: Vec<String> = Vec::new();
+            for title in &query.owner_plan_titles {
+                title_clauses.push("LOWER(backup_plans.title) LIKE ?".to_string());
+                let pattern = format!("%{}%", title.to_lowercase());
+                params.push(SqlValue::from(pattern));
+            }
+            conditions.push(format!("({})", title_clauses.join(" OR ")));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+
+        let mut count_sql = String::from("SELECT COUNT(*)");
+        count_sql.push_str(&from_clause);
+        count_sql.push_str(&where_clause);
+
+        let total: i64 = {
+            let mut stmt = conn.prepare(&count_sql)?;
+            stmt.query_row(params_from_iter(params.iter()), |row| row.get(0))?
+        };
+        let total = usize::try_from(total).map_err(|_| {
+            BackupDbError::DataFormatError("task count exceeds usize range".to_string())
+        })?;
+
+        let mut select_sql = String::from("SELECT work_tasks.taskid");
+        select_sql.push_str(&from_clause);
+        select_sql.push_str(&where_clause);
+
+        if !query.order_by.is_empty() {
+            let mut order_parts: Vec<String> = Vec::new();
+            for (field, direction) in &query.order_by {
+                let dir = if *direction == SortOrder::Desc {
+                    "DESC"
+                } else {
+                    "ASC"
+                };
+                match field {
+                    TaskOrderField::CreateTime => {
+                        order_parts.push(format!("work_tasks.create_time {}", dir));
+                    }
+                    TaskOrderField::UpdateTime => {
+                        order_parts.push(format!("work_tasks.update_time {}", dir));
+                    }
+                    TaskOrderField::CompleteTime => {
+                        order_parts.push(format!(
+                            "CASE WHEN work_tasks.state = 'DONE' THEN 1 ELSE 0 END {}",
+                            dir
+                        ));
+                        order_parts.push(format!(
+                            "CASE WHEN work_tasks.state = 'DONE' THEN work_tasks.update_time END {}",
+                            dir
+                        ));
+                    }
+                }
+            }
+            if !order_parts.is_empty() {
+                select_sql.push_str(" ORDER BY ");
+                select_sql.push_str(&order_parts.join(", "));
+            }
+        }
+
+        let mut select_params = params.clone();
+        if let Some(limit) = query.limit {
+            let limit = i64::try_from(limit).map_err(|_| {
+                BackupDbError::DataFormatError("limit exceeds i64 range".to_string())
+            })?;
+            select_sql.push_str(" LIMIT ?");
+            select_params.push(SqlValue::from(limit));
+            if query.offset > 0 {
+                let offset = i64::try_from(query.offset).map_err(|_| {
+                    BackupDbError::DataFormatError("offset exceeds i64 range".to_string())
+                })?;
+                select_sql.push_str(" OFFSET ?");
+                select_params.push(SqlValue::from(offset));
+            }
+        } else if query.offset > 0 {
+            let offset = i64::try_from(query.offset).map_err(|_| {
+                BackupDbError::DataFormatError("offset exceeds i64 range".to_string())
+            })?;
+            select_sql.push_str(" LIMIT -1 OFFSET ?");
+            select_params.push(SqlValue::from(offset));
+        }
+
+        let mut stmt = conn.prepare(&select_sql)?;
+        let task_ids = stmt
+            .query_map(params_from_iter(select_params.iter()), |row| {
+                Ok::<String, rusqlite::Error>(row.get(0)?)
+            })?
+            .collect::<SqlResult<Vec<String>>>()?;
+
+        Ok((task_ids, total))
     }
 
     //return all task ids

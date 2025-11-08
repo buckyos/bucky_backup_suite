@@ -1,7 +1,8 @@
 #![allow(unused)]
 use crate::engine::*;
 use crate::task_db::{
-    BackupDbError, BackupPlanConfig, BackupTargetRecord, BackupTaskDb, TaskState, TaskType,
+    BackupDbError, BackupPlanConfig, BackupTargetRecord, BackupTaskDb, SortOrder, TaskListQuery,
+    TaskOrderField, TaskState, TaskType,
 };
 use ::kRPC::*;
 use async_trait::async_trait;
@@ -13,7 +14,6 @@ use log::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -649,7 +649,6 @@ impl WebControlServer {
         let mut type_filter: Option<Vec<TaskType>> = None;
         let mut owner_plan_id_filter: Option<Vec<String>> = None;
         let mut owner_plan_title_filter: Option<Vec<String>> = None;
-        let mut use_advanced_filter = false;
 
         if let Some(filter_value) = filter_value {
             match filter_value {
@@ -660,7 +659,6 @@ impl WebControlServer {
                     }
                 }
                 Value::Object(obj) => {
-                    use_advanced_filter = true;
                     if let Some(value) = obj.get("state") {
                         let parsed = parse_task_states(value)?;
                         if !parsed.is_empty() {
@@ -694,136 +692,34 @@ impl WebControlServer {
             }
         }
 
-        if order_by.is_some() {
-            use_advanced_filter = true;
-        }
+        let plan_title_filters_lower = owner_plan_title_filter
+            .as_ref()
+            .map(|titles| {
+                titles
+                    .iter()
+                    .map(|title| title.to_lowercase())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_else(|| Vec::new());
 
-        let filter_str = legacy_filter.as_deref().unwrap_or("");
+        let query = TaskListQuery {
+            legacy_filter,
+            states: state_filter.unwrap_or_default(),
+            types: type_filter.unwrap_or_default(),
+            owner_plan_ids: owner_plan_id_filter.unwrap_or_default(),
+            owner_plan_titles: plan_title_filters_lower,
+            order_by: order_by.unwrap_or_default(),
+            offset,
+            limit,
+        };
 
-        let engine = DEFAULT_ENGINE.lock().await;
-        let mut task_ids = engine
-            .list_backup_tasks(filter_str)
-            .await
+        let (task_ids, total) = self
+            .task_db
+            .query_task_ids(&query)
             .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
 
-        if !use_advanced_filter {
-            let total = task_ids.len();
-            let limit_value = limit.unwrap_or(usize::MAX);
-            let task_ids = task_ids
-                .into_iter()
-                .skip(offset)
-                .take(limit_value)
-                .collect::<Vec<_>>();
-            let result = json!({
-                "task_list": task_ids,
-                "total": total,
-            });
-            return Ok(RPCResponse::new(RPCResult::Success(result), req.id));
-        }
-
-        let plan_title_filters_lower = owner_plan_title_filter.as_ref().map(|titles| {
-            titles
-                .iter()
-                .map(|title| title.to_lowercase())
-                .collect::<Vec<String>>()
-        });
-        let mut plan_title_cache: HashMap<String, String> = HashMap::new();
-        let mut tasks = Vec::with_capacity(task_ids.len());
-
-        for task_id in &task_ids {
-            let task = engine
-                .get_task_info(task_id)
-                .await
-                .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
-            if plan_title_filters_lower.is_some()
-                && !plan_title_cache.contains_key(&task.owner_plan_id)
-            {
-                match engine.get_backup_plan(&task.owner_plan_id).await {
-                    Ok(plan) => {
-                        plan_title_cache
-                            .insert(task.owner_plan_id.clone(), plan.title.to_lowercase());
-                    }
-                    Err(_) => {
-                        plan_title_cache.insert(task.owner_plan_id.clone(), String::new());
-                    }
-                }
-            }
-            tasks.push(task);
-        }
-        drop(task_ids);
-        drop(engine);
-
-        let filtered_tasks: Vec<_> = tasks
-            .into_iter()
-            .filter(|task| {
-                if let Some(states) = &state_filter {
-                    if !states.iter().any(|state| *state == task.state) {
-                        return false;
-                    }
-                }
-                if let Some(types) = &type_filter {
-                    if !types.iter().any(|ty| *ty == task.task_type) {
-                        return false;
-                    }
-                }
-                if let Some(plan_ids) = &owner_plan_id_filter {
-                    if !plan_ids.iter().any(|plan| plan == &task.owner_plan_id) {
-                        return false;
-                    }
-                }
-                if let Some(title_filters) = &plan_title_filters_lower {
-                    if let Some(plan_title) = plan_title_cache.get(&task.owner_plan_id) {
-                        if !title_filters
-                            .iter()
-                            .any(|needle| plan_title.contains(needle))
-                        {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                }
-                true
-            })
-            .collect();
-
-        let mut filtered_tasks = filtered_tasks;
-        if let Some(order_rules) = order_by.as_ref() {
-            filtered_tasks.sort_by(|a, b| {
-                for (field, direction) in order_rules {
-                    let mut cmp = match field {
-                        TaskOrderField::CreateTime => a.create_time.cmp(&b.create_time),
-                        TaskOrderField::UpdateTime => a.update_time.cmp(&b.update_time),
-                        TaskOrderField::CompleteTime => {
-                            match (a.state == TaskState::Done, b.state == TaskState::Done) {
-                                (true, true) => a.update_time.cmp(&b.update_time),
-                                (true, false) => Ordering::Greater,
-                                (false, true) => Ordering::Less,
-                                (false, false) => Ordering::Equal,
-                            }
-                        }
-                    };
-                    if *direction == SortOrder::Desc {
-                        cmp = cmp.reverse();
-                    }
-                    if cmp != Ordering::Equal {
-                        return cmp;
-                    }
-                }
-                Ordering::Equal
-            });
-        }
-
-        let total = filtered_tasks.len();
-        let selected_task_ids: Vec<String> = filtered_tasks
-            .into_iter()
-            .skip(offset)
-            .take(limit.unwrap_or(usize::MAX))
-            .map(|task| task.taskid)
-            .collect();
-
         let result = json!({
-            "task_list": selected_task_ids,
+            "task_list": task_ids,
             "total": total,
         });
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
@@ -960,19 +856,6 @@ impl WebControlServer {
         });
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
-}
-
-#[derive(Clone, Copy)]
-enum TaskOrderField {
-    CreateTime,
-    UpdateTime,
-    CompleteTime,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum SortOrder {
-    Asc,
-    Desc,
 }
 
 fn parse_order_by(
