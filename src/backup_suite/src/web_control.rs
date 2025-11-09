@@ -28,6 +28,13 @@ struct DirectoryChild {
     is_directory: bool,
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ListDirectoryOptions {
+    only_dirs: bool,
+    only_files: bool,
+}
+
 #[derive(Clone)]
 struct WebControlServer {
     task_db: BackupTaskDb,
@@ -628,9 +635,7 @@ impl WebControlServer {
         }
         let task_id = task_id_value
             .and_then(|v| v.as_str().map(|s| s.to_string()))
-            .ok_or_else(|| {
-                RPCErrors::ParseRequestError("taskid must be a string".to_string())
-            })?;
+            .ok_or_else(|| RPCErrors::ParseRequestError("taskid must be a string".to_string()))?;
 
         let subdir = match req.params.get("subdir") {
             Some(Value::Null) | None => None,
@@ -669,9 +674,7 @@ impl WebControlServer {
             .as_ref()
             .map(|raw| normalize_virtual_path(raw))
             .filter(|value| !value.is_empty());
-        let subdir_prefix = normalized_subdir
-            .as_ref()
-            .map(|base| format!("{}/", base));
+        let subdir_prefix = normalized_subdir.as_ref().map(|base| format!("{}/", base));
 
         struct FileAggregate {
             total_size: u64,
@@ -744,13 +747,7 @@ impl WebControlServer {
             entries.push((true, name, 0, 0, 0));
         }
         for (name, agg) in file_entries {
-            entries.push((
-                false,
-                name,
-                agg.total_size,
-                agg.min_time,
-                agg.max_time,
-            ));
+            entries.push((false, name, agg.total_size, agg.min_time, agg.max_time));
         }
 
         entries.sort_by(|a, b| match (a.0, b.0) {
@@ -957,6 +954,17 @@ impl WebControlServer {
             }
         };
 
+        let options = match req.params.get("options") {
+            Some(Value::Null) | None => ListDirectoryOptions::default(),
+            Some(value) => {
+                serde_json::from_value::<ListDirectoryOptions>(value.clone()).map_err(|_| {
+                    RPCErrors::ParseRequestError(
+                        "options must be an object with boolean fields".to_string(),
+                    )
+                })?
+            }
+        };
+
         let entries: Vec<DirectoryChild> = match path_opt {
             Some(path_str) => {
                 let resolved_path = resolve_requested_path(&path_str);
@@ -981,7 +989,23 @@ impl WebControlServer {
             None => list_root_children()?,
         };
 
-        Ok(RPCResponse::new(RPCResult::Success(json!(entries)), req.id))
+        let filtered_entries = match (options.only_dirs, options.only_files) {
+            (true, false) => entries
+                .into_iter()
+                .filter(|entry| entry.is_directory)
+                .collect::<Vec<_>>(),
+            (false, true) => entries
+                .into_iter()
+                .filter(|entry| !entry.is_directory)
+                .collect::<Vec<_>>(),
+            (true, true) => vec![],
+            _ => entries,
+        };
+
+        Ok(RPCResponse::new(
+            RPCResult::Success(json!(filtered_entries)),
+            req.id,
+        ))
     }
 
     async fn validate_path(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
@@ -1325,7 +1349,9 @@ fn is_chunk_suffix(segment: &str) -> bool {
     if !segment.contains(':') {
         return false;
     }
-    segment.chars().all(|c| c.is_ascii_digit() || c == ':' || c == '-')
+    segment
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == ':' || c == '-')
 }
 
 #[async_trait]

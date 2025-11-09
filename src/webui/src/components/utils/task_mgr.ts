@@ -721,7 +721,10 @@ export class BackupTaskManager {
             only_files?: boolean;
         }
     ): Promise<DirectoryNode[]> {
-        return this.rpc_client.call("list_directory_children", { path: path });
+        return this.rpc_client.call("list_directory_children", {
+            path: path,
+            options: options,
+        });
     }
 
     async listLogs(
