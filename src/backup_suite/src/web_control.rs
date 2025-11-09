@@ -14,6 +14,7 @@ use log::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -618,6 +619,163 @@ impl WebControlServer {
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
+    async fn list_files_in_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let task_id_value = req.params.get("taskid");
+        if task_id_value.is_none() {
+            return Err(RPCErrors::ParseRequestError(
+                "taskid is required".to_string(),
+            ));
+        }
+        let task_id = task_id_value
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .ok_or_else(|| {
+                RPCErrors::ParseRequestError("taskid must be a string".to_string())
+            })?;
+
+        let subdir = match req.params.get("subdir") {
+            Some(Value::Null) | None => None,
+            Some(Value::String(s)) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }
+            Some(_) => {
+                return Err(RPCErrors::ParseRequestError(
+                    "subdir must be a string or null".to_string(),
+                ))
+            }
+        };
+
+        let task = self
+            .task_db
+            .load_task_by_id(&task_id)
+            .map_err(|err| match err {
+                BackupDbError::NotFound(_) => {
+                    RPCErrors::ReasonError(format!("task {} not found", task_id))
+                }
+                _ => RPCErrors::ReasonError(err.to_string()),
+            })?;
+
+        let checkpoint_id = task.checkpoint_id.clone();
+        let items = self
+            .task_db
+            .load_backup_chunk_items_by_checkpoint(&checkpoint_id)
+            .map_err(|err| RPCErrors::ReasonError(err.to_string()))?;
+
+        let normalized_subdir = subdir
+            .as_ref()
+            .map(|raw| normalize_virtual_path(raw))
+            .filter(|value| !value.is_empty());
+        let subdir_prefix = normalized_subdir
+            .as_ref()
+            .map(|base| format!("{}/", base));
+
+        struct FileAggregate {
+            total_size: u64,
+            min_time: u64,
+            max_time: u64,
+        }
+
+        let mut file_entries: HashMap<String, FileAggregate> = HashMap::new();
+        let mut dir_entries: HashSet<String> = HashSet::new();
+
+        for item in items {
+            let cleaned_path = strip_chunk_suffix(&item.item_id.replace('\\', "/"));
+            if cleaned_path.is_empty() {
+                continue;
+            }
+
+            let normalized_path = normalize_virtual_path(&cleaned_path);
+            if normalized_path.is_empty() {
+                continue;
+            }
+
+            let relative_path = if let (Some(base), Some(prefix)) =
+                (normalized_subdir.as_ref(), subdir_prefix.as_ref())
+            {
+                if normalized_path == *base {
+                    continue;
+                }
+                if let Some(stripped) = normalized_path.strip_prefix(prefix.as_str()) {
+                    let trimmed = stripped.trim_start_matches('/');
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    trimmed.to_string()
+                } else {
+                    continue;
+                }
+            } else {
+                normalized_path.clone()
+            };
+
+            if relative_path.is_empty() {
+                continue;
+            }
+
+            let mut segments = relative_path.split('/');
+            let first = match segments.next() {
+                Some(segment) if !segment.is_empty() => segment,
+                _ => continue,
+            };
+
+            if segments.next().is_some() {
+                dir_entries.insert(first.to_string());
+                continue;
+            }
+
+            let entry = file_entries
+                .entry(first.to_string())
+                .or_insert(FileAggregate {
+                    total_size: 0,
+                    min_time: item.last_update_time,
+                    max_time: item.last_update_time,
+                });
+            entry.total_size = entry.total_size.saturating_add(item.size);
+            entry.min_time = entry.min_time.min(item.last_update_time);
+            entry.max_time = entry.max_time.max(item.last_update_time);
+        }
+
+        let mut entries: Vec<(bool, String, u64, u64, u64)> = Vec::new();
+        for name in dir_entries {
+            entries.push((true, name, 0, 0, 0));
+        }
+        for (name, agg) in file_entries {
+            entries.push((
+                false,
+                name,
+                agg.total_size,
+                agg.min_time,
+                agg.max_time,
+            ));
+        }
+
+        entries.sort_by(|a, b| match (a.0, b.0) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            _ => a.1.to_lowercase().cmp(&b.1.to_lowercase()),
+        });
+
+        let files: Vec<Value> = entries
+            .into_iter()
+            .map(|(is_dir, name, len, create_time, update_time)| {
+                json!({
+                    "name": name,
+                    "len": len,
+                    "create_time": create_time,
+                    "update_time": update_time,
+                    "is_dir": is_dir,
+                })
+            })
+            .collect();
+
+        let result = json!({ "files": files });
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
+    }
+
     async fn list_backup_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
         let filter_value = req.params.get("filter");
         let offset = match req.params.get("offset") {
@@ -1143,6 +1301,33 @@ fn list_windows_drive_roots() -> Vec<DirectoryChild> {
     drives
 }
 
+fn normalize_virtual_path(raw: &str) -> String {
+    raw.replace('\\', "/")
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect::<Vec<&str>>()
+        .join("/")
+}
+
+fn strip_chunk_suffix(path: &str) -> String {
+    if let Some(idx) = path.rfind('/') {
+        let suffix = &path[idx + 1..];
+        if is_chunk_suffix(suffix) {
+            return path[..idx].to_string();
+        }
+    } else if is_chunk_suffix(path) {
+        return String::new();
+    }
+    path.trim_matches('/').to_string()
+}
+
+fn is_chunk_suffix(segment: &str) -> bool {
+    if !segment.contains(':') {
+        return false;
+    }
+    segment.chars().all(|c| c.is_ascii_digit() || c == ':' || c == '-')
+}
+
 #[async_trait]
 impl InnerServiceHandler for WebControlServer {
     async fn handle_rpc_call(
@@ -1164,6 +1349,7 @@ impl InnerServiceHandler for WebControlServer {
             "get_task_info" => self.get_task_info(req).await,
             "resume_backup_task" => self.resume_backup_task(req).await,
             "pause_backup_task" => self.pause_backup_task(req).await,
+            "list_files_in_task" => self.list_files_in_task(req).await,
             "list_backup_task" => self.list_backup_task(req).await,
             "list_directory_children" => self.list_directory_children(req).await,
             "validate_path" => self.validate_path(req).await,

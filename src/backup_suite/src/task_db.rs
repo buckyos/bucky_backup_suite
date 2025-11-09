@@ -893,7 +893,39 @@ impl BackupTaskDb {
         &self,
         checkpoint_id: &str,
     ) -> Result<Vec<BackupChunkItem>> {
-        unimplemented!()
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT item_id, chunk_id, local_chunk_id, state, size, last_update_time
+             FROM backup_items
+             WHERE checkpoint_id = ?",
+        )?;
+
+        let items = stmt
+            .query_map(params![checkpoint_id], |row| {
+                let item_id: String = row.get(0)?;
+                let chunk_id_str: String = row.get(1)?;
+                let chunk_id = ChunkId::new(&chunk_id_str).unwrap();
+                let local_chunk_id_str: String = row.get(2)?;
+                let local_chunk_id = if local_chunk_id_str.is_empty() {
+                    None
+                } else {
+                    Some(ChunkId::new(&local_chunk_id_str).unwrap())
+                };
+                let state: BackupItemState = row.get(3)?;
+                let size: u64 = row.get(4)?;
+                let last_update_time: u64 = row.get(5)?;
+                Ok(BackupChunkItem {
+                    item_id,
+                    chunk_id,
+                    local_chunk_id,
+                    state,
+                    size,
+                    last_update_time,
+                })
+            })?
+            .collect::<SqlResult<Vec<BackupChunkItem>>>()?;
+
+        Ok(items)
     }
 
     pub fn pop_wait_backup_item(&self, checkpoint_id: &str) -> Result<Option<BackupChunkItem>> {
