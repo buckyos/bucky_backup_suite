@@ -28,6 +28,55 @@ struct DirectoryChild {
     is_directory: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectoryEntryType {
+    Directory,
+    File,
+    Link,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedTargetType {
+    Directory,
+    File,
+}
+
+#[derive(Debug)]
+struct DirectoryEntry {
+    name: String,
+    entry_type: DirectoryEntryType,
+    target_type: Option<ResolvedTargetType>,
+}
+
+impl DirectoryEntry {
+    fn is_directory_like(&self) -> bool {
+        match self.entry_type {
+            DirectoryEntryType::Directory => true,
+            DirectoryEntryType::Link => {
+                matches!(self.target_type, Some(ResolvedTargetType::Directory))
+            }
+            _ => false,
+        }
+    }
+
+    fn is_file_like(&self) -> bool {
+        match self.entry_type {
+            DirectoryEntryType::File => true,
+            DirectoryEntryType::Link => matches!(self.target_type, Some(ResolvedTargetType::File)),
+            _ => false,
+        }
+    }
+
+    fn into_child(self) -> DirectoryChild {
+        let is_dir = self.is_directory_like();
+        DirectoryChild {
+            name: self.name,
+            is_directory: is_dir,
+        }
+    }
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ListDirectoryOptions {
@@ -965,7 +1014,7 @@ impl WebControlServer {
             }
         };
 
-        let entries: Vec<DirectoryChild> = match path_opt {
+        let entries: Vec<DirectoryEntry> = match path_opt {
             Some(path_str) => {
                 let resolved_path = resolve_requested_path(&path_str);
                 match fs::metadata(&resolved_path) {
@@ -989,18 +1038,19 @@ impl WebControlServer {
             None => list_root_children()?,
         };
 
-        let filtered_entries = match (options.only_dirs, options.only_files) {
-            (true, false) => entries
-                .into_iter()
-                .filter(|entry| entry.is_directory)
-                .collect::<Vec<_>>(),
-            (false, true) => entries
-                .into_iter()
-                .filter(|entry| !entry.is_directory)
-                .collect::<Vec<_>>(),
-            (true, true) => vec![],
-            _ => entries,
-        };
+        let only_dirs = options.only_dirs;
+        let only_files = options.only_files;
+
+        let filtered_entries = entries
+            .into_iter()
+            .filter(|entry| match (only_dirs, only_files) {
+                (true, false) => entry.is_directory_like(),
+                (false, true) => entry.is_file_like(),
+                (true, true) => false,
+                _ => true,
+            })
+            .map(DirectoryEntry::into_child)
+            .collect::<Vec<_>>();
 
         Ok(RPCResponse::new(
             RPCResult::Success(json!(filtered_entries)),
@@ -1200,21 +1250,22 @@ fn parse_task_type_from_str(value: &str) -> Option<TaskType> {
     }
 }
 
-fn list_root_children() -> Result<Vec<DirectoryChild>, RPCErrors> {
+fn list_root_children() -> Result<Vec<DirectoryEntry>, RPCErrors> {
     #[cfg(windows)]
     {
         Ok(list_windows_drive_roots())
     }
     #[cfg(not(windows))]
     {
-        Ok(vec![DirectoryChild {
+        Ok(vec![DirectoryEntry {
             name: "/".to_string(),
-            is_directory: true,
+            entry_type: DirectoryEntryType::Directory,
+            target_type: None,
         }])
     }
 }
 
-fn list_directory_entries_for_path(path: &Path) -> Result<Vec<DirectoryChild>, RPCErrors> {
+fn list_directory_entries_for_path(path: &Path) -> Result<Vec<DirectoryEntry>, RPCErrors> {
     let read_dir = fs::read_dir(path).map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
     let mut entries = Vec::new();
 
@@ -1232,10 +1283,14 @@ fn list_directory_entries_for_path(path: &Path) -> Result<Vec<DirectoryChild>, R
                         continue;
                     }
                 };
+                let entry_path = entry.path();
                 let name = entry.file_name().to_string_lossy().into_owned();
-                entries.push(DirectoryChild {
+                let (entry_type, target_type) =
+                    classify_directory_entry(&entry_path, &file_type, path);
+                entries.push(DirectoryEntry {
                     name,
-                    is_directory: file_type.is_dir(),
+                    entry_type,
+                    target_type,
                 });
             }
             Err(err) => {
@@ -1248,12 +1303,99 @@ fn list_directory_entries_for_path(path: &Path) -> Result<Vec<DirectoryChild>, R
         }
     }
 
-    entries.sort_by(|a, b| match (a.is_directory, b.is_directory) {
-        (true, false) => Ordering::Less,
-        (false, true) => Ordering::Greater,
-        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-    });
+    entries.sort_by(
+        |a, b| match (a.is_directory_like(), b.is_directory_like()) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        },
+    );
     Ok(entries)
+}
+
+const MAX_SYMLINK_DEPTH: usize = 40;
+
+fn classify_directory_entry(
+    entry_path: &Path,
+    file_type: &fs::FileType,
+    parent: &Path,
+) -> (DirectoryEntryType, Option<ResolvedTargetType>) {
+    if file_type.is_symlink() {
+        (
+            DirectoryEntryType::Link,
+            resolve_link_target_type(entry_path, parent),
+        )
+    } else if file_type.is_dir() {
+        (DirectoryEntryType::Directory, None)
+    } else if file_type.is_file() {
+        (DirectoryEntryType::File, None)
+    } else {
+        (DirectoryEntryType::Other, None)
+    }
+}
+
+fn resolve_link_target_type(entry_path: &Path, parent: &Path) -> Option<ResolvedTargetType> {
+    let mut current_path = entry_path.to_path_buf();
+    let mut visited = HashSet::new();
+
+    for depth in 0..MAX_SYMLINK_DEPTH {
+        if !visited.insert(current_path.clone()) {
+            warn!(
+                "resolve_link_target_type detected a symlink loop at {} after {} steps",
+                entry_path.display(),
+                depth
+            );
+            return None;
+        }
+
+        let metadata = match fs::symlink_metadata(&current_path) {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                warn!(
+                    "resolve_link_target_type failed to read metadata for {}: {}",
+                    current_path.display(),
+                    err
+                );
+                return None;
+            }
+        };
+
+        if metadata.file_type().is_symlink() {
+            let target = match fs::read_link(&current_path) {
+                Ok(target) => target,
+                Err(err) => {
+                    warn!(
+                        "resolve_link_target_type failed to read link target for {}: {}",
+                        current_path.display(),
+                        err
+                    );
+                    return None;
+                }
+            };
+
+            current_path = if target.is_absolute() {
+                target
+            } else {
+                let base = current_path.parent().unwrap_or(parent);
+                base.join(target)
+            };
+            continue;
+        }
+
+        if metadata.is_dir() {
+            return Some(ResolvedTargetType::Directory);
+        }
+        if metadata.is_file() {
+            return Some(ResolvedTargetType::File);
+        }
+        return None;
+    }
+
+    warn!(
+        "resolve_link_target_type exceeded maximum depth while resolving {}",
+        entry_path.display()
+    );
+    None
 }
 
 fn resolve_requested_path(raw: &str) -> PathBuf {
@@ -1310,14 +1452,15 @@ fn resolve_requested_path_unix(raw: &str) -> PathBuf {
 }
 
 #[cfg(windows)]
-fn list_windows_drive_roots() -> Vec<DirectoryChild> {
+fn list_windows_drive_roots() -> Vec<DirectoryEntry> {
     let mut drives = Vec::new();
     for letter in b'A'..=b'Z' {
         let drive = format!("{}:\\", letter as char);
         if Path::new(&drive).is_dir() {
-            drives.push(DirectoryChild {
+            drives.push(DirectoryEntry {
                 name: format!("{}:", letter as char),
-                is_directory: true,
+                entry_type: DirectoryEntryType::Directory,
+                target_type: None,
             });
         }
     }
