@@ -194,8 +194,23 @@ export class TaskMgrHelper {
     }
 
     static formatTime(timestamp?: number, never_str: string = "从不"): string {
-        if (timestamp === undefined) return never_str;
-        const date = new Date(timestamp);
+        if (timestamp === undefined || timestamp === null) {
+            return never_str;
+        }
+
+        // 后端返回的时间戳是 Unix 秒，需要转换成毫秒后再格式化
+        const msTimestamp = timestamp > 0 && timestamp < 1_000_000_000_000
+            ? timestamp * 1000
+            : timestamp;
+        if (msTimestamp <= 0) {
+            return never_str;
+        }
+
+        const date = new Date(msTimestamp);
+        if (Number.isNaN(date.getTime())) {
+            return never_str;
+        }
+
         return date.toLocaleString();
     }
 
