@@ -944,7 +944,12 @@ impl WebControlServer {
             .get_task_info(task_id)
             .await
             .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
-        let result = task_info.to_json_value();
+        let total_size = self
+            .task_db
+            .sum_backup_item_sizes(&task_info.checkpoint_id)
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+        let mut result = task_info.to_json_value();
+        result["total_size"] = total_size.into();
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 

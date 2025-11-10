@@ -583,6 +583,15 @@ impl BackupTaskDb {
         Ok(task)
     }
 
+    pub fn sum_backup_item_sizes(&self, checkpoint_id: &str) -> Result<u64> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(SUM(size), 0) FROM backup_items WHERE checkpoint_id = ?",
+        )?;
+        let total: i64 = stmt.query_row(params![checkpoint_id], |row| row.get(0))?;
+        Ok(if total < 0 { 0 } else { total as u64 })
+    }
+
     pub fn create_task(&self, task: &WorkTask) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         conn.execute(
