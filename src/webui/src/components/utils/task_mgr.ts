@@ -22,8 +22,8 @@ export interface TaskInfo {
     completed_size: number;
     state: TaskState;
     error?: string;
-    create_time: number; //unix timestamp
-    update_time: number; //unix timestamp
+    create_time: number; // unix timestamp
+    update_time: number; // unix timestamp
     item_count: number;
     completed_item_count: number;
     wait_transfer_item_count: number;

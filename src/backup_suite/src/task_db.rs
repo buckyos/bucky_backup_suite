@@ -149,6 +149,8 @@ pub struct BackupPlanConfig {
     pub last_checkpoint_index: u64,
     pub policy: Value,
     pub priority: i64,
+    pub create_time: u64,
+    pub update_time: u64,
 }
 
 impl BackupPlanConfig {
@@ -157,7 +159,7 @@ impl BackupPlanConfig {
     }
 
     pub fn to_json_value(&self) -> Value {
-        let result = json!({
+        json!({
             "source": self.source.get_source_url(),
             "target": self.target,
             "title": self.title,
@@ -166,8 +168,9 @@ impl BackupPlanConfig {
             "last_checkpoint_index": self.last_checkpoint_index,
             "policy": self.policy.clone(),
             "priority": self.priority,
-        });
-        result
+            "create_time": self.create_time,
+            "update_time": self.update_time,
+        })
     }
 
     pub fn chunk2chunk(source: &str, target_id: &str, title: &str, description: &str) -> Self {
@@ -181,6 +184,8 @@ impl BackupPlanConfig {
             last_checkpoint_index: 1024,
             policy: Value::Array(vec![]),
             priority: 0,
+            create_time: 0,
+            update_time: 0,
         }
     }
 
@@ -483,40 +488,12 @@ impl BackupTaskDb {
                 type_str TEXT NOT NULL,
                 last_checkpoint_index INTEGER NOT NULL,
                 policy TEXT NOT NULL DEFAULT '[]',
-                priority INTEGER NOT NULL DEFAULT 0
+                priority INTEGER NOT NULL DEFAULT 0,
+                create_time INTEGER NOT NULL,
+                update_time INTEGER NOT NULL
             )",
             [],
         )?;
-
-        // Ensure new columns exist for older databases
-        let _ = conn.execute(
-            "ALTER TABLE backup_plans ADD COLUMN policy TEXT NOT NULL DEFAULT '[]'",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE backup_plans ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
-        let _ = conn.execute("ALTER TABLE backup_plans ADD COLUMN target_id TEXT", []);
-        let _ = conn.execute(
-            "UPDATE backup_plans SET target_id = target_url WHERE target_id IS NULL OR target_id = ''",
-            [],
-        );
-        let _ = conn.execute(
-            "UPDATE backup_plans
-                SET target_id = (
-                    SELECT target_id FROM backup_targets
-                    WHERE backup_targets.url = backup_plans.target_url
-                    LIMIT 1
-                )
-             WHERE target_url IS NOT NULL
-               AND target_id = target_url
-               AND EXISTS (
-                    SELECT 1 FROM backup_targets
-                    WHERE backup_targets.url = backup_plans.target_url
-                )",
-            [],
-        );
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS backup_items (
@@ -998,6 +975,22 @@ impl BackupTaskDb {
         let policy_str = serde_json::to_string(&plan.policy)
             .map_err(|e| BackupDbError::DataFormatError(e.to_string()))?;
         let target_record = self.get_backup_target(&plan.target)?;
+        let create_time = if plan.create_time == 0 {
+            chrono::Utc::now().timestamp_millis() as u64
+        } else {
+            plan.create_time
+        };
+        let update_time = if plan.update_time == 0 {
+            create_time
+        } else {
+            plan.update_time
+        };
+        let create_time = i64::try_from(create_time).map_err(|_| {
+            BackupDbError::DataFormatError("plan.create_time exceeds i64 range".to_string())
+        })?;
+        let update_time = i64::try_from(update_time).map_err(|_| {
+            BackupDbError::DataFormatError("plan.update_time exceeds i64 range".to_string())
+        })?;
         conn.execute(
             "INSERT INTO backup_plans (
                 plan_id,
@@ -1011,8 +1004,10 @@ impl BackupTaskDb {
                 type_str,
                 last_checkpoint_index,
                 policy,
-                priority
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                priority,
+                create_time,
+                update_time
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 plan.get_plan_key(),
                 match &plan.source {
@@ -1029,6 +1024,8 @@ impl BackupTaskDb {
                 plan.last_checkpoint_index,
                 policy_str,
                 plan.priority,
+                create_time,
+                update_time,
             ],
         )?;
         Ok(())
@@ -1039,6 +1036,14 @@ impl BackupTaskDb {
         let policy_str = serde_json::to_string(&plan.policy)
             .map_err(|e| BackupDbError::DataFormatError(e.to_string()))?;
         let target_record = self.get_backup_target(&plan.target)?;
+        let update_time = if plan.update_time == 0 {
+            chrono::Utc::now().timestamp_millis() as u64
+        } else {
+            plan.update_time
+        };
+        let update_time = i64::try_from(update_time).map_err(|_| {
+            BackupDbError::DataFormatError("plan.update_time exceeds i64 range".to_string())
+        })?;
         let rows_affected = conn.execute(
             "UPDATE backup_plans SET 
                 source_type = ?2,
@@ -1051,7 +1056,8 @@ impl BackupTaskDb {
                 type_str = ?9,
                 last_checkpoint_index = ?10,
                 policy = ?11,
-                priority = ?12
+                priority = ?12,
+                update_time = ?13
             WHERE plan_id = ?1",
             params![
                 plan.get_plan_key(),
@@ -1069,6 +1075,7 @@ impl BackupTaskDb {
                 plan.last_checkpoint_index,
                 policy_str,
                 plan.priority,
+                update_time,
             ],
         )?;
 
@@ -1106,7 +1113,9 @@ impl BackupTaskDb {
                 type_str,
                 last_checkpoint_index,
                 policy,
-                priority
+                priority,
+                create_time,
+                update_time
             FROM backup_plans",
         )?;
 
@@ -1119,6 +1128,8 @@ impl BackupTaskDb {
                 let target_url: String = row.get(5)?;
                 let policy_json: String = row.get(10)?;
                 let priority: i64 = row.get(11)?;
+                let create_time_raw: i64 = row.get(12)?;
+                let update_time_raw: i64 = row.get(13)?;
 
                 let policy_value = match serde_json::from_str(&policy_json) {
                     Ok(value) => value,
@@ -1154,6 +1165,16 @@ impl BackupTaskDb {
                     last_checkpoint_index: row.get(9)?,
                     policy: policy_value,
                     priority,
+                    create_time: if create_time_raw < 0 {
+                        0
+                    } else {
+                        create_time_raw as u64
+                    },
+                    update_time: if update_time_raw < 0 {
+                        0
+                    } else {
+                        update_time_raw as u64
+                    },
                 })
             })?
             .collect::<SqlResult<Vec<BackupPlanConfig>>>()?;

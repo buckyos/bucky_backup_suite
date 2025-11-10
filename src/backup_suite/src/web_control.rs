@@ -255,6 +255,9 @@ impl WebControlServer {
         };
         plan_config.policy = policy_value.clone();
         plan_config.priority = priority_value;
+        let now = chrono::Utc::now().timestamp_millis();
+        plan_config.create_time = now as u64;
+        plan_config.update_time = now as u64;
 
         // Create plan via engine
         let engine = DEFAULT_ENGINE.lock().await;
@@ -264,7 +267,6 @@ impl WebControlServer {
             .await
             .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
         drop(engine);
-        let now = chrono::Utc::now().timestamp_millis();
 
         let result = json!({
             "plan_id": plan_id,

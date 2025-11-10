@@ -35,6 +35,7 @@ use crate::*;
 
 use buckyos_backup_lib::BackupResult;
 use buckyos_backup_lib::BuckyBackupError;
+use chrono::Utc;
 
 const SMALL_CHUNK_SIZE: u64 = 1024 * 1024; //1MB
 const LARGE_CHUNK_SIZE: u64 = 1024 * 1024 * 256; //256MB
@@ -252,12 +253,20 @@ impl BackupEngine {
     }
 
     //return planid
-    pub async fn create_backup_plan(&self, plan_config: BackupPlanConfig) -> BackupResult<String> {
+    pub async fn create_backup_plan(&self, mut plan_config: BackupPlanConfig) -> BackupResult<String> {
         self.get_target_record(plan_config.target.as_str()).await?;
         let plan_key = plan_config.get_plan_key();
         let mut all_plans = self.all_plans.lock().await;
         if all_plans.contains_key(&plan_key) {
             return Err(BuckyBackupError::Failed(format!("plan already exists")));
+        }
+
+        if plan_config.create_time == 0 {
+            let now = Utc::now().timestamp_millis() as u64;
+            plan_config.create_time = now;
+            plan_config.update_time = now;
+        } else if plan_config.update_time == 0 {
+            plan_config.update_time = plan_config.create_time;
         }
 
         self.task_db.create_backup_plan(&plan_config)?;
@@ -316,6 +325,7 @@ impl BackupEngine {
             unimplemented!()
         }
         plan.last_checkpoint_index += 1;
+        plan.update_time = Utc::now().timestamp_millis() as u64;
         let last_checkpoint_index = plan.last_checkpoint_index;
         self.task_db.update_backup_plan(&plan)?;
         let checkpoint_type = plan.get_checkpiont_type();
