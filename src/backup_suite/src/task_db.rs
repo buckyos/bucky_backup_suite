@@ -614,6 +614,33 @@ impl BackupTaskDb {
         Ok(if total < 0 { 0 } else { total as u64 })
     }
 
+    pub fn sum_all_completed_backup_items_size(&self) -> Result<u64> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(SUM(backup_items.size), 0) \
+             FROM work_tasks \
+             JOIN backup_items ON backup_items.checkpoint_id = work_tasks.checkpoint_id \
+             WHERE work_tasks.task_type = 'BACKUP' \
+             AND work_tasks.state = 'DONE'",
+        )?;
+        let total: i64 = stmt.query_row([], |row| row.get(0))?;
+        Ok(if total < 0 { 0 } else { total as u64 })
+    }
+
+    pub fn sum_completed_backup_items_size_since(&self, since_timestamp_ms: i64) -> Result<u64> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(SUM(backup_items.size), 0) \
+             FROM work_tasks \
+             JOIN backup_items ON backup_items.checkpoint_id = work_tasks.checkpoint_id \
+             WHERE work_tasks.task_type = 'BACKUP' \
+             AND work_tasks.state = 'DONE' \
+             AND work_tasks.update_time >= ?",
+        )?;
+        let total: i64 = stmt.query_row(params![since_timestamp_ms], |row| row.get(0))?;
+        Ok(if total < 0 { 0 } else { total as u64 })
+    }
+
     pub fn create_task(&self, task: &WorkTask) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         conn.execute(

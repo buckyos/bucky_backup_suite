@@ -13,6 +13,7 @@ use cyfs_warp::*;
 use log::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use chrono::{Local, TimeZone};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -1003,6 +1004,35 @@ impl WebControlServer {
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
+    async fn consume_size_summary(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let total = self
+            .task_db
+            .sum_all_completed_backup_items_size()
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+
+        let now = Local::now();
+        let naive_midnight = now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| RPCErrors::ReasonError("failed to compute start of day".to_string()))?;
+        let today_start = Local
+            .from_local_datetime(&naive_midnight)
+            .single()
+            .ok_or_else(|| RPCErrors::ReasonError("failed to resolve local start of day".to_string()))?
+            .timestamp_millis();
+
+        let today = self
+            .task_db
+            .sum_completed_backup_items_size_since(today_start)
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+
+        let result = json!({
+            "total": total,
+            "today": today,
+        });
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
+    }
+
     async fn list_directory_children(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
         let path_value = req.params.get("path");
         let path_opt = match path_value {
@@ -1537,6 +1567,7 @@ impl InnerServiceHandler for WebControlServer {
             "get_task_info" => self.get_task_info(req).await,
             "resume_backup_task" => self.resume_backup_task(req).await,
             "pause_backup_task" => self.pause_backup_task(req).await,
+            "consume_size_summary" => self.consume_size_summary(req).await,
             "list_files_in_task" => self.list_files_in_task(req).await,
             "list_backup_task" => self.list_backup_task(req).await,
             "list_directory_children" => self.list_directory_children(req).await,
