@@ -349,10 +349,22 @@ impl WebControlServer {
             .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
         let mut result = plan.to_json_value();
         let is_running = engine.is_plan_have_running_backup_task(plan_id).await;
+
+        let completed_backup_count = self
+            .task_db
+            .count_completed_backup_tasks(&plan_id)
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+        let completed_backup_size = self
+            .task_db
+            .sum_completed_backup_items_size(&plan_id)
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+
         result["is_running"] = json!(is_running);
         result["target_type"] = json!(target_record.target_type);
         result["target_url"] = json!(target_record.url);
         result["target_name"] = json!(target_record.name);
+        result["total_size"] = json!(completed_backup_size);
+        result["total_backup"] = json!(completed_backup_count);
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
