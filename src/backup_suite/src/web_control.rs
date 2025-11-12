@@ -8,12 +8,12 @@ use ::kRPC::*;
 use async_trait::async_trait;
 use buckyos_backup_lib::RestoreConfig;
 use buckyos_kit::{get_buckyos_service_data_dir, get_buckyos_system_bin_dir};
+use chrono::{Local, TimeZone};
 use cyfs_gateway_lib::*;
 use cyfs_warp::*;
 use log::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use chrono::{Local, TimeZone};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -718,6 +718,7 @@ impl WebControlServer {
             }
         };
 
+        // TODO: 这里条目可能太多，一次性加载过于消耗内存
         let task = self
             .task_db
             .load_task_by_id(&task_id)
@@ -1018,7 +1019,9 @@ impl WebControlServer {
         let today_start = Local
             .from_local_datetime(&naive_midnight)
             .single()
-            .ok_or_else(|| RPCErrors::ReasonError("failed to resolve local start of day".to_string()))?
+            .ok_or_else(|| {
+                RPCErrors::ReasonError("failed to resolve local start of day".to_string())
+            })?
             .timestamp_millis();
 
         let today = self
