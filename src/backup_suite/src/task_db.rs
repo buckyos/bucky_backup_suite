@@ -504,6 +504,7 @@ impl BackupTaskDb {
                 state TEXT NOT NULL,
                 size INTEGER NOT NULL,
                 last_update_time INTEGER NOT NULL,
+                offset INTEGER,
                 PRIMARY KEY (item_id, checkpoint_id)
             )",
             [],
@@ -585,9 +586,8 @@ impl BackupTaskDb {
 
     pub fn sum_backup_item_sizes(&self, checkpoint_id: &str) -> Result<u64> {
         let conn = Connection::open(&self.db_path)?;
-        let mut stmt = conn.prepare(
-            "SELECT COALESCE(SUM(size), 0) FROM backup_items WHERE checkpoint_id = ?",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT COALESCE(SUM(size), 0) FROM backup_items WHERE checkpoint_id = ?")?;
         let total: i64 = stmt.query_row(params![checkpoint_id], |row| row.get(0))?;
         Ok(if total < 0 { 0 } else { total as u64 })
     }
@@ -758,7 +758,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let local_chunk_id = item.local_chunk_id.clone().map(|id| id.to_string());
         conn.execute(
-            "INSERT INTO backup_items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO backup_items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 item.item_id,
                 checkpoint_id,
@@ -767,6 +767,7 @@ impl BackupTaskDb {
                 item.state,
                 item.size,
                 item.last_update_time,
+                item.offset
             ],
         )?;
         Ok(())
@@ -800,7 +801,7 @@ impl BackupTaskDb {
         for item in item_list {
             let local_chunk_id = item.local_chunk_id.clone().map(|id| id.to_string());
             tx.execute(
-                "INSERT INTO backup_items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO backup_items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     item.item_id,
                     checkpoint_id,
@@ -809,6 +810,7 @@ impl BackupTaskDb {
                     item.state,
                     item.size,
                     item.last_update_time,
+                    item.offset
                 ],
             )?;
         }
@@ -927,37 +929,46 @@ impl BackupTaskDb {
     pub fn load_backup_chunk_items_by_checkpoint(
         &self,
         checkpoint_id: &str,
+        sub_path: Option<&str>,
+        offset: Option<u64>,
+        limit: Option<u64>,
     ) -> Result<Vec<BackupChunkItem>> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
-            "SELECT item_id, chunk_id, local_chunk_id, state, size, last_update_time
+            "SELECT item_id, chunk_id, local_chunk_id, state, size, last_update_time, offset
              FROM backup_items
-             WHERE checkpoint_id = ?",
+             WHERE checkpoint_id = ? AND item_id LINK ?
+             ORDER BY item_id, offset ASC",
         )?;
 
         let items = stmt
-            .query_map(params![checkpoint_id], |row| {
-                let item_id: String = row.get(0)?;
-                let chunk_id_str: String = row.get(1)?;
-                let chunk_id = ChunkId::new(&chunk_id_str).unwrap();
-                let local_chunk_id_str: String = row.get(2)?;
-                let local_chunk_id = if local_chunk_id_str.is_empty() {
-                    None
-                } else {
-                    Some(ChunkId::new(&local_chunk_id_str).unwrap())
-                };
-                let state: BackupItemState = row.get(3)?;
-                let size: u64 = row.get(4)?;
-                let last_update_time: u64 = row.get(5)?;
-                Ok(BackupChunkItem {
-                    item_id,
-                    chunk_id,
-                    local_chunk_id,
-                    state,
-                    size,
-                    last_update_time,
-                })
-            })?
+            .query_map(
+                params![checkpoint_id, format!("*{}*", sub_path.unwrap_or(""))],
+                |row| {
+                    let item_id: String = row.get(0)?;
+                    let chunk_id_str: String = row.get(1)?;
+                    let chunk_id = ChunkId::new(&chunk_id_str).unwrap();
+                    let local_chunk_id_str: String = row.get(2)?;
+                    let local_chunk_id = if local_chunk_id_str.is_empty() {
+                        None
+                    } else {
+                        Some(ChunkId::new(&local_chunk_id_str).unwrap())
+                    };
+                    let state: BackupItemState = row.get(3)?;
+                    let size: u64 = row.get(4)?;
+                    let last_update_time: u64 = row.get(5)?;
+                    let offset: u64 = row.get(6)?;
+                    Ok(BackupChunkItem {
+                        item_id,
+                        chunk_id,
+                        local_chunk_id,
+                        state,
+                        size,
+                        last_update_time,
+                        offset,
+                    })
+                },
+            )?
             .collect::<SqlResult<Vec<BackupChunkItem>>>()?;
 
         Ok(items)
@@ -966,7 +977,7 @@ impl BackupTaskDb {
     pub fn pop_wait_backup_item(&self, checkpoint_id: &str) -> Result<Option<BackupChunkItem>> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
-            "SELECT item_id, chunk_id, size,last_update_time FROM backup_items WHERE checkpoint_id = ? AND state = 'NEW'  ORDER BY last_update_time LIMIT 1"
+            "SELECT item_id, chunk_id, size, last_update_time, offset FROM backup_items WHERE checkpoint_id = ? AND state = 'NEW'  ORDER BY last_update_time LIMIT 1"
         )?;
         let item = stmt.query_row(params![checkpoint_id], |row| {
             let chunk_id_str: String = row.get(1)?;
@@ -978,6 +989,7 @@ impl BackupTaskDb {
                 size: row.get(2)?,
                 state: BackupItemState::New,
                 last_update_time: row.get(3)?,
+                offset: row.get(4)?,
             })
         });
         //处理没返回记录的情况

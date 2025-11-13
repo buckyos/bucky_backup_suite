@@ -6,6 +6,8 @@ use buckyos_backup_lib::*;
 use buckyos_kit::buckyos_get_unix_timestamp;
 use buckyos_kit::get_buckyos_service_data_dir;
 use dyn_clone::DynClone;
+use futures::future::join_all;
+use futures::future::select_all;
 use futures::stream::futures_unordered::IterMut;
 use lazy_static::lazy_static;
 use log::*;
@@ -253,7 +255,10 @@ impl BackupEngine {
     }
 
     //return planid
-    pub async fn create_backup_plan(&self, mut plan_config: BackupPlanConfig) -> BackupResult<String> {
+    pub async fn create_backup_plan(
+        &self,
+        mut plan_config: BackupPlanConfig,
+    ) -> BackupResult<String> {
         self.get_target_record(plan_config.target.as_str()).await?;
         let plan_key = plan_config.get_plan_key();
         let mut all_plans = self.all_plans.lock().await;
@@ -774,6 +779,7 @@ impl BackupEngine {
                                         init_offset,
                                     )
                                     .await?;
+                                // TODO: 并发执行?
                                 let trans_bytes =
                                     tokio::io::copy(&mut reader, &mut writer)
                                         .await
@@ -888,7 +894,172 @@ impl BackupEngine {
         source: BackupChunkSourceProvider,
         target: BackupChunkTargetProvider,
     ) -> BackupResult<()> {
-        unimplemented!()
+        let checkpoint = self
+            .all_checkpoints
+            .lock()
+            .await
+            .get(checkpoint_id.as_str())
+            .cloned();
+        let checkpoint = if let Some(checkpoint) = checkpoint {
+            checkpoint
+        } else {
+            let checkpoint = self.task_db.load_checkpoint_by_id(checkpoint_id.as_str())?;
+            let checkpoint = Arc::new(Mutex::new(checkpoint));
+            self.all_checkpoints
+                .lock()
+                .await
+                .entry(checkpoint_id.clone())
+                .or_insert(checkpoint.clone());
+            checkpoint
+        };
+
+        let engine = self.clone();
+        // TODO: 应该有个状态保存工作线程状态，避免多个工作线程同时工作
+        tokio::spawn(async move {
+            let todo_what_is_target_id = "";
+            let source = Arc::new(source);
+            let target = Arc::new(target);
+            let mut pending_tasks = vec![];
+            let mut process_item_pos = 0;
+            let mut is_all_items_load = false;
+            let mut load_result = Ok(());
+            loop {
+                loop {
+                    let load_limit = 16 - pending_tasks.len() as u64;
+                    if is_all_items_load
+                        || load_limit < 4
+                        || restore_task.lock().await.state != TaskState::Running
+                    {
+                        break;
+                    }
+                    load_result = Ok(());
+                    let standby_items = engine.task_db.load_backup_chunk_items_by_checkpoint(
+                        checkpoint_id.as_str(),
+                        None,
+                        Some(process_item_pos),
+                        Some(load_limit),
+                    );
+                    let standby_items = match standby_items {
+                        Err(err) => {
+                            load_result = Err(err);
+                            break;
+                        }
+                        Ok(t) => {
+                            if t.len() == 0 {
+                                is_all_items_load = true;
+                            } else {
+                                process_item_pos = process_item_pos + t.len() as u64;
+                            }
+                            t
+                        }
+                    };
+
+                    for standby_item in standby_items {
+                        let source_clone = source.clone();
+                        let target_clone = target.clone();
+                        let restore_task_clone = restore_task.clone();
+                        let engine_clone = engine.clone();
+                        let new_task = tokio::spawn(async move {
+                            let restore_cfg = {
+                                restore_task_clone
+                                    .lock()
+                                    .await
+                                    .restore_config
+                                    .clone()
+                                    .expect("no restore-config for restore task.")
+                            };
+                            // TODO: 如果restore_cfg.restore_location_url是本地路径，把它转换成file://开头的URL
+                            let source_writer = source_clone
+                                .open_writer_for_restore(
+                                    todo_what_is_target_id,
+                                    &standby_item,
+                                    &restore_cfg,
+                                    0,
+                                )
+                                .await;
+                            let (source_writer, _offset) = match source_writer {
+                                Err(err) => {
+                                    let mut real_restore_task = restore_task_clone.lock().await;
+                                    real_restore_task.state = TaskState::Failed(format!(
+                                        "Open writer failed. detail: {}",
+                                        err
+                                    ));
+                                    let _ignore_err =
+                                        engine_clone.task_db.update_task(&real_restore_task);
+                                    return;
+                                }
+                                Ok(writer) => writer,
+                            };
+                            let target_reader = target_clone
+                                .open_chunk_reader_for_restore(&standby_item.chunk_id, 0)
+                                .await;
+                            let mut target_reader = match target_reader {
+                                Err(err) => {
+                                    let mut real_restore_task = restore_task_clone.lock().await;
+                                    real_restore_task.state = TaskState::Failed(format!(
+                                        "Open reader failed. detail: {}",
+                                        err
+                                    ));
+                                    let _ignore_err =
+                                        engine_clone.task_db.update_task(&real_restore_task);
+                                    return;
+                                }
+                                Ok(reader) => reader,
+                            };
+
+                            let ret = copy_chunk(
+                                standby_item.chunk_id,
+                                target_reader,
+                                source_writer,
+                                None,
+                                None,
+                            )
+                            .await;
+                            if let Err(err) = ret {
+                                let mut real_restore_task = restore_task_clone.lock().await;
+                                real_restore_task.state = TaskState::Failed(format!(
+                                    "Copy chunk failed. detail: {}",
+                                    err
+                                ));
+                                let _ignore_err =
+                                    engine_clone.task_db.update_task(&real_restore_task);
+                                return;
+                            }
+                        });
+
+                        pending_tasks.push(new_task);
+                    }
+
+                    break;
+                }
+
+                let (result, index, remain) = select_all(pending_tasks.iter_mut()).await;
+                result.expect(format!("select tasks[{}] failed", index).as_str());
+                pending_tasks.remove(index);
+
+                if pending_tasks.len() == 0 {
+                    if is_all_items_load {
+                        let mut real_restore_task = restore_task.lock().await;
+                        real_restore_task.state = TaskState::Done;
+                        let _ignore_err = engine.task_db.update_task(&real_restore_task);
+                        break;
+                    } else {
+                        if let Err(err) = &load_result {
+                            let mut real_restore_task = restore_task.lock().await;
+                            real_restore_task.state =
+                                TaskState::Failed(format!("Read items failed. detail: {}", err));
+                            let _ignore_err = engine.task_db.update_task(&real_restore_task);
+                            break;
+                        }
+                    }
+
+                    if restore_task.lock().await.state != TaskState::Running {
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(())
     }
 
     async fn run_dir2chunk_restore_task(

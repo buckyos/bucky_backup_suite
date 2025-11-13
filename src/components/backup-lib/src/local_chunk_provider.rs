@@ -113,6 +113,16 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
                             }
                             let relative_path =
                                 relative_path.unwrap().to_string_lossy().to_string();
+                            let mut offset = 0;
+                            if let Some(offset_pos) = inner_path.rfind('/') {
+                                if let Some(offset_end) = inner_path.find(':') {
+                                    offset =
+                                        (&inner_path[offset_pos + 1..offset_end]).parse().expect(
+                                            format!("inner-path format error: {}", inner_path)
+                                                .as_str(),
+                                        );
+                                }
+                            }
                             let backup_item = BackupChunkItem {
                                 item_id: relative_path,
                                 chunk_id: chunk_id,
@@ -120,6 +130,7 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
                                 state: BackupItemState::New,
                                 size: chunk_size,
                                 last_update_time: now,
+                                offset,
                             };
 
                             items_ref.lock().await.push(backup_item);

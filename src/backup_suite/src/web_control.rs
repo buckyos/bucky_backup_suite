@@ -718,7 +718,6 @@ impl WebControlServer {
             }
         };
 
-        // TODO: 这里条目可能太多，一次性加载过于消耗内存
         let task = self
             .task_db
             .load_task_by_id(&task_id)
@@ -729,10 +728,11 @@ impl WebControlServer {
                 _ => RPCErrors::ReasonError(err.to_string()),
             })?;
 
+        // TODO: 这里条目可能太多，一次性加载过于消耗内存
         let checkpoint_id = task.checkpoint_id.clone();
         let items = self
             .task_db
-            .load_backup_chunk_items_by_checkpoint(&checkpoint_id)
+            .load_backup_chunk_items_by_checkpoint(&checkpoint_id, subdir.as_deref(), None, None)
             .map_err(|err| RPCErrors::ReasonError(err.to_string()))?;
 
         let normalized_subdir = subdir
