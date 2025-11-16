@@ -6,7 +6,7 @@ use crate::task_db::{
 };
 use ::kRPC::*;
 use async_trait::async_trait;
-use buckyos_backup_lib::RestoreConfig;
+use buckyos_backup_lib::{ChunkInnerPathHelper, RestoreConfig};
 use buckyos_kit::{get_buckyos_service_data_dir, get_buckyos_system_bin_dir};
 use chrono::{Local, TimeZone};
 use cyfs_gateway_lib::*;
@@ -737,7 +737,7 @@ impl WebControlServer {
 
         let normalized_subdir = subdir
             .as_ref()
-            .map(|raw| normalize_virtual_path(raw))
+            .map(|raw| ChunkInnerPathHelper::normalize_virtual_path(raw))
             .filter(|value| !value.is_empty());
         let subdir_prefix = normalized_subdir.as_ref().map(|base| format!("{}/", base));
 
@@ -751,12 +751,13 @@ impl WebControlServer {
         let mut dir_entries: HashSet<String> = HashSet::new();
 
         for item in items {
-            let cleaned_path = strip_chunk_suffix(&item.item_id.replace('\\', "/"));
+            let cleaned_path =
+                ChunkInnerPathHelper::strip_chunk_suffix(&item.item_id.replace('\\', "/"));
             if cleaned_path.is_empty() {
                 continue;
             }
 
-            let normalized_path = normalize_virtual_path(&cleaned_path);
+            let normalized_path = ChunkInnerPathHelper::normalize_virtual_path(&cleaned_path);
             if normalized_path.is_empty() {
                 continue;
             }
@@ -1518,35 +1519,6 @@ fn list_windows_drive_roots() -> Vec<DirectoryEntry> {
     }
     drives.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     drives
-}
-
-fn normalize_virtual_path(raw: &str) -> String {
-    raw.replace('\\', "/")
-        .split('/')
-        .filter(|segment| !segment.is_empty() && *segment != ".")
-        .collect::<Vec<&str>>()
-        .join("/")
-}
-
-fn strip_chunk_suffix(path: &str) -> String {
-    if let Some(idx) = path.rfind('/') {
-        let suffix = &path[idx + 1..];
-        if is_chunk_suffix(suffix) {
-            return path[..idx].to_string();
-        }
-    } else if is_chunk_suffix(path) {
-        return String::new();
-    }
-    path.trim_matches('/').to_string()
-}
-
-fn is_chunk_suffix(segment: &str) -> bool {
-    if !segment.contains(':') {
-        return false;
-    }
-    segment
-        .chars()
-        .all(|c| c.is_ascii_digit() || c == ':' || c == '-')
 }
 
 #[async_trait]

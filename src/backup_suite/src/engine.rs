@@ -23,6 +23,7 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::io::AsyncRead;
+use tokio::io::BufWriter;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -915,11 +916,36 @@ impl BackupEngine {
 
         let engine = self.clone();
         // TODO: 应该有个状态保存工作线程状态，避免多个工作线程同时工作
+        struct WaitFlushBUffer {
+            item: BackupChunkItem,
+            buf: Vec<u8>,
+        }
+        struct WaitFlushFileInfo {
+            max_len: u64,
+            wait_buffers: Vec<WaitFlushBUffer>,
+        }
         tokio::spawn(async move {
             let todo_what_is_target_id = "";
+            let mut restore_cfg = {
+                restore_task
+                    .lock()
+                    .await
+                    .restore_config
+                    .clone()
+                    .expect("no restore-config for restore task.")
+            };
+
+            if !restore_cfg.restore_location_url.starts_with("file://") {
+                restore_cfg.restore_location_url =
+                    url::Url::from_file_path(restore_cfg.restore_location_url.as_str())
+                        .unwrap()
+                        .to_string();
+            }
             let source = Arc::new(source);
             let target = Arc::new(target);
             let mut pending_tasks = vec![];
+            let mut wait_flush_buffers: Arc<Mutex<HashMap<String, WaitFlushFileInfo>>> =
+                Arc::new(Mutex::new(HashMap::new()));
             let mut process_item_pos = 0;
             let mut is_all_items_load = false;
             let mut load_result = Ok(());
@@ -955,101 +981,330 @@ impl BackupEngine {
                     };
 
                     for standby_item in standby_items {
+                        let file_path =
+                            ChunkInnerPathHelper::strip_chunk_suffix(&standby_item.item_id);
                         let source_clone = source.clone();
                         let target_clone = target.clone();
                         let restore_task_clone = restore_task.clone();
                         let engine_clone = engine.clone();
+                        let file_path_clone = file_path.clone();
+                        let wait_flush_buffers_clone = wait_flush_buffers.clone();
+                        let standby_item_clone = standby_item.clone();
+                        let restore_cfg_clone = restore_cfg.clone();
                         let new_task = tokio::spawn(async move {
-                            let restore_cfg = {
-                                restore_task_clone
-                                    .lock()
-                                    .await
-                                    .restore_config
-                                    .clone()
-                                    .expect("no restore-config for restore task.")
-                            };
-                            // TODO: 如果restore_cfg.restore_location_url是本地路径，把它转换成file://开头的URL
-                            let source_writer = source_clone
-                                .open_writer_for_restore(
-                                    todo_what_is_target_id,
-                                    &standby_item,
-                                    &restore_cfg,
-                                    0,
-                                )
-                                .await;
-                            let (source_writer, _offset) = match source_writer {
-                                Err(err) => {
-                                    let mut real_restore_task = restore_task_clone.lock().await;
-                                    real_restore_task.state = TaskState::Failed(format!(
-                                        "Open writer failed. detail: {}",
-                                        err
-                                    ));
-                                    let _ignore_err =
-                                        engine_clone.task_db.update_task(&real_restore_task);
-                                    return;
+                            let mut buffer = vec![];
+                            let is_buffer = {
+                                let file_infos = wait_flush_buffers_clone.lock().await;
+                                match file_infos.get(&file_path_clone) {
+                                    Some(file_info) => {
+                                        file_info.max_len < standby_item_clone.offset
+                                    }
+                                    None => false,
                                 }
-                                Ok(writer) => writer,
                             };
-                            let target_reader = target_clone
-                                .open_chunk_reader_for_restore(&standby_item.chunk_id, 0)
-                                .await;
-                            let mut target_reader = match target_reader {
-                                Err(err) => {
-                                    let mut real_restore_task = restore_task_clone.lock().await;
-                                    real_restore_task.state = TaskState::Failed(format!(
-                                        "Open reader failed. detail: {}",
-                                        err
-                                    ));
-                                    let _ignore_err =
-                                        engine_clone.task_db.update_task(&real_restore_task);
-                                    return;
-                                }
-                                Ok(reader) => reader,
-                            };
+                            let (buffer_writer, file_writer) = {
+                                if is_buffer {
+                                    (
+                                        Some(BufWriter::new(std::io::Cursor::new(&mut buffer))),
+                                        None,
+                                    )
+                                } else {
+                                    // try file
+                                    let source_writer = source_clone
+                                        .open_writer_for_restore(
+                                            todo_what_is_target_id,
+                                            &standby_item_clone,
+                                            &restore_cfg_clone,
+                                            0,
+                                        )
+                                        .await;
+                                    match source_writer {
+                                        Err(err) => match err {
+                                            BuckyBackupError::AlreadyDone(_) => return Ok(None),
+                                            BuckyBackupError::TryLater(_) => {
+                                                let mut file_infos =
+                                                    wait_flush_buffers_clone.lock().await;
+                                                let mut file_info = file_infos
+                                                    .entry(file_path_clone)
+                                                    .or_insert_with(|| WaitFlushFileInfo {
+                                                        max_len: standby_item_clone.offset,
+                                                        wait_buffers: vec![],
+                                                    });
+                                                let pos = file_info
+                                                    .wait_buffers
+                                                    .binary_search_by(|buf| {
+                                                        buf.item
+                                                            .offset
+                                                            .cmp(&standby_item_clone.offset)
+                                                    })
+                                                    .expect_err("should not found");
+                                                file_info.wait_buffers.insert(
+                                                    pos,
+                                                    WaitFlushBUffer {
+                                                        item: standby_item_clone.clone(),
+                                                        buf: vec![],
+                                                    },
+                                                );
+                                                if standby_item_clone.offset < file_info.max_len {
+                                                    file_info.max_len = standby_item_clone.offset;
+                                                }
 
-                            let ret = copy_chunk(
-                                standby_item.chunk_id,
-                                target_reader,
-                                source_writer,
-                                None,
-                                None,
-                            )
-                            .await;
-                            if let Err(err) = ret {
-                                let mut real_restore_task = restore_task_clone.lock().await;
-                                real_restore_task.state = TaskState::Failed(format!(
-                                    "Copy chunk failed. detail: {}",
-                                    err
-                                ));
-                                let _ignore_err =
-                                    engine_clone.task_db.update_task(&real_restore_task);
-                                return;
+                                                (
+                                                    Some(BufWriter::new(std::io::Cursor::new(
+                                                        &mut buffer,
+                                                    ))),
+                                                    None,
+                                                )
+                                            }
+                                            _ => return Err(err),
+                                        },
+                                        Ok((writer, _offset)) => (None, Some(writer)),
+                                    }
+                                }
+                            };
+                            let mut target_reader = target_clone
+                                .open_chunk_reader_for_restore(&standby_item_clone.chunk_id, 0)
+                                .await?;
+
+                            if let Some(writer) = buffer_writer {
+                                copy_chunk(
+                                    standby_item_clone.chunk_id,
+                                    target_reader,
+                                    writer,
+                                    None,
+                                    None,
+                                )
+                                .await
+                                .map_err(|err| {
+                                    BuckyBackupError::Failed(format!(
+                                        "Copy chunk failed: {:?}",
+                                        err
+                                    ))
+                                })?;
+                                return Ok(Some(buffer));
                             }
+
+                            if let Some(writer) = file_writer {
+                                copy_chunk(
+                                    standby_item_clone.chunk_id,
+                                    target_reader,
+                                    writer,
+                                    None,
+                                    None,
+                                )
+                                .await
+                                .map_err(|err| {
+                                    BuckyBackupError::Failed(format!(
+                                        "Copy chunk failed: {:?}",
+                                        err
+                                    ))
+                                })?;
+                                return Ok(None);
+                            }
+
+                            unreachable!("Buffer or file only");
                         });
 
-                        pending_tasks.push(new_task);
+                        pending_tasks.push((new_task, file_path, standby_item));
                     }
 
                     break;
                 }
 
-                let (result, index, remain) = select_all(pending_tasks.iter_mut()).await;
-                result.expect(format!("select tasks[{}] failed", index).as_str());
-                pending_tasks.remove(index);
+                let (result, index, remain) =
+                    select_all(pending_tasks.iter_mut().map(|t| &mut t.0)).await;
+                let finish_result =
+                    result.expect(format!("select tasks[{}] failed", index).as_str());
+                let (_finish_task, finish_path, finish_item) = pending_tasks.remove(index);
+
+                match finish_result {
+                    Ok(buffer) => {
+                        match buffer {
+                            Some(buffer) => {
+                                let mut wait_flush_buffers_guard = wait_flush_buffers.lock().await;
+                                let wait_buffers = &mut wait_flush_buffers_guard
+                                    .get_mut(&finish_path)
+                                    .unwrap()
+                                    .wait_buffers;
+                                let pos = wait_buffers
+                                    .binary_search_by(|buf| {
+                                        buf.item.offset.cmp(&finish_item.offset)
+                                    })
+                                    .expect("should found");
+                                wait_buffers.get_mut(pos).unwrap().buf = buffer;
+                            }
+                            None => {
+                                let mut wait_flush_buffers_guard = wait_flush_buffers.lock().await;
+                                let will_flush_buffers =
+                                    wait_flush_buffers_guard.get_mut(&finish_path);
+                                if let Some(will_flush_buffers) = will_flush_buffers {
+                                    if finish_item.offset + finish_item.size
+                                        > will_flush_buffers.max_len
+                                    {
+                                        will_flush_buffers.max_len =
+                                            finish_item.offset + finish_item.size;
+                                    }
+                                }
+                            }
+                        }
+
+                        // try flush buffers to file
+                        loop {
+                            let will_flush = {
+                                let mut wait_flush_buffers_guard = wait_flush_buffers.lock().await;
+                                match wait_flush_buffers_guard.get_mut(&finish_path) {
+                                    Some(will_flush_file) => {
+                                        will_flush_file.wait_buffers.get_mut(0).map(|buf| {
+                                            let mut data = vec![];
+                                            std::mem::swap(&mut buf.buf, &mut data);
+                                            (buf.item.clone(), data)
+                                        })
+                                    }
+                                    None => None,
+                                }
+                            };
+
+                            match will_flush {
+                                Some((will_flush_item, mut will_flush_buf)) => {
+                                    assert_eq!(will_flush_buf.len(), will_flush_item.size as usize);
+                                    let writer = source
+                                        .open_writer_for_restore(
+                                            todo_what_is_target_id,
+                                            &will_flush_item,
+                                            &restore_cfg,
+                                            0,
+                                        )
+                                        .await;
+                                    let (result, is_continue) = match writer {
+                                        Ok((mut writer, _offset)) => (
+                                            writer
+                                                .write_all(will_flush_buf.as_slice())
+                                                .await
+                                                .map_err(|err| {
+                                                    BuckyBackupError::Failed(format!(
+                                                        "Flush to file failed: {:?}",
+                                                        err
+                                                    ))
+                                                }),
+                                            true,
+                                        ),
+                                        Err(err) => match err {
+                                            BuckyBackupError::AlreadyDone(_) => (Ok(()), true),
+                                            BuckyBackupError::TryLater(_) => (Ok(()), false),
+                                            _ => (Err(err), false),
+                                        },
+                                    };
+
+                                    match result {
+                                        Ok(_) => {
+                                            let mut wait_flush_buffers_guard =
+                                                wait_flush_buffers.lock().await;
+
+                                            let mut file_buffers =
+                                                wait_flush_buffers_guard.get_mut(&finish_path);
+                                            file_buffers.as_mut().and_then(|file_buffers| {
+                                                if will_flush_item.offset + will_flush_item.size
+                                                    > file_buffers.max_len
+                                                {
+                                                    file_buffers.max_len = will_flush_item.offset
+                                                        + will_flush_item.size;
+                                                }
+                                                Some(0)
+                                            });
+                                            if !is_continue {
+                                                // retry next
+                                                file_buffers.and_then(|f| {
+                                                    f.wait_buffers
+                                                        .iter_mut()
+                                                        .find(|buf| {
+                                                            buf.item.offset
+                                                                == will_flush_item.offset
+                                                        })
+                                                        .and_then(|buf| {
+                                                            std::mem::swap(
+                                                                &mut buf.buf,
+                                                                &mut will_flush_buf,
+                                                            );
+                                                            Some(0)
+                                                        })
+                                                });
+                                                break;
+                                            } else {
+                                                // remove it
+                                                let is_empty =
+                                                    file_buffers.and_then(|file_buffers| {
+                                                        let pos = file_buffers
+                                                            .wait_buffers
+                                                            .iter()
+                                                            .position(|buf| {
+                                                                buf.item.offset
+                                                                    == will_flush_item.offset
+                                                            });
+
+                                                        if let Some(pos) = pos {
+                                                            file_buffers.wait_buffers.remove(pos);
+                                                            if file_buffers.wait_buffers.len() == 0
+                                                            {
+                                                                return Some(0);
+                                                            }
+                                                        }
+                                                        None
+                                                    });
+                                                if is_empty.is_some() {
+                                                    wait_flush_buffers_guard.remove(&finish_path);
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            let mut real_restore_task = restore_task.lock().await;
+                                            if let TaskState::Failed(_) = real_restore_task.state {
+                                            } else {
+                                                real_restore_task.state = TaskState::Failed(
+                                                    format!("Read items failed. detail: {}", err),
+                                                );
+                                                let _ignore_err =
+                                                    engine.task_db.update_task(&real_restore_task);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                                None => break,
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let mut real_restore_task = restore_task.lock().await;
+                        if let TaskState::Failed(_) = real_restore_task.state {
+                        } else {
+                            real_restore_task.state =
+                                TaskState::Failed(format!("Read items failed. detail: {}", err));
+                            let _ignore_err = engine.task_db.update_task(&real_restore_task);
+                        }
+                    }
+                }
 
                 if pending_tasks.len() == 0 {
                     if is_all_items_load {
                         let mut real_restore_task = restore_task.lock().await;
-                        real_restore_task.state = TaskState::Done;
-                        let _ignore_err = engine.task_db.update_task(&real_restore_task);
+                        if let TaskState::Failed(_) = real_restore_task.state {
+                        } else {
+                            real_restore_task.state = TaskState::Done;
+                            let _ignore_err = engine.task_db.update_task(&real_restore_task);
+                        }
                         break;
                     } else {
                         if let Err(err) = &load_result {
                             let mut real_restore_task = restore_task.lock().await;
-                            real_restore_task.state =
-                                TaskState::Failed(format!("Read items failed. detail: {}", err));
-                            let _ignore_err = engine.task_db.update_task(&real_restore_task);
-                            break;
+                            if let TaskState::Failed(_) = real_restore_task.state {
+                            } else {
+                                real_restore_task.state = TaskState::Failed(format!(
+                                    "Read items failed. detail: {}",
+                                    err
+                                ));
+                                let _ignore_err = engine.task_db.update_task(&real_restore_task);
+                                break;
+                            }
                         }
                     }
 

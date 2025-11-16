@@ -6,6 +6,7 @@ use crate::BackupItemState;
 use crate::BackupResult;
 use crate::BuckyBackupError;
 use crate::CheckPointState;
+use crate::ChunkInnerPathHelper;
 use crate::RemoteBackupCheckPointItemStatus;
 use crate::CHECKPOINT_TYPE_CHUNK;
 use async_trait::async_trait;
@@ -13,13 +14,20 @@ use log::*;
 use ndn_lib::*;
 use serde_json::json;
 use serde_json::Value;
+use std::cmp::min;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::future;
+use std::future::Future;
 use std::io::SeekFrom;
 use std::mem;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Waker;
+use tokio::io::BufWriter;
 use tokio::sync::Mutex;
 use tokio::{
     fs::{self, File, OpenOptions},
@@ -249,7 +257,99 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         restore_config: &RestoreConfig,
         offset: u64,
     ) -> BackupResult<(ChunkWriter, u64)> {
-        unimplemented!()
+        let dir_path = {
+            if restore_config.restore_location_url.starts_with("file://") {
+                let url = Url::parse(&restore_config.restore_location_url)
+                    .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
+                PathBuf::from(url.path())
+            } else {
+                PathBuf::from(restore_config.restore_location_url.as_str())
+            }
+        };
+
+        let item_relation_path = ChunkInnerPathHelper::strip_chunk_suffix(item.item_id.as_str());
+        let target_file_full_path = dir_path.join(item_relation_path.as_str());
+
+        // check exist chunk
+        let file_len = match fs::try_exists(target_file_full_path.as_path()).await {
+            Ok(is_exist) if !is_exist => 0,
+            _ => match fs::metadata(target_file_full_path.as_path()).await {
+                Ok(meta) => meta.len(),
+                Err(err) => return Err(BuckyBackupError::Internal(err.to_string())),
+            },
+        };
+
+        match file_len.cmp(&item.offset) {
+            std::cmp::Ordering::Less => {
+                // write to buffer and flush to file when the file-length equal the offset
+                return Err(BuckyBackupError::TryLater("".to_string()));
+            }
+            std::cmp::Ordering::Equal => {
+                // write to file
+            }
+            std::cmp::Ordering::Greater => {
+                // check it
+                if file_len >= item.offset + item.size {
+                    let reader = fs::File::options()
+                        .read(true)
+                        .open(target_file_full_path.as_path())
+                        .await;
+                    if let Ok(mut reader) = reader {
+                        let read_len_once = 16 * 1024 * 1024;
+                        let mut read_pos = 0;
+                        let mut buf = Vec::with_capacity(read_len_once as usize);
+                        let mut chunk_hasher = ChunkHasher::new(Some(
+                            item.chunk_id
+                                .chunk_type
+                                .to_hash_method()
+                                .map_err(|err| {
+                                    BuckyBackupError::Internal(format!(
+                                        "invalid chunk-type: {:?}",
+                                        item.chunk_id
+                                    ))
+                                })?
+                                .as_str(),
+                        ))
+                        .map_err(|err| {
+                            BuckyBackupError::Internal(format!(
+                                "invalid chunk-type: {:?}",
+                                item.chunk_id
+                            ))
+                        })?;
+                        while read_pos < offset + item.size {
+                            let read_len = min(read_len_once, offset + item.size - read_pos);
+                            buf.resize(read_len as usize, 0);
+                            reader.read_exact(buf.as_mut_slice()).await;
+                            chunk_hasher.update_from_bytes(buf.as_slice());
+                        }
+                        let exist_chunk_id = if item.chunk_id.chunk_type.is_mix() {
+                            chunk_hasher.finalize_mix_chunk_id().map_err(|err| {
+                                BuckyBackupError::Internal(format!("faile mix-chunk: {:?}", err))
+                            })?
+                        } else {
+                            chunk_hasher.finalize_chunk_id()
+                        };
+                        if exist_chunk_id == item.chunk_id {
+                            return Err(BuckyBackupError::AlreadyDone("".to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        // write to file
+        let mut writer = fs::File::options()
+            .write(true)
+            .append(true)
+            .create_new(true)
+            .open(target_file_full_path.as_path())
+            .await
+            .map_err(|err| {
+                BuckyBackupError::Failed(format!("Write failed: {}, {:?}", item.item_id, err))
+            })?;
+        writer.seek(SeekFrom::Start(offset)).await.map_err(|err| {
+            BuckyBackupError::Failed(format!("Seek failed: {},  {:?}", item.item_id, err))
+        })?;
+        Ok((Box::pin(writer), 0))
     }
 }
 
@@ -411,3 +511,300 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         Ok(Box::pin(reader.0))
     }
 }
+
+// pub type WriteFileWithOffsetChecker = Box<dyn FnMut(&[u8]) -> bool + Send>;
+
+// enum StepWriter {
+//     Buffer(BufWriter<std::io::Cursor<Vec<u8>>>),
+//     PreFile(Arc<std::sync::Mutex<Option<tokio::fs::File>>>),
+//     File(tokio::fs::File),
+//     Ready(future::Ready<Result<usize, std::io::Error>>),
+// }
+
+// impl StepWriter {
+//     fn is_buffer(&self) -> bool {
+//         matches!(self, StepWriter::Buffer(_))
+//     }
+//     fn is_file(&self) -> bool {
+//         matches!(self, StepWriter::File(_))
+//     }
+//     fn is_ready(&self) -> bool {
+//         matches!(self, StepWriter::Ready(_))
+//     }
+// }
+
+// struct WriteState {
+//     wakers: HashSet<Waker>,
+//     err: Option<std::io::Error>,
+// }
+
+// impl WriteState {
+//     fn new() -> Arc<std::sync::Mutex<Self>> {
+//         Arc::new(std::sync::Mutex::new(WriteState {
+//             wakers: HashSet::new(),
+//             err: None,
+//         }))
+//     }
+// }
+
+// pub struct WriteFileWithOffset {
+//     file_full_path: PathBuf,
+//     offset: u64,
+//     len: u64,
+//     checker: WriteFileWithOffsetChecker,
+//     writer: StepWriter,
+//     state: Arc<std::sync::Mutex<WriteState>>,
+// }
+
+// impl WriteFileWithOffset {
+//     pub async fn try_open(
+//         file_full_path: PathBuf,
+//         offset: u64,
+//         len: u64,
+//         mut checker: WriteFileWithOffsetChecker,
+//     ) -> io::Result<Self> {
+//         let file_len = match fs::try_exists(file_full_path.as_path()).await {
+//             Ok(is_exist) if !is_exist => 0,
+//             _ => fs::metadata(file_full_path.as_path()).await?.len(),
+//         };
+
+//         match file_len.cmp(&offset) {
+//             std::cmp::Ordering::Less => {
+//                 let buffer = vec![];
+//                 // write to buffer and flush to file when the file-length equal the offset
+//                 return Ok(Self {
+//                     file_full_path,
+//                     offset,
+//                     len,
+//                     checker,
+//                     writer: StepWriter::Buffer(BufWriter::new(std::io::Cursor::new(buffer))),
+//                     state: WriteState::new(),
+//                 });
+//             }
+//             std::cmp::Ordering::Equal => {
+//                 // write to file
+//             }
+//             std::cmp::Ordering::Greater => {
+//                 if file_len >= offset + len {
+//                     // check it
+//                     let mut reader = fs::File::options()
+//                         .read(true)
+//                         .open(file_full_path.as_path())
+//                         .await?;
+//                     let read_len_once = 16 * 1024 * 1024;
+//                     let mut read_pos = 0;
+//                     while read_pos < offset + len {
+//                         let read_len = min(read_len_once, offset + len - read_pos);
+//                         let mut buf = Vec::with_capacity(read_len as usize);
+//                         buf.resize(read_len as usize, 0);
+//                         reader.read_exact(buf.as_mut_slice()).await;
+//                         if !checker.as_mut()(buf.as_slice()) {
+//                             drop(reader);
+//                             // write to file
+//                             let mut writer = fs::File::options()
+//                                 .write(true)
+//                                 .open(file_full_path.as_path())
+//                                 .await?;
+//                             writer.seek(SeekFrom::Start(offset)).await?;
+//                             return Ok(Self {
+//                                 file_full_path,
+//                                 offset,
+//                                 len,
+//                                 checker,
+//                                 writer: StepWriter::File(writer),
+//                                 state: WriteState::new(),
+//                             });
+//                         }
+//                     }
+//                     return Ok(Self {
+//                         file_full_path,
+//                         offset,
+//                         len,
+//                         checker,
+//                         writer: StepWriter::Ready(future::ready(Ok(0))),
+//                         state: WriteState::new(),
+//                     });
+//                 } else {
+//                     // write to file
+//                 }
+//             }
+//         }
+
+//         let mut writer = fs::File::options()
+//             .write(true)
+//             .append(true)
+//             .create_new(true)
+//             .open(file_full_path.as_path())
+//             .await?;
+//         writer.seek(SeekFrom::Start(offset)).await?;
+//         return Ok(Self {
+//             file_full_path,
+//             offset,
+//             len,
+//             checker,
+//             writer: StepWriter::File(writer),
+//             state: WriteState::new(),
+//         });
+//     }
+
+//     fn prepare_file_writer(&self, buffer: Vec<u8>) {
+//         let file_path = self.file_full_path.clone();
+//         let offset = self.offset;
+//         let writer_state = self.state.clone();
+//         let prepare_file = if let StepWriter::PreFile(file) = &self.writer {
+//             file.clone()
+//         } else {
+//             unreachable!("only pre-file")
+//         };
+
+//         let check_and_open_writer =
+//             async |path: &Path, offset: u64| -> std::io::Result<Option<File>> {
+//                 let meta = fs::metadata(path).await?;
+//                 if meta.len() >= offset {
+//                     let mut writer = fs::File::options()
+//                         .write(true)
+//                         .append(true)
+//                         .create_new(true)
+//                         .open(path)
+//                         .await?;
+//                     writer.seek(SeekFrom::Start(offset)).await?;
+//                     Ok(Some(writer))
+//                 } else {
+//                     Ok(None)
+//                 }
+//             };
+
+//         tokio::spawn(async move {
+//             let mut err = None;
+//             loop {
+//                 match check_and_open_writer().await {
+//                     Ok(writer) => {
+//                         if let Some(writer) = writer {
+//                             prepare_file.lock().unwrap().replace(writer);
+//                             break;
+//                         }
+//                     }
+//                     Err(err) => {
+//                         err = Some(err);
+//                         break;
+//                     }
+//                 }
+
+//                 let state = writer_state.lock().unwrap();
+//                 state.waker
+//             }
+//         });
+//     }
+
+//     fn set_err(&mut self, err: std::io::Error) {
+//         self.state.lock().unwrap().err.get_or_insert(err);
+//     }
+
+//     fn check_err(&self) -> Option<std::io::Error> {
+//         let mut state = self.state.lock().unwrap();
+//         let err_code = state.err.as_ref().map(|e| (e.raw_os_error(), e.kind()));
+//         match err_code {
+//             Some((code, kind)) => {
+//                 let new_err = match code {
+//                     Some(code) => std::io::Error::from_raw_os_error(code),
+//                     None => std::io::Error::new(kind, state.err.as_ref().unwrap().to_string()),
+//                 };
+//                 state.err.replace(new_err)
+//             }
+//             None => None,
+//         }
+//     }
+// }
+
+// impl AsyncWrite for WriteFileWithOffset {
+//     fn poll_write(
+//         self: Pin<&mut Self>,
+//         cx: &mut std::task::Context<'_>,
+//         buf: &[u8],
+//     ) -> std::task::Poll<Result<usize, std::io::Error>> {
+//         // ready
+//         let writer = self.get_mut();
+//         if let StepWriter::Ready(ready) = &mut writer.writer {
+//             let mut pinned = std::pin::pin!(ready);
+//             return pinned.poll(cx);
+//         }
+
+//         // failed
+//         let err = writer.check_err();
+//         if let Some(err) = err {
+//             return std::task::Poll::Ready(Err(err));
+//         }
+
+//         let (buffer, file) = match &mut writer.writer {
+//             StepWriter::Buffer(buf_writer) => {
+//                 let mut pinned = std::pin::pin!(buf_writer);
+//                 let state = pinned.as_mut().poll_write(cx, buf);
+//                 match state {
+//                     std::task::Poll::Pending => {
+//                         writer
+//                             .state
+//                             .lock()
+//                             .unwrap()
+//                             .wakers
+//                             .insert(cx.waker().clone());
+//                         return std::task::Poll::Pending;
+//                     }
+//                     std::task::Poll::Ready(result) => match result {
+//                         Ok(len) => (Some(buf_writer.into_inner().into_inner()), None),
+//                         Err(err) => {
+//                             writer.set_err(err);
+//                             return std::task::Poll::Ready(Err(writer.check_err().unwrap()));
+//                         }
+//                     },
+//                 }
+//             }
+//             StepWriter::PreFile(file) => {
+//                 let mut file = file.lock().unwrap();
+//                 (None, file.take())
+//             }
+//             StepWriter::File(file) => {
+//                 let mut pinned = std::pin::pin!(file);
+//                 match pinned.poll_write(cx, buf) {
+//                     std::task::Poll::Ready(ret) => match ret {
+//                         Ok(len) => return std::task::Poll::Ready(Ok(len)),
+//                         Err(err) => {
+//                             writer.set_err(err);
+//                             return std::task::Poll::Ready(Err(writer.check_err().unwrap()));
+//                         }
+//                     },
+//                     std::task::Poll::Pending => return std::task::Poll::Pending,
+//                 }
+//             }
+//             StepWriter::Ready(ready) => unreachable!("proccessed before"),
+//         };
+
+//         if let Some(buffer) = buffer {
+//             writer.writer = StepWriter::PreFile(Arc::new(std::sync::Mutex::new(None)));
+//             writer.prepare_file_writer(buffer);
+//         }
+//         if let Some(file) = file {
+//             writer.writer = StepWriter::File(file);
+//         }
+//         std::task::Poll::Pending
+//     }
+
+//     fn poll_flush(
+//         self: Pin<&mut Self>,
+//         cx: &mut std::task::Context<'_>,
+//     ) -> std::task::Poll<Result<(), std::io::Error>> {
+//         todo!()
+//     }
+
+//     fn poll_shutdown(
+//         self: Pin<&mut Self>,
+//         cx: &mut std::task::Context<'_>,
+//     ) -> std::task::Poll<Result<(), std::io::Error>> {
+//         todo!()
+//     }
+// }
+
+// impl Drop for WriteFileWithOffset {
+//     fn drop(&mut self) {
+//         todo!("wake other writers and free wakers, set err to other states")
+//     }
+// }
