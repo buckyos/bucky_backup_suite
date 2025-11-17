@@ -14,7 +14,7 @@ def build_rust(target_dir, target):
     env = os.environ.copy()
     env["OPENSSL_STATIC"] = "1"
     env["RUSTFLAGS"] = "-C target-feature=+crt-static --cfg tokio_unstable"
-    subprocess.run(["cargo", "build", "--target", target, "--target-dir", target_dir], 
+    subprocess.run(["cargo", "build", "--target", target, "--release", "--target-dir", target_dir], 
                    check=True, 
                    cwd=src_dir, 
                    env=env)
