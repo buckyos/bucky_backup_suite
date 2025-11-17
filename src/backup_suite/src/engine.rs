@@ -916,13 +916,13 @@ impl BackupEngine {
 
         let engine = self.clone();
         // TODO: 应该有个状态保存工作线程状态，避免多个工作线程同时工作
-        struct WaitFlushBUffer {
+        struct WaitFlushBuffer {
             item: BackupChunkItem,
             buf: Vec<u8>,
         }
         struct WaitFlushFileInfo {
             max_len: u64,
-            wait_buffers: Vec<WaitFlushBUffer>,
+            wait_buffers: Vec<WaitFlushBuffer>,
         }
         tokio::spawn(async move {
             let todo_what_is_target_id = "";
@@ -1040,7 +1040,7 @@ impl BackupEngine {
                                                     .expect_err("should not found");
                                                 file_info.wait_buffers.insert(
                                                     pos,
-                                                    WaitFlushBUffer {
+                                                    WaitFlushBuffer {
                                                         item: standby_item_clone.clone(),
                                                         buf: vec![],
                                                     },
