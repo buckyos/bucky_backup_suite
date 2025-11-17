@@ -9,6 +9,7 @@ use rusqlite::{params, params_from_iter, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::TryFrom;
+use std::u64;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -938,12 +939,18 @@ impl BackupTaskDb {
             "SELECT item_id, chunk_id, local_chunk_id, state, size, last_update_time, offset
              FROM backup_items
              WHERE checkpoint_id = ? AND item_id LIKE ?
-             ORDER BY item_id, offset ASC",
+             ORDER BY item_id, offset ASC
+             LIMIT ? OFFSET ?",
         )?;
 
         let items = stmt
             .query_map(
-                params![checkpoint_id, format!("%{}%", sub_path.unwrap_or(""))],
+                params![
+                    checkpoint_id,
+                    format!("%{}%", sub_path.unwrap_or("")),
+                    limit.unwrap_or(i32::MAX as u64),
+                    offset.unwrap_or(0)
+                ],
                 |row| {
                     let item_id: String = row.get(0)?;
                     let chunk_id_str: String = row.get(1)?;

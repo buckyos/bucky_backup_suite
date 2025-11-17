@@ -420,15 +420,6 @@ export class BackupTaskManager {
                 const taskStateParts = (result.state as String).split(":");
                 const taskState = taskStateParts[0];
                 const errMsg = taskStateParts[1];
-                if (taskState === TaskState.FAILED) {
-                    if (old_task && old_task.state !== TaskState.FAILED) {
-                        await this.emitTaskEvent(
-                            TaskEventType.FAIL_TASK,
-                            result
-                        );
-                    }
-                    result.error = errMsg;
-                }
                 const now = Date.now();
                 let speed_im = old_task
                     ? ((result.completed_size - old_task.completed_size) *
@@ -440,7 +431,19 @@ export class BackupTaskManager {
                     (old_task ? old_task.speed * 0.7 : 0) + speed_im * 0.3;
                 result.speed = speed_avg;
                 result.last_query_time = now;
+                result.state = taskState;
+                result.errMsg = errMsg;
                 this.uncomplete_tasks.set(taskId, result);
+                console.info("get task info: old: ", old_task, "new: ", result);
+                if (taskState === TaskState.FAILED) {
+                    if (old_task && old_task.state !== TaskState.FAILED) {
+                        await this.emitTaskEvent(
+                            TaskEventType.FAIL_TASK,
+                            result
+                        );
+                    }
+                    result.error = errMsg;
+                }
             }
         }
         return result;
