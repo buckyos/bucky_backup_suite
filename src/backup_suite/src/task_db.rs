@@ -937,13 +937,13 @@ impl BackupTaskDb {
         let mut stmt = conn.prepare(
             "SELECT item_id, chunk_id, local_chunk_id, state, size, last_update_time, offset
              FROM backup_items
-             WHERE checkpoint_id = ? AND item_id LINK ?
+             WHERE checkpoint_id = ? AND item_id LIKE ?
              ORDER BY item_id, offset ASC",
         )?;
 
         let items = stmt
             .query_map(
-                params![checkpoint_id, format!("*{}*", sub_path.unwrap_or(""))],
+                params![checkpoint_id, format!("%{}%", sub_path.unwrap_or(""))],
                 |row| {
                     let item_id: String = row.get(0)?;
                     let chunk_id_str: String = row.get(1)?;

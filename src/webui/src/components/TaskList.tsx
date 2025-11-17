@@ -237,22 +237,24 @@ function getTaskActions(
                 </Button>
             );
         } else if (task.state === TaskState.DONE) {
-            actions.push(
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="gap-1"
-                    onClick={() =>
-                        onNavigate?.("restore", {
-                            planId: task.owner_plan_id,
-                            taskId: task.taskid,
-                        })
-                    }
-                >
-                    <Undo2 className="w-3 h-3" />
-                    {t.common.restore}
-                </Button>
-            );
+            if (task.task_type === TaskType.BACKUP) {
+                actions.push(
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-1"
+                        onClick={() =>
+                            onNavigate?.("restore", {
+                                planId: task.owner_plan_id,
+                                taskId: task.taskid,
+                            })
+                        }
+                    >
+                        <Undo2 className="w-3 h-3" />
+                        {t.common.restore}
+                    </Button>
+                );
+            }
         }
     }
 

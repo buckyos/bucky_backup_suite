@@ -407,7 +407,7 @@ export function RestoreWizard({
         try {
             await taskManager.createRestoreTask(
                 selectedPlanId,
-                selectedTaskId,
+                taskList!.find(task => task.taskid === selectedTaskId)!.checkpoint_id,
                 customPath,
                 overwriteMode === "overwrite",
                 selectedFiles[0]

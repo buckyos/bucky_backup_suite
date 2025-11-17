@@ -64,7 +64,7 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
             );
             setPlans(planDetails);
 
-            if (planDetails.length > 0) {
+            if (planDetails.length === 0) {
                 const targetIds = await taskManager.listBackupTargets();
                 const targetDetails = await Promise.all(
                     targetIds.map((id) => taskManager.getBackupTarget(id))
@@ -148,6 +148,8 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
         await taskManager.createBackupTask(plan.plan_id);
         toast.success(`正在启动备份计划: ${plan.title}`);
     };
+
+    console.log("plans:", plans, "services: ", services, "uncomplete: ", uncompleteTasks);
 
     return (
         <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-6`}>
