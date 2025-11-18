@@ -324,31 +324,51 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
                                 item.chunk_id
                             ))
                         })?;
-                        while read_pos < item.offset + item.size {
-                            let read_len = min(read_len_once, item.offset + item.size - read_pos);
-                            buf.resize(read_len as usize, 0);
-                            reader.read_exact(buf.as_mut_slice()).await;
-                            chunk_hasher.update_from_bytes(buf.as_slice());
-                            read_pos = read_pos + read_len;
-                        }
-                        let exist_chunk_id = if item.chunk_id.chunk_type.is_mix() {
-                            chunk_hasher.finalize_mix_chunk_id().map_err(|err| {
-                                BuckyBackupError::Failed(format!("faile mix-chunk: {:?}", err))
-                            })?
-                        } else {
-                            chunk_hasher.finalize_chunk_id()
-                        };
-                        if exist_chunk_id == item.chunk_id {
-                            return Err(BuckyBackupError::AlreadyDone("".to_string()));
+                        if reader.seek(SeekFrom::Start(read_pos)).await.is_ok() {
+                            while read_pos < item.offset + item.size {
+                                let read_len =
+                                    min(read_len_once, item.offset + item.size - read_pos);
+                                buf.resize(read_len as usize, 0);
+                                if reader.read_exact(buf.as_mut_slice()).await.is_err() {
+                                    break;
+                                }
+                                chunk_hasher.update_from_bytes(buf.as_slice());
+                                read_pos = read_pos + read_len;
+                            }
+
+                            let is_read_ok = read_pos == item.offset + item.size;
+                            if is_read_ok {
+                                let exist_chunk_id = if item.chunk_id.chunk_type.is_mix() {
+                                    chunk_hasher.finalize_mix_chunk_id().map_err(|err| {
+                                        BuckyBackupError::Failed(format!(
+                                            "faile mix-chunk: {:?}",
+                                            err
+                                        ))
+                                    })?
+                                } else {
+                                    chunk_hasher.finalize_chunk_id()
+                                };
+                                if exist_chunk_id == item.chunk_id {
+                                    return Err(BuckyBackupError::AlreadyDone("".to_string()));
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+
+        if let Some(parent_dir) = target_file_full_path.parent() {
+            fs::create_dir_all(parent_dir).await.map_err(|err| {
+                BuckyBackupError::Failed(format!(
+                    "Create parent directory failed: {:?}, {:?}",
+                    parent_dir, err
+                ))
+            })?;
+        }
         // write to file
         let mut writer = fs::File::options()
             .write(true)
-            .append(true)
             .create(true)
             .open(target_file_full_path.as_path())
             .await
