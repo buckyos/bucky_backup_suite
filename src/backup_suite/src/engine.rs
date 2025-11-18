@@ -1000,9 +1000,11 @@ impl BackupEngine {
                         let restore_cfg_clone = restore_cfg.clone();
                         info!("run_chunk2chunk_restore_task chunk {} will transfer", standby_item.item_id);
                         let new_task = tokio::spawn(async move {
+                            info!("run_chunk2chunk_restore_task chunk {} tokio::spawn", standby_item_clone.item_id);
                             let mut buffer = vec![];
                             let is_buffer = {
                                 let file_infos = wait_flush_buffers_clone.lock().await;
+                                info!("run_chunk2chunk_restore_task chunk {} locked for is_buffer", standby_item_clone.item_id);
                                 match file_infos.get(&file_path_clone) {
                                     Some(file_info) => {
                                         file_info.max_len < standby_item_clone.offset
@@ -1010,14 +1012,14 @@ impl BackupEngine {
                                     None => false,
                                 }
                             };
-                            let (buffer_writer, file_writer) = {
+                            let file_writer= {
                                 if is_buffer {
-                                    (
-                                        Some(BufWriter::new(std::io::Cursor::new(&mut buffer))),
-                                        None,
-                                    )
+                                    info!("run_chunk2chunk_restore_task chunk {} will write to buffer for is_buffer", standby_item_clone.item_id);
+                                    None
                                 } else {
                                     // try file
+                                    
+                                                info!("run_chunk2chunk_restore_task chunk {} will open writer", standby_item_clone.item_id);
                                     let source_writer = source_clone
                                         .open_writer_for_restore(
                                             todo_what_is_target_id,
@@ -1026,6 +1028,8 @@ impl BackupEngine {
                                             0,
                                         )
                                         .await;
+                                    
+                                                info!("run_chunk2chunk_restore_task chunk {} open writer finish", standby_item_clone.item_id);
                                     match source_writer {
                                         Err(err) => match err {
                                             BuckyBackupError::AlreadyDone(_) => {
@@ -1034,78 +1038,60 @@ impl BackupEngine {
                                             }
                                             BuckyBackupError::TryLater(_) => {
                                                 info!("run_chunk2chunk_restore_task chunk {} will write to buffer", standby_item_clone.item_id);
-                                                let mut file_infos =
-                                                    wait_flush_buffers_clone.lock().await;
-                                                let mut file_info = file_infos
-                                                    .entry(file_path_clone)
-                                                    .or_insert_with(|| WaitFlushFileInfo {
-                                                        max_len: standby_item_clone.offset,
-                                                        wait_buffers: vec![],
-                                                    });
-                                                let pos = file_info
-                                                    .wait_buffers
-                                                    .binary_search_by(|buf| {
-                                                        buf.item
-                                                            .offset
-                                                            .cmp(&standby_item_clone.offset)
-                                                    })
-                                                    .expect_err("should not found");
-                                                file_info.wait_buffers.insert(
-                                                    pos,
-                                                    WaitFlushBuffer {
-                                                        item: standby_item_clone.clone(),
-                                                        buf: vec![],
-                                                    },
-                                                );
-                                                if standby_item_clone.offset < file_info.max_len {
-                                                    file_info.max_len = standby_item_clone.offset;
-                                                }
-
-                                                (
-                                                    Some(BufWriter::new(std::io::Cursor::new(
-                                                        &mut buffer,
-                                                    ))),
-                                                    None,
-                                                )
+                                                None
                                             }
                                             _ => {
-                                                debug!("run_chunk2chunk_restore_task chunk {} open writer failed: {:?}", standby_item_clone.item_id, err);
+                                                info!("run_chunk2chunk_restore_task chunk {} open writer failed: {:?}", standby_item_clone.item_id, err);
                                                 return Err(err);
                                             }
                                         },
-                                        Ok((writer, _offset)) => (None, Some(writer)),
+                                        Ok((writer, _offset)) => Some(writer),
                                     }
                                 }
                             };
+
+                            if file_writer.is_none() {
+                                let mut file_infos =
+                                    wait_flush_buffers_clone.lock().await;
+                                let mut file_info = file_infos
+                                    .entry(file_path_clone)
+                                    .or_insert_with(|| WaitFlushFileInfo {
+                                        max_len: standby_item_clone.offset,
+                                        wait_buffers: vec![],
+                                    });
+                                let pos = file_info
+                                    .wait_buffers
+                                    .binary_search_by(|buf| {
+                                        buf.item
+                                            .offset
+                                            .cmp(&standby_item_clone.offset)
+                                    })
+                                    .expect_err("should not found");
+                                file_info.wait_buffers.insert(
+                                    pos,
+                                    WaitFlushBuffer {
+                                        item: standby_item_clone.clone(),
+                                        buf: vec![],
+                                    },
+                                );
+                                if standby_item_clone.offset < file_info.max_len {
+                                    file_info.max_len = standby_item_clone.offset;
+                                }
+                            }
+
+                            info!("run_chunk2chunk_restore_task chunk {} will open reader", standby_item_clone.item_id);
                             let mut target_reader = target_clone
                                 .open_chunk_reader_for_restore(&standby_item_clone.chunk_id, 0)
                                 .await.map_err(|err| {
-                                    debug!("run_chunk2chunk_restore_task chunk {} open reader failed: {:?}", standby_item_clone.item_id, err);
+                                    info!("run_chunk2chunk_restore_task chunk {} open reader failed: {:?}", standby_item_clone.item_id, err);
                                     err
                                 })?;
 
-                            if let Some(writer) = buffer_writer {
-                                copy_chunk(
-                                    standby_item_clone.chunk_id,
-                                    target_reader,
-                                    writer,
-                                    None,
-                                    None,
-                                )
-                                .await
-                                .map_err(|err| {
-                                    debug!("run_chunk2chunk_restore_task chunk {} copy chunk to buffer failed: {:?}", standby_item_clone.item_id, err);
-                                    BuckyBackupError::Failed(format!(
-                                        "Copy chunk failed: {:?}",
-                                        err
-                                    ))
-                                })?;
-                                info!("run_chunk2chunk_restore_task chunk {} write to buffer success", standby_item_clone.item_id);
-                                return Ok(Some(buffer));
-                            }
+                            info!("run_chunk2chunk_restore_task chunk {} will copy chunk", standby_item_clone.item_id);
 
                             if let Some(writer) = file_writer {
-                                copy_chunk(
+                                    info!("run_chunk2chunk_restore_task chunk {} will copy chunk to file", standby_item_clone.item_id);
+                                let copy_len = copy_chunk(
                                     standby_item_clone.chunk_id,
                                     target_reader,
                                     writer,
@@ -1114,7 +1100,7 @@ impl BackupEngine {
                                 )
                                 .await
                                 .map_err(|err| {
-                                    debug!("run_chunk2chunk_restore_task chunk {} copy chunk to file failed: {:?}", standby_item_clone.item_id, err);
+                                    info!("run_chunk2chunk_restore_task chunk {} copy chunk to file failed: {:?}", standby_item_clone.item_id, err);
                                     BuckyBackupError::Failed(format!(
                                         "Copy chunk failed: {:?}",
                                         err
@@ -1122,15 +1108,38 @@ impl BackupEngine {
                                 })?;
 
                                 {
-                                    info!("run_chunk2chunk_restore_task chunk {} write to file success", standby_item_clone.item_id);
+                                    info!("run_chunk2chunk_restore_task chunk {} write to file success, {}/{}", standby_item_clone.item_id, copy_len, standby_item_clone.size);
+                                    // assert_eq!(copy_len, standby_item_clone.size);
                                     let mut real_restore_task = restore_task_clone.lock().await;
                                     real_restore_task.completed_size = real_restore_task.completed_size + standby_item_clone.size;
                                     let _ignore_err = engine_clone.task_db.update_task(&real_restore_task);
                                 }
-                                return Ok(None);
+                                Ok(None)
+                            } else {
+                                let buffer_writer = BufWriter::new(std::io::Cursor::new(
+                                                        &mut buffer,
+                                                    ));
+                                                
+                                info!("run_chunk2chunk_restore_task chunk {} will copy chunk to buffer", standby_item_clone.item_id);
+                                let copy_len = copy_chunk(
+                                    standby_item_clone.chunk_id,
+                                    target_reader,
+                                    buffer_writer,
+                                    None,
+                                    None,
+                                )
+                                .await
+                                .map_err(|err| {
+                                    info!("run_chunk2chunk_restore_task chunk {} copy chunk to buffer failed: {:?}", standby_item_clone.item_id, err);
+                                    BuckyBackupError::Failed(format!(
+                                        "Copy chunk failed: {:?}",
+                                        err
+                                    ))
+                                })?;
+                                info!("run_chunk2chunk_restore_task chunk {} write to buffer success, {}/{}", standby_item_clone.item_id, copy_len, standby_item_clone.size);
+                                assert_eq!(copy_len, standby_item_clone.size);
+                                Ok(Some(buffer))
                             }
-
-                            unreachable!("Buffer or file only");
                         });
 
                         pending_tasks.push((new_task, file_path, standby_item));
@@ -1145,26 +1154,36 @@ impl BackupEngine {
                 if pending_tasks.len() > 0 {
                     let (result, index, remain) =
                         select_all(pending_tasks.iter_mut().map(|t| &mut t.0)).await;
+                    info!("run_chunk2chunk_restore_task select_all waked: {}", index);
                     let finish_result =
                         result.expect(format!("select tasks[{}] failed", index).as_str());
                     let (_finish_task, finish_path, finish_item) = pending_tasks.remove(index);
+                    info!("run_chunk2chunk_restore_task waked task removed chunk {}", finish_item.item_id);
 
                     match finish_result {
                         Ok(buffer) => {
                             match buffer {
                                 Some(buffer) => {
+                                    info!("run_chunk2chunk_restore_task chunk {} will find the buffer.", finish_item.item_id);
                                     let mut wait_flush_buffers_guard =
                                         wait_flush_buffers.lock().await;
+                                        
+                                    info!("run_chunk2chunk_restore_task chunk {} will find the buffer locked.", finish_item.item_id);
                                     let wait_buffers = &mut wait_flush_buffers_guard
                                         .get_mut(&finish_path)
                                         .unwrap()
                                         .wait_buffers;
+                                    
+                                    info!("run_chunk2chunk_restore_task chunk {} will find the buffer find the file. target-offset: {}, all offset: {:?}", finish_item.item_id, finish_item.offset, wait_buffers.iter().map(|buf| buf.item.offset).collect::<Vec<_>>());
                                     let pos = wait_buffers
-                                        .binary_search_by(|buf| {
+                                        .binary_search_by(|buf: &WaitFlushBuffer| {
                                             buf.item.offset.cmp(&finish_item.offset)
                                         })
                                         .expect("should found");
+                                    
+                                    info!("run_chunk2chunk_restore_task chunk {} will find the buffer find the buffer.", finish_item.item_id);
                                     let wait_buffer = wait_buffers.get_mut(pos).unwrap();
+                                    assert_eq!(wait_buffer.buf.len(), 0);
                                     wait_buffer.buf = buffer;
                                     info!(
                                         "run_chunk2chunk_restore_task chunk {} finish to buffer",
@@ -1206,7 +1225,11 @@ impl BackupEngine {
 
                                 match will_flush {
                                     Some((will_flush_item, mut will_flush_buf)) => {
-                                        debug!("run_chunk2chunk_restore_task chunk {} will flush buffer to file.", will_flush_item.item_id);
+                                        info!("run_chunk2chunk_restore_task chunk {} will flush buffer to file.", will_flush_item.item_id);
+                                        if will_flush_item.size > 0 && will_flush_buf.len() == 0 {
+                                            break;
+                                        }
+
                                         assert_eq!(
                                             will_flush_buf.len(),
                                             will_flush_item.size as usize
@@ -1225,7 +1248,7 @@ impl BackupEngine {
                                                     .write_all(will_flush_buf.as_slice())
                                                     .await
                                                     .map_err(|err| {
-                                                        debug!("run_chunk2chunk_restore_task chunk {} flush to file failed: {:?}", will_flush_item.item_id, err);
+                                                        info!("run_chunk2chunk_restore_task chunk {} flush to file failed: {:?}", will_flush_item.item_id, err);
                                                         BuckyBackupError::Failed(format!(
                                                             "Flush to file failed: {:?}",
                                                             err
@@ -1242,12 +1265,14 @@ impl BackupEngine {
                                             )},
                                             Err(err) => match err {
                                                 BuckyBackupError::AlreadyDone(_) => {
-                                                    debug!("run_chunk2chunk_restore_task chunk {} flush to file done for AlreadyDone.", will_flush_item.item_id);
+                                                    info!("run_chunk2chunk_restore_task chunk {} flush to file done for AlreadyDone.", will_flush_item.item_id);
                                                     (Ok(()), true)},
                                                 BuckyBackupError::TryLater(_) => {
-                                                    debug!("run_chunk2chunk_restore_task chunk {} flush to file later.", will_flush_item.item_id);
+                                                    info!("run_chunk2chunk_restore_task chunk {} flush to file later.", will_flush_item.item_id);
                                                     (Ok(()), false)},
-                                                _ => (Err(err), false),
+                                                _ => {
+                                                    info!("run_chunk2chunk_restore_task {} flush to file failed. {:?}", will_flush_item.item_id, err);
+                                                    (Err(err), false)},
                                             },
                                         };
 
@@ -1350,7 +1375,7 @@ impl BackupEngine {
                                     err
                                 ));
                                 let _ignore_err = engine.task_db.update_task(&real_restore_task);
-                                debug!(
+                                info!(
                                     "run_chunk2chunk_restore_task task {} failed: {:?}",
                                     real_restore_task.taskid, err
                                 );
@@ -1381,7 +1406,7 @@ impl BackupEngine {
                                     err
                                 ));
                                 let _ignore_err = engine.task_db.update_task(&real_restore_task);
-                                debug!(
+                                info!(
                                     "run_chunk2chunk_restore_task task {} failed for load: {:?}",
                                     real_restore_task.taskid, err
                                 );
@@ -1391,12 +1416,12 @@ impl BackupEngine {
                     }
 
                     {
-                        let state = restore_task.lock().await.state.clone();
-                        if state != TaskState::Running {
+                        let real_restore_task = restore_task.lock().await;
+                        if real_restore_task.state != TaskState::Running {
                             info!(
                                 "run_chunk2chunk_restore_task task {} not running {:?}",
-                                restore_task.lock().await.taskid,
-                                state
+                                real_restore_task.taskid,
+                                real_restore_task.state
                             );
                             break;
                         }

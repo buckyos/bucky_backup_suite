@@ -4,8 +4,7 @@ import {
     BackupTargetInfo,
     TaskInfo,
 } from "./task_mgr";
-import {
-    taskManager as taskManagerInner,} from "./task_mgr";
+import { taskManager as taskManagerInner } from "./task_mgr";
 
 export const taskManager = taskManagerInner;
 
@@ -18,6 +17,7 @@ export enum PlanState {
 
 export class TaskMgrHelper {
     static percent(sub: number, total: number): number {
+        console.assert(sub <= total);
         if (total === 0) return 100;
         return Math.floor((sub * 100) / total);
     }
@@ -27,7 +27,7 @@ export class TaskMgrHelper {
     }
 
     static formatSize(size: number): string {
-        if (typeof size !== 'number') return "NAN";
+        if (typeof size !== "number") return "NAN";
         if (size < 0) return "0 B";
         const units = ["B", "KB", "MB", "GB", "TB"];
         let unitIndex = 0;
@@ -199,9 +199,10 @@ export class TaskMgrHelper {
         }
 
         // 后端返回的时间戳是 Unix 秒，需要转换成毫秒后再格式化
-        const msTimestamp = timestamp > 0 && timestamp < 1_000_000_000_000
-            ? timestamp * 1000
-            : timestamp;
+        const msTimestamp =
+            timestamp > 0 && timestamp < 1_000_000_000_000
+                ? timestamp * 1000
+                : timestamp;
         if (msTimestamp <= 0) {
             return never_str;
         }

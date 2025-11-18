@@ -7,6 +7,7 @@ use crate::BackupResult;
 use crate::BuckyBackupError;
 use crate::CheckPointState;
 use crate::ChunkInnerPathHelper;
+use crate::RangeReader;
 use crate::RemoteBackupCheckPointItemStatus;
 use crate::CHECKPOINT_TYPE_CHUNK;
 use async_trait::async_trait;
@@ -215,7 +216,11 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
             warn!("open_item_chunk_reader error:{}", e.to_string());
             BuckyBackupError::TryLater(e.to_string())
         })?;
-        Ok(Box::pin(reader.0))
+
+        Ok(Box::pin(RangeReader::new(
+            reader.0,
+            backup_item.size - offset,
+        )))
     }
 
     async fn open_chunk_reader(
@@ -234,7 +239,10 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
             warn!("open_chunk_reader error:{}", e.to_string());
             BuckyBackupError::TryLater(e.to_string())
         })?;
-        Ok(Box::pin(reader.0))
+        Ok(Box::pin(RangeReader::new(
+            reader.0,
+            chunk_id.get_length().unwrap() - offset,
+        )))
     }
 
     //for resotre
@@ -275,7 +283,7 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
             Ok(is_exist) if !is_exist => 0,
             _ => match fs::metadata(target_file_full_path.as_path()).await {
                 Ok(meta) => meta.len(),
-                Err(err) => return Err(BuckyBackupError::Internal(err.to_string())),
+                Err(err) => return Err(BuckyBackupError::Failed(err.to_string())),
             },
         };
 
@@ -296,14 +304,14 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
                         .await;
                     if let Ok(mut reader) = reader {
                         let read_len_once = 16 * 1024 * 1024;
-                        let mut read_pos = 0;
+                        let mut read_pos = item.offset;
                         let mut buf = Vec::with_capacity(read_len_once as usize);
                         let mut chunk_hasher = ChunkHasher::new(Some(
                             item.chunk_id
                                 .chunk_type
                                 .to_hash_method()
                                 .map_err(|err| {
-                                    BuckyBackupError::Internal(format!(
+                                    BuckyBackupError::Failed(format!(
                                         "invalid chunk-type: {:?}",
                                         item.chunk_id
                                     ))
@@ -311,20 +319,21 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
                                 .as_str(),
                         ))
                         .map_err(|err| {
-                            BuckyBackupError::Internal(format!(
+                            BuckyBackupError::Failed(format!(
                                 "invalid chunk-type: {:?}",
                                 item.chunk_id
                             ))
                         })?;
-                        while read_pos < offset + item.size {
-                            let read_len = min(read_len_once, offset + item.size - read_pos);
+                        while read_pos < item.offset + item.size {
+                            let read_len = min(read_len_once, item.offset + item.size - read_pos);
                             buf.resize(read_len as usize, 0);
                             reader.read_exact(buf.as_mut_slice()).await;
                             chunk_hasher.update_from_bytes(buf.as_slice());
+                            read_pos = read_pos + read_len;
                         }
                         let exist_chunk_id = if item.chunk_id.chunk_type.is_mix() {
                             chunk_hasher.finalize_mix_chunk_id().map_err(|err| {
-                                BuckyBackupError::Internal(format!("faile mix-chunk: {:?}", err))
+                                BuckyBackupError::Failed(format!("faile mix-chunk: {:?}", err))
                             })?
                         } else {
                             chunk_hasher.finalize_chunk_id()
@@ -340,15 +349,18 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         let mut writer = fs::File::options()
             .write(true)
             .append(true)
-            .create_new(true)
+            .create(true)
             .open(target_file_full_path.as_path())
             .await
             .map_err(|err| {
                 BuckyBackupError::Failed(format!("Write failed: {}, {:?}", item.item_id, err))
             })?;
-        writer.seek(SeekFrom::Start(offset)).await.map_err(|err| {
-            BuckyBackupError::Failed(format!("Seek failed: {},  {:?}", item.item_id, err))
-        })?;
+        writer
+            .seek(SeekFrom::Start(item.offset))
+            .await
+            .map_err(|err| {
+                BuckyBackupError::Failed(format!("Seek failed: {},  {:?}", item.item_id, err))
+            })?;
         Ok((Box::pin(writer), 0))
     }
 }
@@ -508,7 +520,10 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
             BuckyBackupError::TryLater(e.to_string())
         })?;
 
-        Ok(Box::pin(reader.0))
+        Ok(Box::pin(RangeReader::new(
+            reader.0,
+            chunk_id.get_length().unwrap() - offset,
+        )))
     }
 }
 

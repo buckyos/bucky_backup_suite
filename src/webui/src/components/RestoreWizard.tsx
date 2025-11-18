@@ -142,17 +142,9 @@ export function RestoreWizard({
         targetBreadcrumbs[targetBreadcrumbs.length - 1];
     const targetCurrentPath = targetCurrentBreadcrumb?.path ?? null;
 
-    const selectedPlan = useMemo(
-        () =>
-            planList &&
-            planList.find((plan) => plan.plan_id === selectedPlanId),
-        [planList, selectedPlanId]
-    );
-    const selectedTask = useMemo(
-        () =>
-            taskList && taskList.find((task) => task.taskid === selectedTaskId),
-        [taskList, selectedTaskId]
-    );
+    const selectedPlan = planList &&
+            planList.find((plan) => plan.plan_id === selectedPlanId);
+    const selectedTask = taskList && taskList.find((task) => task.taskid === selectedTaskId);
 
     const loadPlanList = async () => {
         setPlansLoading(true);
