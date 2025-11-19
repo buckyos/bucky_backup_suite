@@ -4,6 +4,7 @@ import { Button } from "./ui/button";
 import { Label } from "./ui/label";
 import { Checkbox } from "./ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
+import { Switch } from "./ui/switch";
 import { useMobile } from "./hooks/use_mobile";
 import { toast } from "sonner";
 import {
@@ -116,9 +117,8 @@ export function RestoreWizard({
         "original"
     );
     const [customPath, setCustomPath] = useState("");
-    const [overwriteMode, setOverwriteMode] = useState<
-        "skip" | "overwrite" | "rename"
-    >("skip");
+    const [clearTargetDirectory, setClearTargetDirectory] =
+        useState<boolean>(false);
 
     const steps = [
         {
@@ -142,9 +142,18 @@ export function RestoreWizard({
         targetBreadcrumbs[targetBreadcrumbs.length - 1];
     const targetCurrentPath = targetCurrentBreadcrumb?.path ?? null;
 
-    const selectedPlan = planList &&
-            planList.find((plan) => plan.plan_id === selectedPlanId);
-    const selectedTask = taskList && taskList.find((task) => task.taskid === selectedTaskId);
+    const selectedPlan =
+        planList && planList.find((plan) => plan.plan_id === selectedPlanId);
+    const selectedTask =
+        taskList && taskList.find((task) => task.taskid === selectedTaskId);
+    console.log(
+        "Restore taskList: ",
+        taskList,
+        ", selectedTaskId: ",
+        selectedTaskId,
+        ", selectedTask: ",
+        selectedTask
+    );
 
     const loadPlanList = async () => {
         setPlansLoading(true);
@@ -354,12 +363,7 @@ export function RestoreWizard({
         }
     }, [planList, plansLoading, selectedPlanId]);
 
-    const overwriteModeLabel =
-        overwriteMode === "skip"
-            ? "跳过已存在文件"
-            : overwriteMode === "overwrite"
-            ? "覆盖已存在文件"
-            : "重命名新文件";
+    const clearTargetDirectoryLabel = clearTargetDirectory ? "是" : "否";
     const canProceed = () => {
         console.log("canProceed check for step", currentStep);
         switch (currentStep) {
@@ -399,9 +403,10 @@ export function RestoreWizard({
         try {
             await taskManager.createRestoreTask(
                 selectedPlanId,
-                taskList!.find(task => task.taskid === selectedTaskId)!.checkpoint_id,
+                taskList!.find((task) => task.taskid === selectedTaskId)!
+                    .checkpoint_id,
                 customPath,
-                overwriteMode === "overwrite",
+                clearTargetDirectory,
                 selectedFiles[0]
             );
             onComplete();
@@ -781,7 +786,7 @@ export function RestoreWizard({
             <div>
                 <Label className="text-base">选择恢复目标</Label>
                 <p className="text-sm text-muted-foreground">
-                    设置恢复路径和文件冲突处理策略。
+                    设置恢复路径并选择是否清空目标目录。
                 </p>
             </div>
 
@@ -896,29 +901,19 @@ export function RestoreWizard({
                 </div>
             )}
 
-            <div className="space-y-3">
-                <Label className="text-sm font-medium">文件冲突处理</Label>
-                <RadioGroup
-                    value={overwriteMode}
-                    onValueChange={(value) =>
-                        setOverwriteMode(
-                            value as "skip" | "overwrite" | "rename"
-                        )
-                    }
-                >
-                    <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="skip" id="skip" />
-                        <Label htmlFor="skip">跳过已存在文件</Label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="overwrite" id="overwrite" />
-                        <Label htmlFor="overwrite">覆盖已存在文件</Label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="rename" id="rename" />
-                        <Label htmlFor="rename">重命名新文件</Label>
-                    </div>
-                </RadioGroup>
+            <div className="flex items-center justify-between rounded-lg border border-input bg-background p-3">
+                <div className="space-y-1">
+                    <Label className="text-sm font-medium">
+                        清空目标目录
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                        在恢复前删除目标目录中的现有内容。
+                    </p>
+                </div>
+                <Switch
+                    checked={clearTargetDirectory}
+                    onCheckedChange={setClearTargetDirectory}
+                />
             </div>
         </div>
     );
@@ -940,7 +935,10 @@ export function RestoreWizard({
                     </div>
                     <div className="flex justify-between">
                         <span className="text-muted-foreground">备份任务</span>
-                        <span>{selectedTask?.name ?? "未选择"}</span>
+                        <span>
+                            {(selectedTask?.name || selectedPlan?.title) ??
+                                "未选择"}
+                        </span>
                     </div>
                     <div className="flex justify-between">
                         <span className="text-muted-foreground">检查点</span>
@@ -959,8 +957,10 @@ export function RestoreWizard({
                         </span>
                     </div>
                     <div className="flex justify-between">
-                        <span className="text-muted-foreground">冲突策略</span>
-                        <span>{overwriteModeLabel}</span>
+                        <span className="text-muted-foreground">
+                            清空目标目录
+                        </span>
+                        <span>{clearTargetDirectoryLabel}</span>
                     </div>
                 </CardContent>
             </Card>

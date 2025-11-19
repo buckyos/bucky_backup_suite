@@ -15,10 +15,12 @@ use ndn_lib::*;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::fs;
 use std::collections::HashMap;
 use std::future::Future;
 use std::io::Cursor;
 use std::io::SeekFrom;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -855,6 +857,19 @@ impl BackupEngine {
                 "plan {} already has a running backup task",
                 plan_id
             )));
+        }
+
+        if restore_config.is_clean_restore {
+            let dir_path = {
+                if restore_config.restore_location_url.starts_with("file://") {
+                    let url = Url::parse(&restore_config.restore_location_url)
+                        .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
+                    PathBuf::from(url.path())
+                } else {
+                    PathBuf::from(restore_config.restore_location_url.as_str())
+                }
+            };
+            fs::remove_dir_all(dir_path.as_path()).await.map_err(|err| BuckyBackupError::Failed(format!("Cliean target directory failed: {:?}", err)))?;
         }
 
         let checkpoint = self.task_db.load_checkpoint_by_id(check_point_id)?;
