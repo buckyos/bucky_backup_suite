@@ -52,7 +52,7 @@ export enum SourceType {
 }
 
 export enum BackupPlanType {
-    C2C = "c2c"
+    C2C = "c2c",
 }
 
 export interface BackupPlanInfo {
@@ -631,14 +631,19 @@ export class BackupTaskManager {
                                 TaskState.FAILED,
                             ],
                         });
-                        await Promise.all(
+                        let taskList = await Promise.all(
                             taskid_list.task_ids.map((taskid) =>
                                 this.getTaskInfo(taskid)
                             )
                         );
                         // remove tasks that are no longer uncomplete
-                        for (const taskid of this.uncomplete_tasks.keys()) {
-                            if (!taskid_list.task_ids.includes(taskid)) {
+                        for (const [taskid, oldTaskInfo] of this
+                            .uncomplete_tasks) {
+                            const newTaskInfo = taskList.find(
+                                (info) => info.taskid === taskid
+                            );
+
+                            if (!newTaskInfo) {
                                 const comp_task =
                                     this.uncomplete_tasks.get(taskid);
                                 if (
@@ -651,6 +656,26 @@ export class BackupTaskManager {
                                     );
                                 }
                                 this.uncomplete_tasks.delete(taskid);
+                            } else {
+                                if (
+                                    newTaskInfo?.total_size !==
+                                        oldTaskInfo.total_size ||
+                                    newTaskInfo?.completed_size ===
+                                        oldTaskInfo.completed_size ||
+                                    newTaskInfo?.state === oldTaskInfo.state ||
+                                    newTaskInfo?.item_count ===
+                                        oldTaskInfo.item_count ||
+                                    newTaskInfo?.completed_item_count ===
+                                        oldTaskInfo.completed_item_count ||
+                                    newTaskInfo?.wait_transfer_item_count ===
+                                        oldTaskInfo.wait_transfer_item_count ||
+                                    newTaskInfo?.speed === oldTaskInfo.speed
+                                ) {
+                                    await this.emitTaskEvent(
+                                        TaskEventType.UPDATE_TASK,
+                                        newTaskInfo
+                                    );
+                                }
                             }
                         }
                     } catch (error) {
@@ -753,7 +778,7 @@ export function callInInterval(
     interval: number,
     setIntervalHandle: (intervalHandle: number | null) => boolean
 ) {
-    const timerDisable = true;
+    const timerDisable = false;
     if (!timerDisable) {
         let isStop = false;
         let intervalHandle: number | undefined;

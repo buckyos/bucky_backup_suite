@@ -1638,10 +1638,10 @@ impl BackupEngine {
                 "try resume a BackupTask as Restore".to_string(),
             ));
         }
-        if real_restore_task.state != TaskState::Paused {
-            warn!("restore task is not paused, ignore resume");
+        if real_restore_task.state == TaskState::Running || real_restore_task.state == TaskState::Pending {
+            warn!("restore task is running, ignore resume");
             return Err(BuckyBackupError::Failed(
-                "restore task is not paused".to_string(),
+                "restore task is running".to_string(),
             ));
         }
         real_restore_task.state = TaskState::Running;

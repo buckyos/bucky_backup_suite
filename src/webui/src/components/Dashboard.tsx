@@ -677,7 +677,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                 <div className="flex items-center justify-between gap-2">
                                                     <div className="flex items-center gap-2 min-w-0">
                                                         <span className="font-medium truncate">
-                                                            {task.name}
+                                                            {task.name ||
+                                                                planTitle}
                                                         </span>
                                                         {getStatusBadge(
                                                             task.state
@@ -783,7 +784,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         <td className="px-4 py-3 align-top w-[36%]">
                                                             <div className="flex items-center gap-2 min-w-0">
                                                                 <span className="font-medium truncate">
-                                                                    {task.name}
+                                                                    {task.name ||
+                                                                        planTitle}
                                                                 </span>
                                                                 {getStatusBadge(
                                                                     task.state
@@ -1152,7 +1154,9 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         disabled={!plan.policy}
                                                         onClick={(e) => {
                                                             e.stopPropagation();
-                                                            setSelectedPlan(plan.plan_id);
+                                                            setSelectedPlan(
+                                                                plan.plan_id
+                                                            );
                                                             handleBackupNow();
                                                         }}
                                                     >
@@ -1211,11 +1215,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                                                         className="h-8 w-8 flex-shrink-0"
                                                         disabled={!plan.policy}
                                                         onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                setSelectedPlan(plan.plan_id);
-                                                                handleBackupNow();
-                                                            }
-                                                        }
+                                                            e.stopPropagation();
+                                                            setSelectedPlan(
+                                                                plan.plan_id
+                                                            );
+                                                            handleBackupNow();
+                                                        }}
                                                     >
                                                         <Play className="w-4 h-4" />
                                                     </Button>
@@ -1355,12 +1360,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                 <div className="fixed inset-0 z-50 bg-background overflow-auto">
                     <TaskDetail
                         task={selectedTask}
-                        plan={
-                            plans?.find(
-                                (plan) =>
-                                    plan.plan_id === selectedTask.owner_plan_id
-                            )
-                        }
+                        plan={plans?.find(
+                            (plan) =>
+                                plan.plan_id === selectedTask.owner_plan_id
+                        )}
                         onBack={() => setSelectedTask(null)}
                     />
                 </div>

@@ -223,7 +223,10 @@ function getTaskActions(
             </Button>
         );
 
-        if (task.state === TaskState.PAUSED) {
+        if (
+            task.state === TaskState.PAUSED ||
+            task.state === TaskState.FAILED
+        ) {
             actions.push(
                 <Button
                     key="resume"
