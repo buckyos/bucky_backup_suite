@@ -401,7 +401,7 @@ export function RestoreWizard({
     const handleComplete = async () => {
         console.log("handleComplete");
         try {
-            await taskManager.createRestoreTask(
+            const taskId = await taskManager.createRestoreTask(
                 selectedPlanId,
                 taskList!.find((task) => task.taskid === selectedTaskId)!
                     .checkpoint_id,
@@ -409,6 +409,7 @@ export function RestoreWizard({
                 clearTargetDirectory,
                 selectedFiles[0]
             );
+            await taskManager.resumeWorkTask(taskId);
             onComplete();
 
             console.log("handleComplete return");
@@ -903,9 +904,7 @@ export function RestoreWizard({
 
             <div className="flex items-center justify-between rounded-lg border border-input bg-background p-3">
                 <div className="space-y-1">
-                    <Label className="text-sm font-medium">
-                        清空目标目录
-                    </Label>
+                    <Label className="text-sm font-medium">清空目标目录</Label>
                     <p className="text-xs text-muted-foreground">
                         在恢复前删除目标目录中的现有内容。
                     </p>

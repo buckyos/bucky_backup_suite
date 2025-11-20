@@ -92,7 +92,8 @@ export function PlanDetails({ onBack, onNavigate, plan }: PlanDetailsProps) {
             toast.error("当前有任务正在执行，请等待完成或删除现有任务");
             return;
         }
-        await taskManager.createBackupTask(plan.plan_id);
+        const taskId = await taskManager.createBackupTask(plan.plan_id);
+        await taskManager.resumeWorkTask(taskId);
         toast.success(`正在启动备份计划: ${plan.title}`);
         loadUncompleteTasks();
     };
@@ -539,9 +540,7 @@ function TaskHistoryTabContent({
     }, [totalTasks, page]);
 
     const totalPages =
-        totalTasks > 0
-            ? Math.ceil(totalTasks / TASK_HISTORY_PAGE_SIZE)
-            : 1;
+        totalTasks > 0 ? Math.ceil(totalTasks / TASK_HISTORY_PAGE_SIZE) : 1;
     const paginationItems = useMemo(
         () => getTaskHistoryPaginationRange(page, totalPages),
         [page, totalPages]
@@ -554,8 +553,7 @@ function TaskHistoryTabContent({
         !isLoading && taskHistory.length > 0
             ? Math.min(totalTasks, visibleStart + taskHistory.length - 1)
             : 0;
-    const showPagination =
-        !isLoading && totalTasks > TASK_HISTORY_PAGE_SIZE;
+    const showPagination = !isLoading && totalTasks > TASK_HISTORY_PAGE_SIZE;
 
     const getTaskStatusBadge = (status: TaskState) => {
         switch (status) {
@@ -691,9 +689,11 @@ function TaskHistoryTabContent({
                                                     传输速度
                                                 </p>
                                                 <p className="font-medium">
-                                                    {task.speed?`$${TaskMgrHelper.formatSize(
-                                                        task.speed
-                                                    )}/s`:'--'}
+                                                    {task.speed
+                                                        ? `$${TaskMgrHelper.formatSize(
+                                                              task.speed
+                                                          )}/s`
+                                                        : "--"}
                                                 </p>
                                             </div>
                                         </div>
@@ -755,9 +755,7 @@ function TaskHistoryTabContent({
                             </PaginationItem>
                             {paginationItems.map((item, index) =>
                                 item === "ellipsis" ? (
-                                    <PaginationItem
-                                        key={`ellipsis-${index}`}
-                                    >
+                                    <PaginationItem key={`ellipsis-${index}`}>
                                         <PaginationEllipsis />
                                     </PaginationItem>
                                 ) : (

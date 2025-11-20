@@ -968,7 +968,7 @@ impl WebControlServer {
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
-    async fn resume_backup_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+    async fn resume_work_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
         let task_id = req.params.get("taskid");
         if task_id.is_none() {
             return Err(RPCErrors::ParseRequestError(
@@ -987,7 +987,7 @@ impl WebControlServer {
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
-    async fn pause_backup_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+    async fn pause_work_task(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
         let task_id = req.params.get("taskid");
         if task_id.is_none() {
             return Err(RPCErrors::ParseRequestError(
@@ -1540,8 +1540,8 @@ impl InnerServiceHandler for WebControlServer {
             "create_backup_task" => self.create_backup_task(req).await,
             "create_restore_task" => self.create_restore_task(req).await,
             "get_task_info" => self.get_task_info(req).await,
-            "resume_backup_task" => self.resume_backup_task(req).await,
-            "pause_backup_task" => self.pause_backup_task(req).await,
+            "resume_work_task" => self.resume_work_task(req).await,
+            "pause_work_task" => self.pause_work_task(req).await,
             "consume_size_summary" => self.consume_size_summary(req).await,
             "list_files_in_task" => self.list_files_in_task(req).await,
             "list_backup_task" => self.list_backup_task(req).await,

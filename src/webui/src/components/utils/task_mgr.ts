@@ -449,16 +449,16 @@ export class BackupTaskManager {
         return result;
     }
 
-    async resumeBackupTask(taskId: string) {
-        const result = await this.rpc_client.call("resume_backup_task", {
+    async resumeWorkTask(taskId: string) {
+        const result = await this.rpc_client.call("resume_work_task", {
             taskid: taskId,
         });
         await this.emitTaskEvent(TaskEventType.RESUME_TASK, taskId);
         return result.result === "success";
     }
 
-    async pauseBackupTask(taskId: string) {
-        const result = await this.rpc_client.call("pause_backup_task", {
+    async pauseWorkTask(taskId: string) {
+        const result = await this.rpc_client.call("pause_work_task", {
             taskid: taskId,
         });
         return result.result === "success";
@@ -487,7 +487,7 @@ export class BackupTaskManager {
         if (taskid_list.task_ids.length > 0) {
             let last_task = taskid_list.task_ids[0];
             console.log("resume last task:", last_task);
-            this.resumeBackupTask(last_task);
+            this.resumeWorkTask(last_task);
             await this.emitTaskEvent(TaskEventType.RESUME_TASK, last_task);
         }
     }
@@ -497,7 +497,7 @@ export class BackupTaskManager {
             state: [TaskState.RUNNING, TaskState.PENDING],
         });
         for (let taskid of taskid_list.task_ids) {
-            this.pauseBackupTask(taskid);
+            this.pauseWorkTask(taskid);
             await this.emitTaskEvent(TaskEventType.PAUSE_TASK, taskid);
         }
     }

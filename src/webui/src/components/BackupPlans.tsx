@@ -145,7 +145,8 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
             toast.error("当前有任务正在执行，请等待完成或删除现有任务");
             return;
         }
-        await taskManager.createBackupTask(plan.plan_id);
+        const taskId = await taskManager.createBackupTask(plan.plan_id);
+        await taskManager.resumeWorkTask(taskId);
         toast.success(`正在启动备份计划: ${plan.title}`);
     };
 

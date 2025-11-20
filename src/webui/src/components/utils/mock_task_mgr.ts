@@ -1382,7 +1382,7 @@ export class FakeTaskManager extends BackupTaskManager {
         return result!;
     }
 
-    async resumeBackupTask(taskId: string) {
+    async resumeWorkTask(taskId: string) {
         const task = this.task_list.tasks.find((t) => t.taskid === taskId)!;
         const plan = this.plan_list.plans.find(
             (p) => p.plan_id === task.owner_plan_id
@@ -1412,7 +1412,7 @@ export class FakeTaskManager extends BackupTaskManager {
         return true;
     }
 
-    async pauseBackupTask(taskId: string) {
+    async pauseWorkTask(taskId: string) {
         const task = this.task_list.tasks.find((t) => t.taskid === taskId)!;
         const plan = this.plan_list.plans.find(
             (p) => p.plan_id === task.owner_plan_id

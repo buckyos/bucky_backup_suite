@@ -203,7 +203,7 @@ function getTaskActions(
                 variant="outline"
                 size="sm"
                 className="gap-1"
-                onClick={() => taskManager.pauseBackupTask(task.taskid)}
+                onClick={() => taskManager.pauseWorkTask(task.taskid)}
             >
                 <Pause className="w-3 h-3" />
                 暂停
@@ -233,7 +233,7 @@ function getTaskActions(
                     variant="outline"
                     size="sm"
                     className="gap-1"
-                    onClick={() => taskManager.resumeBackupTask(task.taskid)}
+                    onClick={() => taskManager.resumeWorkTask(task.taskid)}
                 >
                     <Play className="w-3 h-3" />
                     继续
