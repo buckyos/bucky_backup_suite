@@ -101,6 +101,7 @@ pub struct BackupEngine {
             >,
         >,
     >,
+    lock_create_task: Arc<Mutex<()>>,
 }
 
 impl BackupEngine {
@@ -118,6 +119,7 @@ impl BackupEngine {
             task_session: Arc::new(Mutex::new(HashMap::new())),
             all_chunk_source_providers: Arc::new(Mutex::new(HashMap::new())),
             all_chunk_target_providers: Arc::new(Mutex::new(HashMap::new())),
+            lock_create_task: Arc::new(Mutex::new(()))
         };
 
         return result;
@@ -250,14 +252,37 @@ impl BackupEngine {
         let all_tasks = self.all_tasks.lock().await;
         for (task_id, task) in all_tasks.iter() {
             let real_task = task.lock().await;
-            if real_task.owner_plan_id == plan_id && real_task.state == TaskState::Running {
+            if real_task.owner_plan_id == plan_id && real_task.task_type == TaskType::Backup && (real_task.state == TaskState::Running || real_task.state == TaskState::Pending) {
                 return true;
             }
         }
         false
     }
 
-    //return planid
+    pub async fn is_plan_have_runable_backup_task(&self, plan_id: &str) -> bool {
+        let all_tasks = self.all_tasks.lock().await;
+        for (task_id, task) in all_tasks.iter() {
+            let real_task = task.lock().await;
+            if real_task.owner_plan_id == plan_id && real_task.task_type == TaskType::Backup && real_task.state != TaskState::Done {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub async fn is_restoring_task_dup(&self, plan_id: &str, check_point_id: &str, cfg: &RestoreConfig) -> bool {
+        let target_url = translate_local_path_from_url(&cfg.restore_location_url).unwrap_or("".to_string()).to_lowercase();
+        let all_tasks = self.all_tasks.lock().await;
+        for (task_id, task) in all_tasks.iter() {
+            let real_task = task.lock().await;
+            if real_task.owner_plan_id == plan_id && real_task.task_type == TaskType::Restore && real_task.state != TaskState::Done && real_task.checkpoint_id == check_point_id && real_task.restore_config.as_ref().map_or(true,|old_cfg|  translate_local_path_from_url(&old_cfg.restore_location_url).unwrap_or("".to_string()).to_lowercase() == target_url) {
+                return true
+            }
+        }
+        false
+    }
+
+  //return planid
     pub async fn create_backup_plan(
         &self,
         mut plan_config: BackupPlanConfig,
@@ -311,7 +336,9 @@ impl BackupEngine {
         plan_id: &str,
         parent_checkpoint_id: Option<&str>,
     ) -> BackupResult<String> {
-        if self.is_plan_have_running_backup_task(plan_id).await {
+        let create_1_task_in_same_time = self.lock_create_task.lock().await;
+
+        if self.is_plan_have_runable_backup_task(plan_id).await {
             return Err(BuckyBackupError::Failed(format!(
                 "plan {} already has a running backup task",
                 plan_id
@@ -371,6 +398,8 @@ impl BackupEngine {
         info!("create new backup task: {:?}", new_task);
         let mut all_tasks = self.all_tasks.lock().await;
         all_tasks.insert(new_task_id.clone(), Arc::new(Mutex::new(new_task)));
+
+        drop(create_1_task_in_same_time);
         return Ok(new_task_id);
     }
 
@@ -852,7 +881,8 @@ impl BackupEngine {
         check_point_id: &str,
         restore_config: RestoreConfig,
     ) -> BackupResult<String> {
-        if self.is_plan_have_running_backup_task(plan_id).await {
+        let create_1_task_in_same_time = self.lock_create_task.lock().await;
+        if self.is_restoring_task_dup(plan_id, check_point_id, &restore_config).await {
             return Err(BuckyBackupError::Failed(format!(
                 "plan {} already has a running backup task",
                 plan_id
@@ -860,15 +890,7 @@ impl BackupEngine {
         }
 
         if restore_config.is_clean_restore {
-            let dir_path = {
-                if restore_config.restore_location_url.starts_with("file://") {
-                    let url = Url::parse(&restore_config.restore_location_url)
-                        .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
-                    PathBuf::from(url.path())
-                } else {
-                    PathBuf::from(restore_config.restore_location_url.as_str())
-                }
-            };
+            let dir_path = PathBuf::from(translate_local_path_from_url(&restore_config.restore_location_url)?);
             fs::remove_dir_all(dir_path.as_path()).await.map_err(|err| BuckyBackupError::Failed(format!("Cliean target directory failed: {:?}", err)))?;
         }
 
@@ -880,6 +902,7 @@ impl BackupEngine {
         info!("create new restore task: {:?}", new_task);
         let mut all_tasks = self.all_tasks.lock().await;
         all_tasks.insert(new_task_id.clone(), Arc::new(Mutex::new(new_task)));
+        drop(create_1_task_in_same_time);
         Ok(new_task_id)
     }
 

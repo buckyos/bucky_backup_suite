@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use crate::translate_local_path_from_url;
 use crate::BackupCheckpoint;
 use crate::BackupChunkItem;
 use crate::BackupItemState;
@@ -265,15 +266,9 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         restore_config: &RestoreConfig,
         offset: u64,
     ) -> BackupResult<(ChunkWriter, u64)> {
-        let dir_path = {
-            if restore_config.restore_location_url.starts_with("file://") {
-                let url = Url::parse(&restore_config.restore_location_url)
-                    .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
-                PathBuf::from(url.path())
-            } else {
-                PathBuf::from(restore_config.restore_location_url.as_str())
-            }
-        };
+        let dir_path = PathBuf::from(translate_local_path_from_url(
+            restore_config.restore_location_url.as_str(),
+        )?);
 
         let item_relation_path = ChunkInnerPathHelper::strip_chunk_suffix(item.item_id.as_str());
         let target_file_full_path = dir_path.join(item_relation_path.as_str());
