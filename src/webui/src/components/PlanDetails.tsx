@@ -575,6 +575,12 @@ function TaskHistoryTabContent({
                         执行中
                     </Badge>
                 );
+            case TaskState.PAUSING:
+                return (
+                    <Badge className="bg-yellow-100 text-yellow-800 text-xs">
+                        暂停中...
+                    </Badge>
+                );
             case TaskState.PAUSED:
                 return (
                     <Badge className="bg-yellow-100 text-yellow-800 text-xs">
@@ -605,6 +611,8 @@ function TaskHistoryTabContent({
             case TaskState.RUNNING:
                 return <Activity className="w-4 h-4 text-blue-500" />;
             case TaskState.PAUSED:
+                return <Pause className="w-4 h-4 text-yellow-500" />;
+            case TaskState.PAUSING:
                 return <Pause className="w-4 h-4 text-yellow-500" />;
             case TaskState.PENDING:
                 return <Play className="w-4 h-4 text-gray-500" />;

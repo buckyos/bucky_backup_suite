@@ -213,6 +213,7 @@ impl BackupPlanConfig {
 pub enum TaskState {
     Running,
     Pending,
+    Pausing,
     Paused,
     Done,
     Failed(String),
@@ -223,9 +224,26 @@ impl TaskState {
         match self {
             TaskState::Running => "RUNNING".to_string(),
             TaskState::Pending => "PENDING".to_string(),
+            TaskState::Pausing => "PAUSING".to_string(),
             TaskState::Paused => "PAUSED".to_string(),
             TaskState::Done => "DONE".to_string(),
             TaskState::Failed(msg) => format!("FAILED:{}", msg.as_str()),
+        }
+    }
+
+    pub fn is_resumable(&self) -> bool {
+        match self {
+            TaskState::Running | TaskState::Pending | TaskState::Pausing | TaskState::Done => false,
+            TaskState::Paused | TaskState::Failed(_) => true,
+        }
+    }
+
+    pub fn is_puasable(&self) -> bool {
+        match self {
+            TaskState::Running | TaskState::Pending => true,
+            TaskState::Paused | TaskState::Failed(_) | TaskState::Done | TaskState::Pausing => {
+                false
+            }
         }
     }
 }
@@ -235,6 +253,7 @@ impl ToSql for TaskState {
         let s = match self {
             TaskState::Running => "RUNNING".to_string(),
             TaskState::Pending => "PENDING".to_string(),
+            TaskState::Pausing => "PAUSING".to_string(),
             TaskState::Paused => "PAUSED".to_string(),
             TaskState::Done => "DONE".to_string(),
             TaskState::Failed(msg) => format!("FAILED:{}", msg.as_str()),
@@ -248,6 +267,7 @@ impl FromSql for TaskState {
         value.as_str().map(|s| match s {
             "RUNNING" => TaskState::Running,
             "PENDING" => TaskState::Pending,
+            "PAUSING" => TaskState::Pausing,
             "PAUSED" => TaskState::Paused,
             "DONE" => TaskState::Done,
             _ => {
@@ -672,7 +692,8 @@ impl BackupTaskDb {
             TaskState::Done | TaskState::Failed(_) => {
                 new_task_state = task.state.clone();
             }
-            _ => new_task_state = TaskState::Paused,
+            TaskState::Running | TaskState::Pending => new_task_state = TaskState::Running,
+            TaskState::Paused | TaskState::Pausing => new_task_state = TaskState::Paused,
         };
         let rows_affected = conn.execute(
             "UPDATE work_tasks SET 
@@ -802,7 +823,7 @@ impl BackupTaskDb {
         for item in item_list {
             let local_chunk_id = item.local_chunk_id.clone().map(|id| id.to_string());
             tx.execute(
-                "INSERT INTO backup_items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO backup_items VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) ON CONFLICT(checkpoint_id, item_id) DO NOTHING",
                 params![
                     item.item_id,
                     checkpoint_id,

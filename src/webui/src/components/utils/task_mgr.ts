@@ -3,6 +3,7 @@ import { buckyos } from "buckyos";
 export enum TaskState {
     RUNNING = "RUNNING",
     PENDING = "PENDING",
+    PAUSING = "PAUSING",
     PAUSED = "PAUSED",
     DONE = "DONE",
     FAILED = "FAILED",

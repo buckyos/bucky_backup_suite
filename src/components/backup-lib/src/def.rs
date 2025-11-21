@@ -65,7 +65,7 @@ pub struct BackupChunkItem {
     pub state: BackupItemState,
     pub size: u64,
     pub last_update_time: u64,
-    pub offset: u64
+    pub offset: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,7 +83,7 @@ impl CheckPointState {
     pub fn need_working(&self) -> bool {
         match self {
             CheckPointState::Done => false,
-            CheckPointState::Failed(_) => false,
+            // CheckPointState::Failed(_) => false,
             _ => true,
         }
     }

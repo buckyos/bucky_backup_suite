@@ -244,10 +244,22 @@ function TaskSummaryCard({
                         {t.tasks.paused}
                     </Badge>
                 );
+            case TaskState.PAUSED:
+                return (
+                    <Badge className="bg-yellow-100 text-yellow-800 text-xs">
+                        {t.tasks.paused}
+                    </Badge>
+                );
             case TaskState.FAILED:
                 return (
                     <Badge className="bg-red-100 text-red-800 text-xs">
                         {t.tasks.failed}
+                    </Badge>
+                );
+            case TaskState.PAUSING:
+                return (
+                    <Badge className="bg-yellow-100 text-yellow-800 text-xs">
+                        暂停中...
                     </Badge>
                 );
             case TaskState.PENDING:
@@ -292,17 +304,6 @@ function TaskSummaryCard({
                             >
                                 <Play className="w-3 h-3" />
                                 {t.tasks.resume}
-                            </Button>
-                        )}
-                        {(task.state === TaskState.RUNNING ||
-                            task.state === TaskState.PAUSED) && (
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="gap-1 text-destructive"
-                            >
-                                <Square className="w-3 h-3" />
-                                {t.tasks.stop}
                             </Button>
                         )}
                     </div>
@@ -509,7 +510,12 @@ function FileListBreadcrumbs({
             currentBreadcrumb.isFile &&
             currentBreadcrumb.fullPath
     );
-    console.log("current breadcrumb:", currentBreadcrumb, "isViewingChunks:", isViewingChunks);
+    console.log(
+        "current breadcrumb:",
+        currentBreadcrumb,
+        "isViewingChunks:",
+        isViewingChunks
+    );
 
     return (
         <>

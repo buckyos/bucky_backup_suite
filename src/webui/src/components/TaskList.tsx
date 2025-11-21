@@ -142,6 +142,12 @@ function getStatusBadge(status: TaskState, t: Translations) {
                     {t.tasks.failed}
                 </Badge>
             );
+        case TaskState.PAUSING:
+            return (
+                <Badge className="bg-yellow-100 text-yellow-800 text-xs">
+                    {t.tasks.paused}
+                </Badge>
+            );
         case TaskState.PENDING:
             return (
                 <Badge className="bg-gray-100 text-gray-800 text-xs">
@@ -210,18 +216,20 @@ function getTaskActions(
             </Button>
         );
     } else {
-        actions.push(
-            <Button
-                key="delete"
-                variant="outline"
-                size="sm"
-                className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
-                onClick={() => taskManager.removeBackupTask(task.taskid)}
-            >
-                <Trash2 className="w-3 h-3" />
-                删除
-            </Button>
-        );
+        if (task.state !== TaskState.PAUSING) {
+            actions.push(
+                <Button
+                    key="delete"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
+                    onClick={() => taskManager.removeBackupTask(task.taskid)}
+                >
+                    <Trash2 className="w-3 h-3" />
+                    删除
+                </Button>
+            );
+        }
 
         if (
             task.state === TaskState.PAUSED ||

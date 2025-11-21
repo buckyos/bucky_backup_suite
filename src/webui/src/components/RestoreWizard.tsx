@@ -1226,6 +1226,8 @@ function translateTaskState(state: TaskState): string {
             return "排队中";
         case TaskState.PAUSED:
             return "已暂停";
+        case TaskState.PAUSING:
+            return "暂停中...";
         case TaskState.DONE:
             return "已完成";
         case TaskState.FAILED:

@@ -260,6 +260,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
                         已完成
                     </Badge>
                 );
+            case TaskState.PAUSING:
+                return (
+                    <Badge variant="outline" className="text-xs">
+                        暂停中...
+                    </Badge>
+                );
             case TaskState.PAUSED:
                 return (
                     <Badge variant="outline" className="text-xs">
