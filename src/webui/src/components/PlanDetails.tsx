@@ -92,8 +92,10 @@ export function PlanDetails({ onBack, onNavigate, plan }: PlanDetailsProps) {
             toast.error("当前有任务正在执行，请等待完成或删除现有任务");
             return;
         }
-        const taskId = await taskManager.createBackupTask(plan.plan_id);
-        await taskManager.resumeWorkTask(taskId);
+        const taskInfo: TaskInfo = await taskManager.createBackupTask(
+            plan.plan_id
+        );
+        await taskManager.resumeWorkTask(taskInfo.taskid);
         toast.success(`正在启动备份计划: ${plan.title}`);
         loadUncompleteTasks();
     };

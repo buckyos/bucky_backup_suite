@@ -55,6 +55,7 @@ import {
     TaskEventType,
     TaskState,
     TargetState,
+    TaskType,
 } from "./utils/task_mgr";
 import { LoadingPage } from "./LoadingPage";
 import { TaskDetail } from "./TaskDetail";
@@ -365,8 +366,25 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     const handleBackupNow = () => {
         const plan = plans?.find((p) => p.plan_id === selectedPlan);
         console.log("will run plan: ", plan);
+
         if (plan) {
-            toast.success(`已启动备份计划: ${plan.title}`);
+            if (
+                uncompleteTask &&
+                uncompleteTask.find(
+                    (t) =>
+                        t.owner_plan_id === selectedPlan &&
+                        t.task_type === TaskType.BACKUP
+                )
+            ) {
+                toast.error("当前有任务正在执行，请等待完成或删除现有任务");
+                return;
+            }
+            taskManager
+                .createBackupTask(plan.plan_id)
+                .then((taskInfo: TaskInfo) =>
+                    taskManager.resumeWorkTask(taskInfo.taskid)
+                );
+            toast.success(`正在启动备份计划: ${plan.title}`);
         }
         setSelectedPlan("");
     };

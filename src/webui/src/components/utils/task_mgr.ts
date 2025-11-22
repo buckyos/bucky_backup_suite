@@ -686,7 +686,7 @@ export class BackupTaskManager {
                         );
                     }
                 },
-                1000,
+                5000,
                 (_) => {
                     return this.uncomplete_task_timer.is_stop;
                 }
@@ -726,7 +726,7 @@ export class BackupTaskManager {
                         console.error("Error refreshing target state:", error);
                     }
                 },
-                1000,
+                10000,
                 (_) => {
                     return this.target_timer.is_stop;
                 }

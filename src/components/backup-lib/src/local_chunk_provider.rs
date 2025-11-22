@@ -214,7 +214,11 @@ impl IBackupChunkSourceProvider for LocalDirChunkProvider {
         )
         .await
         .map_err(|e| {
-            warn!("open_item_chunk_reader error:{}", e.to_string());
+            warn!(
+                "open_item_chunk_reader {} error:{}",
+                backup_item.item_id,
+                e.to_string()
+            );
             BuckyBackupError::TryLater(e.to_string())
         })?;
 

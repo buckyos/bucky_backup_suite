@@ -401,7 +401,7 @@ export function RestoreWizard({
     const handleComplete = async () => {
         console.log("handleComplete");
         try {
-            const taskId = await taskManager.createRestoreTask(
+            const taskInfo: TaskInfo = await taskManager.createRestoreTask(
                 selectedPlanId,
                 taskList!.find((task) => task.taskid === selectedTaskId)!
                     .checkpoint_id,
@@ -409,7 +409,7 @@ export function RestoreWizard({
                 clearTargetDirectory,
                 selectedFiles[0]
             );
-            await taskManager.resumeWorkTask(taskId);
+            await taskManager.resumeWorkTask(taskInfo.taskid);
             onComplete();
 
             console.log("handleComplete return");

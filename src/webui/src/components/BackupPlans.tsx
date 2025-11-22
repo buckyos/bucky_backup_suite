@@ -42,6 +42,7 @@ import {
     TaskFilter,
     TaskInfo,
     TaskState,
+    TaskType,
 } from "./utils/task_mgr";
 import { PlanState, TaskMgrHelper, taskManager } from "./utils/task_mgr_helper";
 import { Translations } from "./i18n";
@@ -109,8 +110,11 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
     // 检查是否有未完成的任务
     const hasRunningTasks = (planId: string) => {
         return (
-            uncompleteTasks.find((t) => t.owner_plan_id === planId) !==
-            undefined
+            uncompleteTasks.find(
+                (t) =>
+                    t.owner_plan_id === planId &&
+                    t.task_type === TaskType.BACKUP
+            ) !== undefined
         );
     };
 
@@ -145,12 +149,21 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
             toast.error("当前有任务正在执行，请等待完成或删除现有任务");
             return;
         }
-        const taskId = await taskManager.createBackupTask(plan.plan_id);
-        await taskManager.resumeWorkTask(taskId);
+        const taskInfo: TaskInfo = await taskManager.createBackupTask(
+            plan.plan_id
+        );
+        await taskManager.resumeWorkTask(taskInfo.taskid);
         toast.success(`正在启动备份计划: ${plan.title}`);
     };
 
-    console.log("plans:", plans, "services: ", services, "uncomplete: ", uncompleteTasks);
+    console.log(
+        "plans:",
+        plans,
+        "services: ",
+        services,
+        "uncomplete: ",
+        uncompleteTasks
+    );
 
     return (
         <div className={`${isMobile ? "p-4 pt-16" : "p-6"} space-y-6`}>
