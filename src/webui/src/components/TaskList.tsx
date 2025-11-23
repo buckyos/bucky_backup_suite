@@ -223,7 +223,7 @@ function getTaskActions(
                     variant="outline"
                     size="sm"
                     className="gap-1 text-destructive hover:text-destructive-foreground hover:bg-destructive"
-                    onClick={() => taskManager.removeBackupTask(task.taskid)}
+                    onClick={() => taskManager.removeWorkTask(task.taskid)}
                 >
                     <Trash2 className="w-3 h-3" />
                     删除

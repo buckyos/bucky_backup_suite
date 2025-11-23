@@ -1432,7 +1432,7 @@ export class FakeTaskManager extends BackupTaskManager {
         return true;
     }
 
-    async removeBackupTask(taskId: string): Promise<boolean> {
+    async removeWorkTask(taskId: string): Promise<boolean> {
         const idx = this.task_list.tasks.findIndex((t) => t.taskid === taskId);
         if (idx === -1) return false;
         const task = this.task_list.tasks[idx];

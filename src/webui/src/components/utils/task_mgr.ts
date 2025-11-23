@@ -465,8 +465,8 @@ export class BackupTaskManager {
         return result.result === "success";
     }
 
-    async removeBackupTask(taskId: string) {
-        const result = await this.rpc_client.call("remove_backup_task", {
+    async removeWorkTask(taskId: string) {
+        const result = await this.rpc_client.call("remove_work_task", {
             taskid: taskId,
         });
         await this.emitTaskEvent(TaskEventType.REMOVE_TASK, taskId);
