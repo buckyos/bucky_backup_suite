@@ -217,6 +217,7 @@ pub enum TaskState {
     Paused,
     Done,
     Failed(String),
+    REMOVE,
 }
 
 impl TaskState {
@@ -228,12 +229,17 @@ impl TaskState {
             TaskState::Paused => "PAUSED".to_string(),
             TaskState::Done => "DONE".to_string(),
             TaskState::Failed(msg) => format!("FAILED:{}", msg.as_str()),
+            TaskState::REMOVE => "REMOVE".to_string(),
         }
     }
 
     pub fn is_resumable(&self) -> bool {
         match self {
-            TaskState::Running | TaskState::Pending | TaskState::Pausing | TaskState::Done => false,
+            TaskState::Running
+            | TaskState::Pending
+            | TaskState::Pausing
+            | TaskState::Done
+            | TaskState::REMOVE => false,
             TaskState::Paused | TaskState::Failed(_) => true,
         }
     }
@@ -241,9 +247,11 @@ impl TaskState {
     pub fn is_puasable(&self) -> bool {
         match self {
             TaskState::Running | TaskState::Pending => true,
-            TaskState::Paused | TaskState::Failed(_) | TaskState::Done | TaskState::Pausing => {
-                false
-            }
+            TaskState::Paused
+            | TaskState::Failed(_)
+            | TaskState::Done
+            | TaskState::Pausing
+            | TaskState::REMOVE => false,
         }
     }
 }
@@ -257,6 +265,7 @@ impl ToSql for TaskState {
             TaskState::Paused => "PAUSED".to_string(),
             TaskState::Done => "DONE".to_string(),
             TaskState::Failed(msg) => format!("FAILED:{}", msg.as_str()),
+            TaskState::REMOVE => "REMOVE".to_string(),
         };
         Ok(s.into())
     }
@@ -270,6 +279,7 @@ impl FromSql for TaskState {
             "PAUSING" => TaskState::Pausing,
             "PAUSED" => TaskState::Paused,
             "DONE" => TaskState::Done,
+            "REMOVE" => TaskState::REMOVE,
             _ => {
                 let state = s.split_once(|c| c == ':');
                 if let Some((state, msg)) = state {
