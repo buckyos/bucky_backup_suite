@@ -217,7 +217,7 @@ pub enum TaskState {
     Paused,
     Done,
     Failed(String),
-    REMOVE,
+    Remove,
 }
 
 impl TaskState {
@@ -229,7 +229,7 @@ impl TaskState {
             TaskState::Paused => "PAUSED".to_string(),
             TaskState::Done => "DONE".to_string(),
             TaskState::Failed(msg) => format!("FAILED:{}", msg.as_str()),
-            TaskState::REMOVE => "REMOVE".to_string(),
+            TaskState::Remove => "REMOVE".to_string(),
         }
     }
 
@@ -239,7 +239,7 @@ impl TaskState {
             | TaskState::Pending
             | TaskState::Pausing
             | TaskState::Done
-            | TaskState::REMOVE => false,
+            | TaskState::Remove => false,
             TaskState::Paused | TaskState::Failed(_) => true,
         }
     }
@@ -251,7 +251,7 @@ impl TaskState {
             | TaskState::Failed(_)
             | TaskState::Done
             | TaskState::Pausing
-            | TaskState::REMOVE => false,
+            | TaskState::Remove => false,
         }
     }
 }
@@ -265,7 +265,7 @@ impl ToSql for TaskState {
             TaskState::Paused => "PAUSED".to_string(),
             TaskState::Done => "DONE".to_string(),
             TaskState::Failed(msg) => format!("FAILED:{}", msg.as_str()),
-            TaskState::REMOVE => "REMOVE".to_string(),
+            TaskState::Remove => "REMOVE".to_string(),
         };
         Ok(s.into())
     }
@@ -279,7 +279,7 @@ impl FromSql for TaskState {
             "PAUSING" => TaskState::Pausing,
             "PAUSED" => TaskState::Paused,
             "DONE" => TaskState::Done,
-            "REMOVE" => TaskState::REMOVE,
+            "REMOVE" => TaskState::Remove,
             _ => {
                 let state = s.split_once(|c| c == ':');
                 if let Some((state, msg)) = state {
@@ -645,11 +645,7 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
             "UPDATE work_tasks SET state = ?, update_time = ? WHERE taskid = ?",
-            params![
-                state,
-                chrono::Utc::now().timestamp_millis() as u64,
-                taskid
-            ],
+            params![state, chrono::Utc::now().timestamp_millis() as u64, taskid],
         )?;
 
         if rows_affected == 0 {
@@ -766,12 +762,11 @@ impl BackupTaskDb {
         let conn = Connection::open(&self.db_path)?;
         let new_task_state;
         match task.state {
-            TaskState::Done | TaskState::Failed(_) => {
+            TaskState::Done | TaskState::Failed(_) | TaskState::Remove => {
                 new_task_state = task.state.clone();
             }
             TaskState::Running | TaskState::Pending => new_task_state = TaskState::Running,
             TaskState::Paused | TaskState::Pausing => new_task_state = TaskState::Paused,
-            TaskState::REMOVE => new_task_state = TaskState::REMOVE,
         };
         let rows_affected = conn.execute(
             "UPDATE work_tasks SET 

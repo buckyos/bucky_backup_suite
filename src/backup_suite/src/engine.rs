@@ -1949,11 +1949,11 @@ impl BackupEngine {
             task_info = self.wait_task_to_stop(taskid).await?;
         }
 
-        if task_info.state == TaskState::REMOVE {
+        if task_info.state == TaskState::Remove {
             return Ok(());
         }
 
-        self.set_task_state_persisted(taskid, TaskState::REMOVE)
+        self.set_task_state_persisted(taskid, TaskState::Remove)
             .await?;
 
         if let Err(err) = self.cleanup_removed_tasks().await {
@@ -2002,7 +2002,7 @@ impl BackupEngine {
         let _cleanup_guard = self.cleanup_removed_task_lock.lock().await;
         let tasks = self
             .task_db
-            .list_tasks_by_state(&TaskState::REMOVE)
+            .list_tasks_by_state(&TaskState::Remove)
             .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
 
         for task in tasks {
