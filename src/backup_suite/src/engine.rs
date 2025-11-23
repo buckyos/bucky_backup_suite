@@ -46,6 +46,8 @@ use chrono::Utc;
 const SMALL_CHUNK_SIZE: u64 = 1024 * 1024; //1MB
 const LARGE_CHUNK_SIZE: u64 = 1024 * 1024 * 256; //256MB
 const HASH_CHUNK_SIZE: u64 = 1024 * 1024 * 16; //16MB
+const REMOVE_WAIT_ATTEMPTS: usize = 120;
+const REMOVE_WAIT_INTERVAL_MS: u64 = 500;
 
 lazy_static! {
     pub static ref DEFAULT_ENGINE: Arc<Mutex<BackupEngine>> = {
@@ -103,6 +105,7 @@ pub struct BackupEngine {
         >,
     >,
     lock_create_task: Arc<Mutex<()>>,
+    cleanup_removed_task_lock: Arc<Mutex<()>>,
 }
 
 impl BackupEngine {
@@ -120,7 +123,8 @@ impl BackupEngine {
             task_session: Arc::new(Mutex::new(HashMap::new())),
             all_chunk_source_providers: Arc::new(Mutex::new(HashMap::new())),
             all_chunk_target_providers: Arc::new(Mutex::new(HashMap::new())),
-            lock_create_task: Arc::new(Mutex::new(()))
+            lock_create_task: Arc::new(Mutex::new(())),
+            cleanup_removed_task_lock: Arc::new(Mutex::new(())),
         };
 
         return result;
@@ -310,16 +314,38 @@ impl BackupEngine {
     }
 
     pub async fn get_backup_plan(&self, plan_id: &str) -> BackupResult<BackupPlanConfig> {
-        let all_plans = self.all_plans.lock().await;
-        let plan = all_plans.get(plan_id);
-        if plan.is_none() {
-            return Err(BuckyBackupError::NotFound(format!(
+        let maybe_plan = {
+            let mut all_plans = self.all_plans.lock().await;
+            if let Some(plan) = all_plans.get(plan_id) {
+                Some(plan.clone())
+            } else {
+                match self.task_db.get_backup_plan_by_id(plan_id) {
+                    Ok(plan_config) => {
+                        let plan_arc = Arc::new(Mutex::new(plan_config));
+                        all_plans.insert(plan_id.to_string(), plan_arc.clone());
+                        Some(plan_arc)
+                    }
+                    Err(err) => {
+                        error!(
+                            "plan {} not found in memory or db: {}",
+                            plan_id,
+                            err.to_string()
+                        );
+                        None
+                    }
+                }
+            }
+        };
+
+        if let Some(plan_arc) = maybe_plan {
+            let plan = plan_arc.lock().await;
+            Ok(plan.clone())
+        } else {
+            Err(BuckyBackupError::NotFound(format!(
                 "plan {} not found",
                 plan_id
-            )));
+            )))
         }
-        let plan = plan.unwrap().lock().await;
-        Ok(plan.clone())
     }
 
     pub async fn delete_backup_plan(&self, plan_id: &str) -> BackupResult<()> {
@@ -1905,6 +1931,129 @@ impl BackupEngine {
         backup_task.state = TaskState::Pausing;
         self.task_db.update_task(&backup_task)?;
         Ok(())
+    }
+
+    pub async fn remove_work_task(&self, taskid: &str) -> BackupResult<()> {
+        let mut task_info = self.get_task_info(taskid).await?;
+        match task_info.state {
+            TaskState::Running | TaskState::Pending => {
+                self.pause_work_task(taskid).await?;
+            }
+            _ => {}
+        }
+
+        if matches!(
+            task_info.state,
+            TaskState::Running | TaskState::Pending | TaskState::Pausing
+        ) {
+            task_info = self.wait_task_to_stop(taskid).await?;
+        }
+
+        if task_info.state == TaskState::REMOVE {
+            return Ok(());
+        }
+
+        self.set_task_state_persisted(taskid, TaskState::REMOVE)
+            .await?;
+
+        if let Err(err) = self.cleanup_removed_tasks().await {
+            warn!("cleanup removed tasks failed: {}", err);
+        }
+
+        Ok(())
+    }
+
+    async fn wait_task_to_stop(&self, taskid: &str) -> BackupResult<WorkTask> {
+        for _ in 0..REMOVE_WAIT_ATTEMPTS {
+            let task = self.get_task_info(taskid).await?;
+            match task.state {
+                TaskState::Running | TaskState::Pending | TaskState::Pausing => {
+                    tokio::time::sleep(Duration::from_millis(REMOVE_WAIT_INTERVAL_MS)).await;
+                }
+                _ => return Ok(task),
+            }
+        }
+        Err(BuckyBackupError::Failed(format!(
+            "timeout waiting task {} to pause",
+            taskid
+        )))
+    }
+
+    async fn set_task_state_persisted(
+        &self,
+        taskid: &str,
+        new_state: TaskState,
+    ) -> BackupResult<()> {
+        let task_arc = {
+            let all_tasks = self.all_tasks.lock().await;
+            all_tasks.get(taskid).cloned()
+        };
+
+        if let Some(task_arc) = task_arc {
+            let mut task = task_arc.lock().await;
+            task.state = new_state.clone();
+        }
+
+        self.task_db.update_task_state(taskid, &new_state)?;
+        Ok(())
+    }
+
+    async fn cleanup_removed_tasks(&self) -> BackupResult<()> {
+        let _cleanup_guard = self.cleanup_removed_task_lock.lock().await;
+        let tasks = self
+            .task_db
+            .list_tasks_by_state(&TaskState::REMOVE)
+            .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
+
+        for task in tasks {
+            match task.task_type {
+                TaskType::Backup => {
+                    if let Err(err) = self.cleanup_backup_task_resources(&task).await {
+                        warn!(
+                            "cleanup backup task {} failed: {}",
+                            task.taskid, err
+                        );
+                    }
+                }
+                TaskType::Restore => {
+                    self.remove_task_from_memory(&task.taskid, &task.checkpoint_id)
+                        .await;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn cleanup_backup_task_resources(&self, task: &WorkTask) -> BackupResult<()> {
+        let plan = self.get_backup_plan(task.owner_plan_id.as_str()).await?;
+        let target_provider = self
+            .get_chunk_target_provider_by_id(plan.target.as_str())
+            .await?;
+
+        target_provider
+            .remove_checkpoint(task.checkpoint_id.as_str())
+            .await?;
+
+        self.task_db
+            .delete_backup_items_by_checkpoint(task.checkpoint_id.as_str())?;
+        self.task_db.delete_checkpoint(task.checkpoint_id.as_str())?;
+        self.task_db.delete_worktask_logs(task.taskid.as_str())?;
+        self.task_db.delete_work_task(task.taskid.as_str())?;
+        self.remove_task_from_memory(&task.taskid, &task.checkpoint_id)
+            .await;
+        Ok(())
+    }
+
+    async fn remove_task_from_memory(&self, taskid: &str, checkpoint_id: &str) {
+        {
+            let mut all_tasks = self.all_tasks.lock().await;
+            all_tasks.remove(taskid);
+        }
+        {
+            let mut all_checkpoints = self.all_checkpoints.lock().await;
+            all_checkpoints.remove(checkpoint_id);
+        }
     }
 
     pub async fn cancel_backup_task(&self, taskid: &str) -> BackupResult<()> {

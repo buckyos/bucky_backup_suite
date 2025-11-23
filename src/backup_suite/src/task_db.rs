@@ -615,6 +615,73 @@ impl BackupTaskDb {
         Ok(task)
     }
 
+    pub fn list_tasks_by_state(&self, state: &TaskState) -> Result<Vec<WorkTask>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM work_tasks WHERE state = ? ORDER BY update_time ASC")?;
+        let tasks = stmt
+            .query_map(params![state.to_string()], |row| {
+                Ok(WorkTask {
+                    taskid: row.get(0)?,
+                    task_type: row.get(1)?,
+                    owner_plan_id: row.get(2)?,
+                    checkpoint_id: row.get(3)?,
+                    total_size: row.get(4)?,
+                    completed_size: row.get(5)?,
+                    state: row.get(6)?,
+                    create_time: row.get(7)?,
+                    update_time: row.get(8)?,
+                    item_count: row.get(9)?,
+                    completed_item_count: row.get(10)?,
+                    wait_transfer_item_count: row.get(11)?,
+                    restore_config: row.get(12)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<WorkTask>>>()?;
+        Ok(tasks)
+    }
+
+    pub fn update_task_state(&self, taskid: &str, state: &TaskState) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        let rows_affected = conn.execute(
+            "UPDATE work_tasks SET state = ?, update_time = ? WHERE taskid = ?",
+            params![
+                state,
+                chrono::Utc::now().timestamp_millis() as u64,
+                taskid
+            ],
+        )?;
+
+        if rows_affected == 0 {
+            return Err(BackupDbError::NotFound(taskid.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn delete_work_task(&self, taskid: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute("DELETE FROM work_tasks WHERE taskid = ?", params![taskid])?;
+        Ok(())
+    }
+
+    pub fn delete_backup_items_by_checkpoint(&self, checkpoint_id: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute(
+            "DELETE FROM backup_items WHERE checkpoint_id = ?",
+            params![checkpoint_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_worktask_logs(&self, owner_task: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute(
+            "DELETE FROM worktask_log WHERE owner_task = ?",
+            params![owner_task],
+        )?;
+        Ok(())
+    }
+
     pub fn sum_backup_item_sizes(&self, checkpoint_id: &str) -> Result<u64> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn
@@ -704,6 +771,7 @@ impl BackupTaskDb {
             }
             TaskState::Running | TaskState::Pending => new_task_state = TaskState::Running,
             TaskState::Paused | TaskState::Pausing => new_task_state = TaskState::Paused,
+            TaskState::REMOVE => new_task_state = TaskState::REMOVE,
         };
         let rows_affected = conn.execute(
             "UPDATE work_tasks SET 
@@ -1288,6 +1356,87 @@ impl BackupTaskDb {
             .collect::<SqlResult<Vec<BackupPlanConfig>>>()?;
 
         Ok(plans)
+    }
+
+    pub fn get_backup_plan_by_id(&self, plan_id: &str) -> Result<BackupPlanConfig> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT
+                plan_id,
+                source_type,
+                source_url,
+                target_id,
+                target_type,
+                target_url,
+                title,
+                description,
+                type_str,
+                last_checkpoint_index,
+                policy,
+                priority,
+                create_time,
+                update_time
+            FROM backup_plans WHERE plan_id = ?",
+        )?;
+
+        let plan = stmt.query_row(params![plan_id], |row| {
+            let source_type: String = row.get(1)?;
+            let source_url: String = row.get(2)?;
+            let target_id: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
+            let target_url: String = row.get(5)?;
+            let policy_json: String = row.get(10)?;
+            let priority: i64 = row.get(11)?;
+            let create_time_raw: i64 = row.get(12)?;
+            let update_time_raw: i64 = row.get(13)?;
+
+            let policy_value = match serde_json::from_str(&policy_json) {
+                Ok(value) => value,
+                Err(err) => {
+                    warn!(
+                        "failed to parse policy json for plan {}: {}. Using empty array.",
+                        plan_id, err
+                    );
+                    Value::Array(vec![])
+                }
+            };
+
+            let target = if target_id.is_empty() {
+                warn!(
+                    "backup plan {} missing target_id in database, falling back to target_url",
+                    plan_id
+                );
+                target_url.clone()
+            } else {
+                target_id
+            };
+
+            Ok(BackupPlanConfig {
+                source: match source_type.as_str() {
+                    "directory" => BackupSource::Directory(source_url),
+                    "chunklist" => BackupSource::ChunkList(source_url),
+                    _ => panic!("Invalid source type in database"),
+                },
+                target,
+                title: row.get(6)?,
+                description: row.get(7)?,
+                type_str: row.get(8)?,
+                last_checkpoint_index: row.get(9)?,
+                policy: policy_value,
+                priority,
+                create_time: if create_time_raw < 0 {
+                    0
+                } else {
+                    create_time_raw as u64
+                },
+                update_time: if update_time_raw < 0 {
+                    0
+                } else {
+                    update_time_raw as u64
+                },
+            })
+        })?;
+
+        Ok(plan)
     }
 
     pub fn create_backup_target(&self, target: &BackupTargetRecord) -> Result<()> {
