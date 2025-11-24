@@ -1279,7 +1279,7 @@ impl BackupTaskDb {
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM work_tasks \
              WHERE owner_plan_id = ? \
-             AND (task_type == 'BACKUP' OR (task_type == 'RESTORE' AND state != 'REMOVE')))",
+             AND (task_type == 'BACKUP' OR (task_type == 'RESTORE' AND state <> 'REMOVE'))",
             params![plan_id],
             |row| row.get(0),
         )?;
