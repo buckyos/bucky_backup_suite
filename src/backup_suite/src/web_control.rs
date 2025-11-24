@@ -311,6 +311,10 @@ impl WebControlServer {
                 BackupDbError::NotFound(_) => {
                     RPCErrors::ReasonError(format!("backup target {} not found", target_id))
                 }
+                BackupDbError::TargetInUse(_) => RPCErrors::ReasonError(format!(
+                    "backup target {} is still referenced by backup plans",
+                    target_id
+                )),
                 _ => RPCErrors::ReasonError(err.to_string()),
             })?;
 

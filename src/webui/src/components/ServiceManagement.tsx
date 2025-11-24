@@ -148,6 +148,19 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
     };
 
     const handleDelete = async (serviceId: string) => {
+        const planIds = await taskManager.listBackupPlans();
+        const planInfos = await Promise.all(
+            planIds.map((planId) => taskManager.getBackupPlan(planId))
+        );
+        const refPlanInfo = planInfos.find(
+            (planInfo) => planInfo.target === serviceId
+        );
+        if (refPlanInfo) {
+            toast.error(
+                `该服务正在被备份计划(${refPlanInfo.title})引用，不能删除.`
+            );
+            return;
+        }
         const success = await taskManager.removeBackupTarget(serviceId);
         if (!success) {
             toast.error("删除服务失败");
@@ -535,8 +548,7 @@ export function ServiceManagement({ onNavigate }: ServiceManagementProps) {
                             <p className="text-2xl">
                                 {
                                     services.filter(
-                                        (s) =>
-                                            s.target_type === TargetType.FILE
+                                        (s) => s.target_type === TargetType.FILE
                                     ).length
                                 }
                             </p>

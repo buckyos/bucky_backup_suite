@@ -34,6 +34,8 @@ pub enum BackupDbError {
     NotFound(String),
     #[error("InvalidCheckpointId: {0}")]
     InvalidCheckpointId(String),
+    #[error("TargetInUse: {0}")]
+    TargetInUse(String),
     #[error("database error: {0}")]
     DatabaseError(#[from] rusqlite::Error),
     #[error("Data format error: {0}")]
@@ -48,6 +50,9 @@ impl From<BackupDbError> for BuckyBackupError {
             BackupDbError::NotFound(msg) => BuckyBackupError::NotFound(msg),
             BackupDbError::InvalidCheckpointId(msg) => {
                 BuckyBackupError::Failed(format!("invalid checkpoint id: {}", msg))
+            }
+            BackupDbError::TargetInUse(msg) => {
+                BuckyBackupError::Failed(format!("target in use: {}", msg))
             }
             BackupDbError::DatabaseError(e) => {
                 BuckyBackupError::Failed(format!("database error: {}", e.to_string()))
@@ -1274,8 +1279,7 @@ impl BackupTaskDb {
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM work_tasks \
              WHERE owner_plan_id = ? \
-             AND task_type IN ('BACKUP','RESTORE') \
-             AND state != 'REMOVE'",
+             AND (task_type == 'BACKUP' OR (task_type == 'RESTORE' AND state != 'REMOVE')))",
             params![plan_id],
             |row| row.get(0),
         )?;
@@ -1630,6 +1634,14 @@ impl BackupTaskDb {
 
     pub fn remove_backup_target(&self, target_id: &str) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
+        let plan_count: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM backup_plans WHERE target_id = ?",
+            params![target_id],
+            |row| row.get(0),
+        )?;
+        if plan_count > 0 {
+            return Err(BackupDbError::TargetInUse(target_id.to_string()));
+        }
         let rows_affected = conn.execute(
             "DELETE FROM backup_targets WHERE target_id = ?",
             params![target_id],
