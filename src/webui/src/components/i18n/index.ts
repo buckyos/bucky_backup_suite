@@ -188,6 +188,7 @@ export interface Translations {
     performance: string;
     advanced: string;
     language: string;
+    taskConcurrency: string;
     timezone: string;
     autoStart: string;
     minimizeToTray: string;
@@ -387,6 +388,7 @@ const zhTranslations: Translations = {
     performance: '性能',
     advanced: '高级',
     language: '界面语言',
+    taskConcurrency: '并发任务数',
     timezone: '时区',
     autoStart: '启动时自动运行',
     minimizeToTray: '最小化到系统托盘',
@@ -586,6 +588,7 @@ const enTranslations: Translations = {
     performance: 'Performance',
     advanced: 'Advanced',
     language: 'Language',
+    taskConcurrency: 'Concurrent Tasks',
     timezone: 'Timezone',
     autoStart: 'Auto start on boot',
     minimizeToTray: 'Minimize to tray',
