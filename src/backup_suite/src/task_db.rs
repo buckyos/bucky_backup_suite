@@ -1269,6 +1269,19 @@ impl BackupTaskDb {
         Ok(())
     }
 
+    pub fn plan_has_non_removed_tasks(&self, plan_id: &str) -> Result<bool> {
+        let conn = Connection::open(&self.db_path)?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM work_tasks \
+             WHERE owner_plan_id = ? \
+             AND task_type IN ('BACKUP','RESTORE') \
+             AND state != 'REMOVE'",
+            params![plan_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
     pub fn list_backup_plans(&self) -> Result<Vec<BackupPlanConfig>> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(

@@ -369,6 +369,30 @@ impl WebControlServer {
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
+    async fn remove_backup_plan(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let plan_id_value = req.params.get("plan_id");
+        if plan_id_value.is_none() {
+            return Err(RPCErrors::ParseRequestError(
+                "plan_id is required".to_string(),
+            ));
+        }
+        let plan_id = plan_id_value
+            .unwrap()
+            .as_str()
+            .ok_or_else(|| RPCErrors::ParseRequestError("plan_id must be a string".to_string()))?;
+
+        let engine = DEFAULT_ENGINE.lock().await;
+        engine
+            .delete_backup_plan(plan_id)
+            .await
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+
+        Ok(RPCResponse::new(
+            RPCResult::Success(json!({ "result": "success" })),
+            req.id,
+        ))
+    }
+
     async fn create_backup_target(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
         let target_type_value = req.params.get("target_type");
         let target_url_value = req.params.get("url");
@@ -1307,6 +1331,7 @@ fn parse_task_state_from_str(value: &str) -> Option<TaskState> {
     match value {
         "RUNNING" => Some(TaskState::Running),
         "PENDING" => Some(TaskState::Pending),
+        "PAUSING" => Some(TaskState::Pausing),
         "PAUSED" => Some(TaskState::Paused),
         "DONE" => Some(TaskState::Done),
         "FAILED" => Some(TaskState::Failed("".to_string())),
@@ -1551,6 +1576,7 @@ impl InnerServiceHandler for WebControlServer {
             "create_backup_plan" => self.create_backup_plan(req).await,
             "list_backup_plan" => self.list_backup_plan(req).await,
             "get_backup_plan" => self.get_backup_plan(req).await,
+            "remove_backup_plan" => self.remove_backup_plan(req).await,
             "create_backup_target" => self.create_backup_target(req).await,
             "list_backup_target" => self.list_backup_target(req).await,
             "get_backup_target" => self.get_backup_target(req).await,

@@ -349,7 +349,21 @@ impl BackupEngine {
     }
 
     pub async fn delete_backup_plan(&self, plan_id: &str) -> BackupResult<()> {
-        unimplemented!()
+        // Ensure the plan exists (and cached) before attempting removal
+        let _ = self.get_backup_plan(plan_id).await?;
+
+        if self.task_db.plan_has_non_removed_tasks(plan_id)? {
+            return Err(BuckyBackupError::Failed(format!(
+                "plan {} has backup or restore tasks that are not deleted",
+                plan_id
+            )));
+        }
+
+        self.task_db.delete_backup_plan(plan_id)?;
+
+        let mut all_plans = self.all_plans.lock().await;
+        all_plans.remove(plan_id);
+        Ok(())
     }
 
     pub async fn list_backup_plans(&self) -> BackupResult<Vec<String>> {

@@ -134,6 +134,25 @@ export function BackupPlans({ onNavigate }: BackupPlansProps) {
     };
 
     const deletePlan = async (planId: string) => {
+        const taskIds = await taskManager.listBackupTasks(
+            {
+                owner_plan_id: [planId],
+                state: [
+                    TaskState.RUNNING,
+                    TaskState.DONE,
+                    TaskState.FAILED,
+                    TaskState.PAUSED,
+                    TaskState.PAUSING,
+                    TaskState.PENDING,
+                ],
+            },
+            0,
+            1
+        );
+        if (taskIds.total > 0) {
+            toast.error("请先删除该计划的所有任务!");
+            return;
+        }
         const success = await taskManager.removeBackupPlan(planId);
         if (!success) {
             toast.error("删除备份计划失败");
@@ -735,9 +754,10 @@ function PlanListDesktop({
                                         </AlertDialogCancel>
                                         <AlertDialogAction
                                             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                                            onClick={() =>
-                                                deletePlan(plan.plan_id)
-                                            }
+                                            onClick={(event) => {
+                                                deletePlan(plan.plan_id);
+                                                event.stopPropagation();
+                                            }}
                                         >
                                             删除
                                         </AlertDialogAction>
