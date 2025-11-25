@@ -1,5 +1,8 @@
 import { buckyos } from "buckyos";
 
+const DEFAULT_LANGUAGE = "zh-cn";
+const DEFAULT_TASK_CONCURRENCY = 5;
+
 export enum TaskState {
     RUNNING = "RUNNING",
     PENDING = "PENDING",
@@ -150,6 +153,11 @@ export enum DirectoryPurpose {
     BACKUP_SOURCE = "backup_source",
     RESTORE_TARGET = "restore_target",
     BACKUP_TARGET = "backup_target",
+}
+
+export interface UserSettings {
+    language: string;
+    task_concurrency: number;
 }
 
 type BackupSubject =
@@ -614,6 +622,44 @@ export class BackupTaskManager {
             to: to,
         });
         return result;
+    }
+
+    async getUserSettings(): Promise<UserSettings> {
+        const result = await this.rpc_client.call("get_user_settings", {});
+        const language =
+            typeof result.language === "string" && result.language.length > 0
+                ? result.language
+                : DEFAULT_LANGUAGE;
+        const concurrency =
+            typeof result.task_concurrency === "number"
+                ? result.task_concurrency
+                : DEFAULT_TASK_CONCURRENCY;
+        return {
+            language,
+            task_concurrency: concurrency,
+        };
+    }
+
+    async saveUserSettings(settings: UserSettings): Promise<UserSettings> {
+        const payload = {
+            language: settings.language || DEFAULT_LANGUAGE,
+            task_concurrency:
+                settings.task_concurrency || DEFAULT_TASK_CONCURRENCY,
+        };
+        const result = await this.rpc_client.call(
+            "save_user_settings",
+            payload
+        );
+        return {
+            language:
+                typeof result.language === "string"
+                    ? result.language
+                    : payload.language,
+            task_concurrency:
+                typeof result.task_concurrency === "number"
+                    ? result.task_concurrency
+                    : payload.task_concurrency,
+        };
     }
 
     startRefreshUncompleteTaskStateTimer(): number {

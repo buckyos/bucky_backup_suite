@@ -85,6 +85,21 @@ struct ListDirectoryOptions {
     only_files: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct UserSettings {
+    language: String,
+    task_concurrency: u32,
+}
+
+impl Default for UserSettings {
+    fn default() -> Self {
+        Self {
+            language: "zh-cn".to_string(),
+            task_concurrency: 5,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct WebControlServer {
     task_db: BackupTaskDb,
@@ -107,6 +122,36 @@ impl WebControlServer {
             );
         }
         Self { task_db }
+    }
+
+    fn load_user_settings(&self) -> std::result::Result<UserSettings, BackupDbError> {
+        let mut settings = UserSettings::default();
+        if let Some(language) = self.task_db.get_setting("language")? {
+            if !language.trim().is_empty() {
+                settings.language = language;
+            }
+        }
+        if let Some(concurrency_raw) = self.task_db.get_setting("task_concurrency")? {
+            if let Ok(parsed) = concurrency_raw.parse::<u32>() {
+                if parsed > 0 {
+                    settings.task_concurrency = parsed;
+                }
+            }
+        }
+        Ok(settings)
+    }
+
+    fn persist_user_settings(
+        &self,
+        settings: &UserSettings,
+    ) -> std::result::Result<(), BackupDbError> {
+        self.task_db
+            .set_setting("language", &settings.language)?;
+        self.task_db.set_setting(
+            "task_concurrency",
+            &settings.task_concurrency.to_string(),
+        )?;
+        Ok(())
     }
 
     fn migrate_legacy_targets(
@@ -1188,6 +1233,65 @@ impl WebControlServer {
         });
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
+
+    async fn get_user_settings(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let settings = self
+            .load_user_settings()
+            .map_err(|err| RPCErrors::ReasonError(err.to_string()))?;
+        Ok(RPCResponse::new(
+            RPCResult::Success(json!({
+                "language": settings.language,
+                "task_concurrency": settings.task_concurrency,
+            })),
+            req.id,
+        ))
+    }
+
+    async fn save_user_settings(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let params = &req.params;
+        let language = params
+            .get("language")
+            .and_then(|value| value.as_str())
+            .unwrap_or("zh-cn")
+            .trim()
+            .to_string();
+        let concurrency_value = params
+            .get("task_concurrency")
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str().and_then(|s| s.parse::<u64>().ok()))
+            })
+            .unwrap_or(5);
+
+        let mut settings = self
+            .load_user_settings()
+            .map_err(|err| RPCErrors::ReasonError(err.to_string()))?;
+        if !language.is_empty() {
+            settings.language = language;
+        } else {
+            settings.language = UserSettings::default().language;
+        }
+
+        let concurrency = if concurrency_value == 0 {
+            UserSettings::default().task_concurrency
+        } else {
+            concurrency_value as u32
+        };
+        settings.task_concurrency = concurrency;
+
+        self.persist_user_settings(&settings)
+            .map_err(|err| RPCErrors::ReasonError(err.to_string()))?;
+
+        Ok(RPCResponse::new(
+            RPCResult::Success(json!({
+                "result": "success",
+                "language": settings.language,
+                "task_concurrency": settings.task_concurrency,
+            })),
+            req.id,
+        ))
+    }
 }
 
 fn parse_order_by(
@@ -1598,6 +1702,8 @@ impl InnerServiceHandler for WebControlServer {
             "list_directory_children" => self.list_directory_children(req).await,
             "validate_path" => self.validate_path(req).await,
             "is_plan_running" => self.is_plan_running(req).await,
+            "get_user_settings" => self.get_user_settings(req).await,
+            "save_user_settings" => self.save_user_settings(req).await,
             _ => Err(RPCErrors::UnknownMethod(req.method)),
         }
     }

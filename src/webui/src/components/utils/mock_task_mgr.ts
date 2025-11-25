@@ -18,6 +18,7 @@ import {
     TaskInfo,
     TaskState,
     TaskType,
+    UserSettings,
 } from "./task_mgr";
 
 type TaskChunk = {
@@ -58,11 +59,28 @@ export class FakeTaskManager extends BackupTaskManager {
     private taskUpdateTimer?: number;
     private taskTickInFlight = false;
     private taskProgressMilestones: Map<string, number> = new Map();
+    private userSettings: UserSettings = {
+        language: "zh-cn",
+        task_concurrency: 5,
+    };
 
     constructor() {
         super();
         this.seedMockData();
         this.startTaskSimulationTimer();
+    }
+
+    async getUserSettings(): Promise<UserSettings> {
+        return { ...this.userSettings };
+    }
+
+    async saveUserSettings(settings: UserSettings): Promise<UserSettings> {
+        this.userSettings = {
+            language: settings.language || this.userSettings.language,
+            task_concurrency:
+                settings.task_concurrency || this.userSettings.task_concurrency,
+        };
+        return { ...this.userSettings };
     }
 
     private seedMockData() {

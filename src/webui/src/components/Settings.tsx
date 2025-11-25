@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
     Card,
     CardContent,
@@ -14,21 +14,94 @@ import {
     SelectTrigger,
     SelectValue,
 } from "./ui/select";
+import { Language } from "./i18n";
 import { useLanguage } from "./i18n/LanguageProvider";
 import { useMobile } from "./hooks/use_mobile";
 import { LoadingPage } from "./LoadingPage";
 import { Settings as SettingsIcon, Globe } from "lucide-react";
+import { taskManager } from "./utils/task_mgr_helper";
+
+const DEFAULT_TASK_CONCURRENCY = 5;
+const SUPPORTED_LANGUAGES: Language[] = ["zh-cn", "en"];
 
 export function Settings() {
     const { t, language, setLanguage } = useLanguage();
     const isMobile = useMobile();
     const [loading, setLoading] = useState(true);
-    const [concurrentTasks, setConcurrentTasks] = useState("2");
+    const [concurrentTasks, setConcurrentTasks] = useState(
+        DEFAULT_TASK_CONCURRENCY.toString()
+    );
 
     useEffect(() => {
-        const id = window.setTimeout(() => setLoading(false), 500);
-        return () => window.clearTimeout(id);
+        let isMounted = true;
+        const loadSettings = async () => {
+            try {
+                const settings = await taskManager.getUserSettings();
+                if (!isMounted) {
+                    return;
+                }
+                const requestedLanguage = settings.language as Language;
+                const nextLanguage = SUPPORTED_LANGUAGES.includes(
+                    requestedLanguage
+                )
+                    ? requestedLanguage
+                    : "zh-cn";
+                const nextConcurrency = (
+                    settings.task_concurrency ?? DEFAULT_TASK_CONCURRENCY
+                ).toString();
+                setLanguage(nextLanguage);
+                setConcurrentTasks(nextConcurrency);
+            } catch (error) {
+                console.error("Failed to load user settings", error);
+            } finally {
+                if (isMounted) {
+                    setLoading(false);
+                }
+            }
+        };
+        loadSettings();
+        return () => {
+            isMounted = false;
+        };
+    }, [setLanguage]);
+
+    const normalizeConcurrency = useCallback((value: string): number => {
+        const parsed = parseInt(value, 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return parsed;
+        }
+        return DEFAULT_TASK_CONCURRENCY;
     }, []);
+
+    const saveSettings = useCallback(
+        async (nextLanguage: Language, nextConcurrency: number) => {
+            try {
+                await taskManager.saveUserSettings({
+                    language: nextLanguage,
+                    task_concurrency: nextConcurrency,
+                });
+            } catch (error) {
+                console.error("Failed to save user settings", error);
+            }
+        },
+        []
+    );
+
+    const handleLanguageChange = useCallback(
+        (value: Language) => {
+            setLanguage(value);
+            saveSettings(value, normalizeConcurrency(concurrentTasks));
+        },
+        [concurrentTasks, normalizeConcurrency, saveSettings, setLanguage]
+    );
+
+    const handleConcurrencyChange = useCallback(
+        (value: string) => {
+            setConcurrentTasks(value);
+            saveSettings(language, normalizeConcurrency(value));
+        },
+        [language, normalizeConcurrency, saveSettings]
+    );
 
     if (loading) {
         return (
@@ -65,7 +138,12 @@ export function Settings() {
                             <Globe className="w-4 h-4" />
                             {t.settings.language}
                         </Label>
-                        <Select value={language} onValueChange={setLanguage}>
+                        <Select
+                            value={language}
+                            onValueChange={(value) =>
+                                handleLanguageChange(value as Language)
+                            }
+                        >
                             <SelectTrigger>
                                 <SelectValue />
                             </SelectTrigger>
@@ -83,7 +161,7 @@ export function Settings() {
                         </Label>
                         <Select
                             value={concurrentTasks}
-                            onValueChange={setConcurrentTasks}
+                            onValueChange={handleConcurrencyChange}
                         >
                             <SelectTrigger>
                                 <SelectValue />
@@ -92,6 +170,7 @@ export function Settings() {
                                 <SelectItem value="1">1</SelectItem>
                                 <SelectItem value="2">2</SelectItem>
                                 <SelectItem value="4">4</SelectItem>
+                                <SelectItem value="5">5</SelectItem>
                                 <SelectItem value="8">8</SelectItem>
                             </SelectContent>
                         </Select>

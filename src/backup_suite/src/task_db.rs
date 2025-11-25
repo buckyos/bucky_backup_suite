@@ -5,7 +5,7 @@ use buckyos_backup_lib::*;
 use log::*;
 use ndn_lib::ChunkId;
 use rusqlite::types::{FromSql, ToSql, Value as SqlValue, ValueRef};
-use rusqlite::{params, params_from_iter, Connection, Result as SqlResult};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::convert::TryFrom;
@@ -586,6 +586,14 @@ impl BackupTaskDb {
                 total INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT NOT NULL DEFAULT '',
                 config TEXT
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )",
             [],
         )?;
@@ -1989,6 +1997,28 @@ impl BackupTaskDb {
         }
 
         Ok(())
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute(
+            "REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let conn = Connection::open(&self.db_path)?;
+        let value = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(BackupDbError::DatabaseError)?;
+        Ok(value)
     }
 
     // pub fn load_wait_transfer_restore_items(&self, owner_taskid: &str) -> Result<Vec<BackupChunkItem>> {
