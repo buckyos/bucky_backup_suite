@@ -226,6 +226,82 @@ impl BackupEngine {
     pub async fn schedule(&self) {
         info!("backup engine scheduler started");
         loop {
+            let concurrency_limit = match self.task_db.get_setting("task_concurrency") {
+                Ok(Some(value)) => value
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|limit| *limit > 0)
+                    .unwrap_or(5),
+                Ok(None) => 5,
+                Err(err) => {
+                    warn!(
+                        "failed to load task_concurrency setting, fallback to 5: {}",
+                        err
+                    );
+                    5
+                }
+            };
+
+            let running_snapshots: Vec<_> = {
+                let all_tasks = self.all_tasks.lock().await;
+                all_tasks.values().cloned().collect()
+            };
+            let mut running_count = 0usize;
+            for task_arc in running_snapshots {
+                let task = task_arc.lock().await;
+                if matches!(task.state, TaskState::Running | TaskState::Pending) {
+                    running_count += 1;
+                }
+            }
+
+            if running_count < concurrency_limit {
+                match self.task_db.list_schedulable_tasks() {
+                    Ok(tasks) => {
+                        for task in tasks {
+                            if running_count >= concurrency_limit {
+                                break;
+                            }
+
+                            let in_memory_state = {
+                                let maybe_task = {
+                                    let all_tasks = self.all_tasks.lock().await;
+                                    all_tasks.get(&task.taskid).cloned()
+                                };
+                                if let Some(task_arc) = maybe_task {
+                                    Some(task_arc.lock().await.state.clone())
+                                } else {
+                                    None
+                                }
+                            };
+
+                            let current_state = in_memory_state.unwrap_or(task.state.clone());
+                            if matches!(
+                                current_state,
+                                TaskState::Running | TaskState::Pending | TaskState::Pausing
+                            ) {
+                                continue;
+                            }
+
+                            if let Err(err) =
+                                self.resume_work_task(task.taskid.as_str()).await
+                            {
+                                warn!(
+                                    "scheduler failed to start task {}: {}",
+                                    task.taskid, err
+                                );
+                                continue;
+                            }
+
+                            running_count += 1;
+                        }
+                    }
+                    Err(err) => {
+                        warn!("list schedulable tasks failed: {}", err);
+                    }
+                }
+            }
+
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
