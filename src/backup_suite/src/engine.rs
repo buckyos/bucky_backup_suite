@@ -48,6 +48,7 @@ const LARGE_CHUNK_SIZE: u64 = 1024 * 1024 * 256; //256MB
 const HASH_CHUNK_SIZE: u64 = 1024 * 1024 * 16; //16MB
 const REMOVE_WAIT_ATTEMPTS: usize = 120;
 const REMOVE_WAIT_INTERVAL_MS: u64 = 500;
+const FAILED_RETRY_COOLDOWN_MS: u64 = 5 * 60 * 1000; // 5分钟冷却时间
 
 lazy_static! {
     pub static ref DEFAULT_ENGINE: Arc<Mutex<BackupEngine>> = {
@@ -258,6 +259,7 @@ impl BackupEngine {
             if running_count < concurrency_limit {
                 match self.task_db.list_schedulable_tasks() {
                     Ok(tasks) => {
+                        let now_ms = chrono::Utc::now().timestamp_millis() as u64;
                         for task in tasks {
                             if running_count >= concurrency_limit {
                                 break;
@@ -281,6 +283,17 @@ impl BackupEngine {
                                 TaskState::Running | TaskState::Pending | TaskState::Pausing
                             ) {
                                 continue;
+                            }
+
+                            if matches!(current_state, TaskState::Failed(_)) {
+                                let last_failed_at = task.update_time;
+                                if now_ms.saturating_sub(last_failed_at) < FAILED_RETRY_COOLDOWN_MS {
+                                    debug!(
+                                        "skip scheduling task {} due to recent failure",
+                                        task.taskid
+                                    );
+                                    continue;
+                                }
                             }
 
                             if let Err(err) =
