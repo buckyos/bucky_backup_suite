@@ -654,6 +654,41 @@ impl BackupTaskDb {
         Ok(tasks)
     }
 
+    pub fn list_schedulable_tasks(&self) -> Result<Vec<WorkTask>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT * FROM work_tasks WHERE state NOT IN ('DONE', 'PAUSED', 'PAUSING', 'REMOVE') ORDER BY update_time ASC",
+        )?;
+        let tasks = stmt
+            .query_map([], |row| {
+                Ok(WorkTask {
+                    taskid: row.get(0)?,
+                    task_type: row.get(1)?,
+                    owner_plan_id: row.get(2)?,
+                    checkpoint_id: row.get(3)?,
+                    total_size: row.get(4)?,
+                    completed_size: row.get(5)?,
+                    state: row.get(6)?,
+                    create_time: row.get(7)?,
+                    update_time: row.get(8)?,
+                    item_count: row.get(9)?,
+                    completed_item_count: row.get(10)?,
+                    wait_transfer_item_count: row.get(11)?,
+                    restore_config: row.get(12)?,
+                })
+            })?
+            .collect::<SqlResult<Vec<WorkTask>>>()?;
+        Ok(tasks
+            .into_iter()
+            .filter(|task| {
+                !matches!(
+                    task.state,
+                    TaskState::Done | TaskState::Paused | TaskState::Pausing | TaskState::Remove
+                )
+            })
+            .collect())
+    }
+
     pub fn update_task_state(&self, taskid: &str, state: &TaskState) -> Result<()> {
         let conn = Connection::open(&self.db_path)?;
         let rows_affected = conn.execute(
