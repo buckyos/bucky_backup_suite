@@ -209,12 +209,25 @@ impl BackupEngine {
                 .insert(plan_key.clone(), Arc::new(Mutex::new(plan)));
             info!("load backup plan: {}", plan_key);
         }
+
+        let scheduler_engine = self.clone();
+        tokio::task::spawn(async move {
+            scheduler_engine.schedule().await;
+        });
+
         Ok(())
     }
 
     pub async fn stop(&self) -> BackupResult<()> {
         // stop all running task
         Ok(())
+    }
+
+    pub async fn schedule(&self) {
+        info!("backup engine scheduler started");
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
     }
 
     pub async fn register_backup_chunk_source_provider(
