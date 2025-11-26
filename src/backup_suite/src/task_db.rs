@@ -778,7 +778,7 @@ impl BackupTaskDb {
             TaskState::Done | TaskState::Failed(_) | TaskState::Remove => {
                 new_task_state = task.state.clone();
             }
-            TaskState::Running | TaskState::Pending => new_task_state = TaskState::Running,
+            TaskState::Running | TaskState::Pending => new_task_state = TaskState::Pending,
             TaskState::Paused | TaskState::Pausing => new_task_state = TaskState::Paused,
         };
         let rows_affected = conn.execute(
