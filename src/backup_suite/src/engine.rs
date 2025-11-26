@@ -224,25 +224,29 @@ impl BackupEngine {
         Ok(())
     }
 
+    fn task_concurrency_limit(&self) -> usize {
+        match self.task_db.get_setting("task_concurrency") {
+            Ok(Some(value)) => value
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .filter(|limit| *limit > 0)
+                .unwrap_or(5),
+            Ok(None) => 5,
+            Err(err) => {
+                warn!(
+                    "failed to load task_concurrency setting, fallback to 5: {}",
+                    err
+                );
+                5
+            }
+        }
+    }
+
     pub async fn schedule(&self) {
         info!("backup engine scheduler started");
         loop {
-            let concurrency_limit = match self.task_db.get_setting("task_concurrency") {
-                Ok(Some(value)) => value
-                    .trim()
-                    .parse::<usize>()
-                    .ok()
-                    .filter(|limit| *limit > 0)
-                    .unwrap_or(5),
-                Ok(None) => 5,
-                Err(err) => {
-                    warn!(
-                        "failed to load task_concurrency setting, fallback to 5: {}",
-                        err
-                    );
-                    5
-                }
-            };
+            let concurrency_limit = self.task_concurrency_limit();
 
             let running_snapshots: Vec<_> = {
                 let all_tasks = self.all_tasks.lock().await;
@@ -2025,6 +2029,33 @@ impl BackupEngine {
         let mut real_backup_task = backup_task.lock().await;
         let task_type = real_backup_task.task_type.clone();
         drop(real_backup_task);
+
+        let concurrency_limit = self.task_concurrency_limit();
+        if concurrency_limit > 0 {
+            let running_snapshots: Vec<_> = {
+                let all_tasks = self.all_tasks.lock().await;
+                all_tasks.values().cloned().collect()
+            };
+
+            let mut running_count = 0usize;
+            for task_arc in running_snapshots {
+                let task = task_arc.lock().await;
+                if task.state == TaskState::Running {
+                    running_count += 1;
+                }
+            }
+
+            if running_count >= concurrency_limit {
+                let mut real_backup_task = backup_task.lock().await;
+                if real_backup_task.state != TaskState::Pending {
+                    real_backup_task.state = TaskState::Pending;
+                }
+                drop(real_backup_task);
+                self.task_db
+                    .update_task_state(taskid, &TaskState::Pending)?;
+                return Ok(());
+            }
+        }
 
         match task_type {
             TaskType::Backup => self.resume_backup_task(taskid).await,
