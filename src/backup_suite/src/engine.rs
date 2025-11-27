@@ -14,6 +14,7 @@ use log::*;
 use ndn_lib::*;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio::fs;
 use std::collections::HashMap;
@@ -107,6 +108,16 @@ pub struct BackupEngine {
     >,
     lock_create_task: Arc<Mutex<()>>,
     cleanup_removed_task_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct BackupPlanUpdateParams {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub policy: Option<Value>,
+    pub priority: Option<u64>,
+    pub policy_disabled: Option<bool>,
+    pub reserved_versions: Option<u64>,
 }
 
 impl BackupEngine {
@@ -469,6 +480,45 @@ impl BackupEngine {
         let mut all_plans = self.all_plans.lock().await;
         all_plans.remove(plan_id);
         Ok(())
+    }
+
+    pub async fn update_backup_plan(
+        &self,
+        plan_id: &str,
+        params: BackupPlanUpdateParams,
+    ) -> BackupResult<BackupPlanConfig> {
+        // Ensure plan exists and loaded into cache
+        let _ = self.get_backup_plan(plan_id).await?;
+
+        let plan_arc = {
+            let all_plans = self.all_plans.lock().await;
+            all_plans.get(plan_id).cloned()
+        };
+
+        let plan_arc = plan_arc.ok_or_else(|| {
+            BuckyBackupError::NotFound(format!("plan {} not found in cache", plan_id))
+        })?;
+
+        let mut plan = plan_arc.lock().await;
+        if let Some(title) = params.title {
+            plan.title = title;
+        }
+        if let Some(description) = params.description {
+            plan.description = description;
+        }
+        if let Some(policy) = params.policy {
+            plan.policy = policy;
+        }
+        if let Some(priority) = params.priority {
+            plan.priority = priority;
+        }
+        if let Some(policy_disabled) = params.policy_disabled {
+            plan.policy_disabled = policy_disabled;
+        }
+        plan.update_time = Utc::now().timestamp_millis() as u64;
+
+        self.task_db.update_backup_plan(&plan)?;
+        Ok(plan.clone())
     }
 
     pub async fn list_backup_plans(&self) -> BackupResult<Vec<String>> {

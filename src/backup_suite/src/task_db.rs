@@ -155,7 +155,7 @@ pub struct BackupPlanConfig {
     pub type_str: String,
     pub last_checkpoint_index: u64,
     pub policy: Value,
-    pub priority: i64,
+    pub priority: u64,
     pub policy_disabled: bool,
     pub create_time: u64,
     pub update_time: u64,
@@ -1370,7 +1370,7 @@ impl BackupTaskDb {
                 let target_id: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
                 let target_url: String = row.get(5)?;
                 let policy_json: String = row.get(10)?;
-                let priority: i64 = row.get(11)?;
+                let priority: u64 = row.get(11)?;
                 let policy_disabled_raw: i64 = row.get(12)?;
                 let create_time_raw: i64 = row.get(13)?;
                 let update_time_raw: i64 = row.get(14)?;
@@ -1455,7 +1455,7 @@ impl BackupTaskDb {
             let target_id: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
             let target_url: String = row.get(5)?;
             let policy_json: String = row.get(10)?;
-            let priority: i64 = row.get(11)?;
+            let priority: u64 = row.get(11)?;
             let policy_disabled_raw: i64 = row.get(12)?;
             let create_time_raw: i64 = row.get(13)?;
             let update_time_raw: i64 = row.get(14)?;

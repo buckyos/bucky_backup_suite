@@ -145,12 +145,9 @@ impl WebControlServer {
         &self,
         settings: &UserSettings,
     ) -> std::result::Result<(), BackupDbError> {
+        self.task_db.set_setting("language", &settings.language)?;
         self.task_db
-            .set_setting("language", &settings.language)?;
-        self.task_db.set_setting(
-            "task_concurrency",
-            &settings.task_concurrency.to_string(),
-        )?;
+            .set_setting("task_concurrency", &settings.task_concurrency.to_string())?;
         Ok(())
     }
 
@@ -270,10 +267,10 @@ impl WebControlServer {
             .get("policy")
             .cloned()
             .unwrap_or_else(|| Value::Array(vec![]));
-        let priority_value = params.get("priority").and_then(|v| v.as_i64()).unwrap_or(0);
+        let priority_value = params.get("priority").and_then(|v| v.as_u64()).unwrap_or(0);
         let reserved_versions_value = params
             .get("reserved_versions")
-            .and_then(|v| v.as_i64())
+            .and_then(|v| v.as_u64())
             .unwrap_or(0);
         let policy_disabled = params
             .get("policy_disabled")
@@ -416,6 +413,148 @@ impl WebControlServer {
         result["target_name"] = json!(target_record.name);
         result["total_size"] = json!(completed_backup_size);
         result["total_backup"] = json!(completed_backup_count);
+        Ok(RPCResponse::new(RPCResult::Success(result), req.id))
+    }
+
+    async fn update_backup_plan(&self, req: RPCRequest) -> Result<RPCResponse, RPCErrors> {
+        let plan_id_value = req.params.get("plan_id");
+        if plan_id_value.is_none() {
+            return Err(RPCErrors::ParseRequestError(
+                "plan_id is required".to_string(),
+            ));
+        }
+        let plan_id = plan_id_value
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .ok_or_else(|| RPCErrors::ParseRequestError("plan_id must be a string".to_string()))?;
+
+        let parse_optional_string = |key: &str| -> Result<Option<String>, RPCErrors> {
+            match req.params.get(key) {
+                Some(Value::Null) | None => Ok(None),
+                Some(Value::String(s)) => Ok(Some(s.to_string())),
+                Some(_) => Err(RPCErrors::ParseRequestError(format!(
+                    "{} must be a string",
+                    key
+                ))),
+            }
+        };
+
+        let title = parse_optional_string("title")?;
+        let description = parse_optional_string("description")?;
+
+        let policy_value = match req.params.get("policy") {
+            Some(Value::Null) | None => None,
+            Some(Value::Array(_)) => req.params.get("policy").cloned(),
+            Some(_) => {
+                return Err(RPCErrors::ParseRequestError(
+                    "policy must be an array".to_string(),
+                ))
+            }
+        };
+
+        let priority_value = match req.params.get("priority") {
+            Some(Value::Null) | None => None,
+            Some(Value::Number(num)) => {
+                if let Some(value) = num.as_u64() {
+                    Some(value)
+                } else if let Some(value) = num.as_u64() {
+                    Some(value as u64)
+                } else {
+                    return Err(RPCErrors::ParseRequestError(
+                        "priority must be an integer".to_string(),
+                    ));
+                }
+            }
+            Some(Value::String(s)) => {
+                let parsed = s.parse::<u64>().map_err(|_| {
+                    RPCErrors::ParseRequestError("priority must be an integer".to_string())
+                })?;
+                Some(parsed)
+            }
+            Some(_) => {
+                return Err(RPCErrors::ParseRequestError(
+                    "priority must be an integer".to_string(),
+                ))
+            }
+        };
+
+        let reserved_versions_value = match req.params.get("reserved_versions") {
+            Some(Value::Null) | None => None,
+            Some(Value::Number(num)) => {
+                if let Some(value) = num.as_u64() {
+                    Some(value)
+                } else if let Some(value) = num.as_u64() {
+                    Some(value as u64)
+                } else {
+                    return Err(RPCErrors::ParseRequestError(
+                        "reserved_versions must be an integer".to_string(),
+                    ));
+                }
+            }
+            Some(Value::String(s)) => {
+                let parsed = s.parse::<u64>().map_err(|_| {
+                    RPCErrors::ParseRequestError("reserved_versions must be an integer".to_string())
+                })?;
+                Some(parsed)
+            }
+            Some(_) => {
+                return Err(RPCErrors::ParseRequestError(
+                    "reserved_versions must be an integer".to_string(),
+                ))
+            }
+        };
+
+        let policy_disabled = match req.params.get("policy_disabled") {
+            Some(Value::Null) | None => None,
+            Some(Value::Bool(v)) => Some(*v),
+            Some(_) => {
+                return Err(RPCErrors::ParseRequestError(
+                    "policy_disabled must be a boolean".to_string(),
+                ))
+            }
+        };
+
+        let engine = DEFAULT_ENGINE.lock().await;
+        let updated_plan = engine
+            .update_backup_plan(
+                plan_id.as_str(),
+                BackupPlanUpdateParams {
+                    title,
+                    description,
+                    policy: policy_value,
+                    priority: priority_value,
+                    policy_disabled,
+                    reserved_versions: reserved_versions_value,
+                },
+            )
+            .await
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+
+        let target_record = engine
+            .get_target_record(updated_plan.target.as_str())
+            .await
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+
+        let completed_backup_count = self
+            .task_db
+            .count_completed_backup_tasks(plan_id.as_str())
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+        let completed_backup_size = self
+            .task_db
+            .sum_completed_backup_items_size(plan_id.as_str())
+            .map_err(|e| RPCErrors::ReasonError(e.to_string()))?;
+
+        let mut plan_json = updated_plan.to_json_value();
+        plan_json["plan_id"] = json!(plan_id);
+        plan_json["target_type"] = json!(target_record.target_type);
+        plan_json["target_url"] = json!(target_record.url);
+        plan_json["target_name"] = json!(target_record.name);
+        plan_json["total_backup"] = json!(completed_backup_count);
+        plan_json["total_size"] = json!(completed_backup_size);
+
+        let result = json!({
+            "result": "success",
+            "plan": plan_json,
+        });
         Ok(RPCResponse::new(RPCResult::Success(result), req.id))
     }
 
@@ -1685,6 +1824,7 @@ impl InnerServiceHandler for WebControlServer {
             "create_backup_plan" => self.create_backup_plan(req).await,
             "list_backup_plan" => self.list_backup_plan(req).await,
             "get_backup_plan" => self.get_backup_plan(req).await,
+            "update_backup_plan" => self.update_backup_plan(req).await,
             "remove_backup_plan" => self.remove_backup_plan(req).await,
             "create_backup_target" => self.create_backup_target(req).await,
             "list_backup_target" => self.list_backup_target(req).await,
