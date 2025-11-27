@@ -255,7 +255,7 @@ impl BackupEngine {
             let mut running_count = 0usize;
             for task_arc in running_snapshots {
                 let task = task_arc.lock().await;
-                if matches!(task.state, TaskState::Running | TaskState::Pending) {
+                if matches!(task.state, TaskState::Running) {
                     running_count += 1;
                 }
             }
@@ -269,22 +269,21 @@ impl BackupEngine {
                                 break;
                             }
 
-                            let in_memory_state = {
+                            let current_state = {
                                 let maybe_task = {
                                     let all_tasks = self.all_tasks.lock().await;
                                     all_tasks.get(&task.taskid).cloned()
                                 };
                                 if let Some(task_arc) = maybe_task {
-                                    Some(task_arc.lock().await.state.clone())
+                                    task_arc.lock().await.state.clone()
                                 } else {
-                                    None
+                                    TaskState::Pending
                                 }
                             };
 
-                            let current_state = in_memory_state.unwrap_or(task.state.clone());
-                            if matches!(
+                            if !matches!(
                                 current_state,
-                                TaskState::Running | TaskState::Pending | TaskState::Pausing
+                                TaskState::Pending | TaskState::Failed(_)
                             ) {
                                 continue;
                             }
@@ -2047,7 +2046,7 @@ impl BackupEngine {
 
             if running_count >= concurrency_limit {
                 let mut real_backup_task = backup_task.lock().await;
-                if real_backup_task.state != TaskState::Pending {
+                if matches!(real_backup_task.state, TaskState::Paused | TaskState::Failed(_)) {
                     real_backup_task.state = TaskState::Pending;
                 }
                 drop(real_backup_task);
