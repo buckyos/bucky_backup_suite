@@ -1,13 +1,16 @@
 use chrono::Utc;
 use crossbeam::channel::{bounded, unbounded, Receiver, Sender};
 use log::{debug, error, warn};
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher};
+use notify::{
+    Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher,
+};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 type MonitorResult<T> = Result<T, FileSystemMonitorError>;
@@ -42,6 +45,15 @@ impl WatchEntry {
         self.last_update_time.store(timestamp, Ordering::SeqCst);
     }
 
+    fn try_set_initial_update_time(&self, timestamp: u64) {
+        let _ = self.last_update_time.compare_exchange(
+            0,
+            timestamp,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+    }
+
     fn last_update_time(&self) -> u64 {
         self.last_update_time.load(Ordering::SeqCst)
     }
@@ -68,11 +80,7 @@ impl FileSystemMonitor {
         )?;
 
         let (shutdown_tx, shutdown_rx) = bounded::<()>(1);
-        let event_thread = Self::spawn_event_thread(
-            Arc::clone(&watched),
-            event_rx,
-            shutdown_rx,
-        )?;
+        let event_thread = Self::spawn_event_thread(Arc::clone(&watched), event_rx, shutdown_rx)?;
 
         Ok(Self {
             watcher: Arc::new(Mutex::new(watcher)),
@@ -109,6 +117,17 @@ impl FileSystemMonitor {
         }
 
         let entry = Arc::new(WatchEntry::new(normalized.clone(), is_dir));
+        let entry_cloned = entry.clone();
+        tokio::spawn(async move {
+            if let Err(err) = Self::initialize_entry_timestamp(&entry_cloned) {
+                warn!(
+                    "failed to initialize last update time for {}: {}",
+                    entry_cloned.path.display(),
+                    err
+                );
+            }
+        });
+
         let mut watched = self.watched.lock().unwrap();
         watched.insert(normalized, entry);
         Ok(())
@@ -144,18 +163,16 @@ impl FileSystemMonitor {
     ) -> MonitorResult<JoinHandle<()>> {
         thread::Builder::new()
             .name("fs-monitor".to_owned())
-            .spawn(move || {
-                loop {
-                    crossbeam::select! {
-                        recv(shutdown_rx) -> _ => {
-                            debug!("file system monitor shutting down");
-                            break;
-                        }
-                        recv(event_rx) -> msg => {
-                            match msg {
-                                Ok(event_res) => Self::handle_event(&watched, event_res),
-                                Err(_) => break,
-                            }
+            .spawn(move || loop {
+                crossbeam::select! {
+                    recv(shutdown_rx) -> _ => {
+                        debug!("file system monitor shutting down");
+                        break;
+                    }
+                    recv(event_rx) -> msg => {
+                        match msg {
+                            Ok(event_res) => Self::handle_event(&watched, event_res),
+                            Err(_) => break,
                         }
                     }
                 }
@@ -208,6 +225,13 @@ impl FileSystemMonitor {
                 warn!("file system monitor event error: {}", err);
             }
         }
+    }
+
+    fn initialize_entry_timestamp(entry: &Arc<WatchEntry>) -> io::Result<()> {
+        if let Some(ts) = latest_modification_millis(&entry.path)? {
+            entry.try_set_initial_update_time(ts);
+        }
+        Ok(())
     }
 }
 
@@ -263,4 +287,54 @@ fn is_relevant_event(kind: &EventKind) -> bool {
             | EventKind::Any
             | EventKind::Other
     )
+}
+
+fn latest_modification_millis(path: &Path) -> io::Result<Option<u64>> {
+    let mut latest: Option<SystemTime> = None;
+    let mut stack = vec![path.to_path_buf()];
+
+    while let Some(current) = stack.pop() {
+        match std::fs::metadata(&current) {
+            Ok(metadata) => {
+                if let Ok(modified) = metadata.modified() {
+                    latest = match latest {
+                        Some(existing) if existing >= modified => Some(existing),
+                        _ => Some(modified),
+                    };
+                }
+                if metadata.is_dir() {
+                    match std::fs::read_dir(&current) {
+                        Ok(entries) => {
+                            for entry in entries {
+                                match entry {
+                                    Ok(entry) => stack.push(entry.path()),
+                                    Err(err) => warn!(
+                                        "failed to read directory entry in {}: {}",
+                                        current.display(),
+                                        err
+                                    ),
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            warn!("failed to read directory {}: {}", current.display(), err);
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                warn!("failed to read metadata for {}: {}", current.display(), err);
+            }
+        }
+    }
+
+    latest
+        .map(system_time_to_millis)
+        .transpose()
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
+}
+
+fn system_time_to_millis(time: SystemTime) -> Result<u64, std::time::SystemTimeError> {
+    time.duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
 }
