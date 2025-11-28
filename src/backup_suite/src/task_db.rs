@@ -748,6 +748,46 @@ impl BackupTaskDb {
         Ok(if total < 0 { 0 } else { total as u64 })
     }
 
+    pub fn get_last_backup_task_create_time(&self, plan_id: &str) -> Result<Option<u64>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT create_time FROM work_tasks \
+             WHERE owner_plan_id = ? AND task_type = 'BACKUP' \
+             ORDER BY create_time DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![plan_id])?;
+        if let Some(row) = rows.next()? {
+            let ts: i64 = row.get(0)?;
+            if ts <= 0 {
+                Ok(Some(0))
+            } else {
+                Ok(Some(ts as u64))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn get_last_completed_backup_time(&self, plan_id: &str) -> Result<Option<u64>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT update_time FROM work_tasks \
+             WHERE owner_plan_id = ? AND task_type = 'BACKUP' AND state = 'DONE' \
+             ORDER BY update_time DESC LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![plan_id])?;
+        if let Some(row) = rows.next()? {
+            let ts: i64 = row.get(0)?;
+            if ts <= 0 {
+                Ok(Some(0))
+            } else {
+                Ok(Some(ts as u64))
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn sum_completed_backup_items_size(&self, plan_id: &str) -> Result<u64> {
         let conn = Connection::open(&self.db_path)?;
         let mut stmt = conn.prepare(
@@ -1334,6 +1374,19 @@ impl BackupTaskDb {
             "SELECT COUNT(*) FROM work_tasks \
              WHERE owner_plan_id = ? \
              AND (task_type == 'BACKUP' OR (task_type == 'RESTORE' AND state <> 'REMOVE'))",
+            params![plan_id],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn plan_has_runable_backup_task(&self, plan_id: &str) -> Result<bool> {
+        let conn = Connection::open(&self.db_path)?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM work_tasks \
+             WHERE owner_plan_id = ? \
+             AND task_type = 'BACKUP' \
+             AND state NOT IN ('DONE', 'REMOVE')",
             params![plan_id],
             |row| row.get(0),
         )?;

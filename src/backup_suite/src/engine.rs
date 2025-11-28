@@ -42,7 +42,10 @@ use crate::*;
 
 use buckyos_backup_lib::BackupResult;
 use buckyos_backup_lib::BuckyBackupError;
-use chrono::Utc;
+use chrono::{
+    DateTime, Datelike, Duration as ChronoDuration, Local, LocalResult, NaiveDate, TimeZone,
+    Timelike, Utc, Weekday,
+};
 
 const SMALL_CHUNK_SIZE: u64 = 1024 * 1024; //1MB
 const LARGE_CHUNK_SIZE: u64 = 1024 * 1024 * 256; //256MB
@@ -118,6 +121,27 @@ pub struct BackupPlanUpdateParams {
     pub priority: Option<u64>,
     pub policy_disabled: Option<bool>,
     pub reserved_versions: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum PlanPolicyRule {
+    Period(PlanPolicyPeriod),
+    Event(PlanPolicyEvent),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PlanPolicyPeriod {
+    minutes: u64,
+    #[serde(default)]
+    week: Option<u32>,
+    #[serde(default)]
+    date: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PlanPolicyEvent {
+    update_delay: u64,
 }
 
 impl BackupEngine {
@@ -257,6 +281,11 @@ impl BackupEngine {
     pub async fn schedule(&self) {
         info!("backup engine scheduler started");
         loop {
+            let now_utc = Utc::now();
+            if let Err(err) = self.auto_start_due_plans(now_utc).await {
+                warn!("auto start plans failed: {}", err);
+            }
+
             let concurrency_limit = self.task_concurrency_limit();
 
             let running_snapshots: Vec<_> = {
@@ -333,6 +362,114 @@ impl BackupEngine {
         }
     }
 
+    async fn auto_start_due_plans(&self, now_utc: DateTime<Utc>) -> BackupResult<()> {
+        let plan_entries: Vec<(String, Arc<Mutex<BackupPlanConfig>>)> = {
+            let all_plans = self.all_plans.lock().await;
+            all_plans
+                .iter()
+                .map(|(plan_id, plan_arc)| (plan_id.clone(), plan_arc.clone()))
+                .collect()
+        };
+
+        for (plan_id, plan_arc) in plan_entries {
+            let plan_snapshot = plan_arc.lock().await.clone();
+            if plan_snapshot.policy_disabled {
+                continue;
+            }
+            if plan_snapshot
+                .policy
+                .as_array()
+                .map(|policies| policies.is_empty())
+                .unwrap_or(true)
+            {
+                continue;
+            }
+            if self.is_plan_have_runable_backup_task(&plan_id).await {
+                continue;
+            }
+
+            match self
+                .should_auto_start_plan(&plan_id, &plan_snapshot, now_utc)
+                .await
+            {
+                Ok(true) => match self.create_backup_task(&plan_id, None).await {
+                    Ok(task_id) => {
+                        info!("auto scheduled backup task {} for plan {}", task_id, plan_id);
+                        if let Err(err) = self.resume_work_task(&task_id).await {
+                            warn!(
+                                "failed to resume auto scheduled task {} for plan {}: {}",
+                                task_id, plan_id, err
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        warn!(
+                            "auto scheduling plan {} failed when creating task: {}",
+                            plan_id, err
+                        );
+                    }
+                },
+                Ok(false) => {}
+                Err(err) => {
+                    warn!(
+                        "auto scheduling check failed for plan {}: {}",
+                        plan_id, err
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn should_auto_start_plan(
+        &self,
+        plan_id: &str,
+        plan: &BackupPlanConfig,
+        now_utc: DateTime<Utc>,
+    ) -> BackupResult<bool> {
+        let policies = parse_plan_policies(plan_id, &plan.policy);
+        if policies.is_empty() {
+            return Ok(false);
+        }
+
+        let last_created = self
+            .task_db
+            .get_last_backup_task_create_time(plan_id)
+            .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
+        let last_completed = self
+            .task_db
+            .get_last_completed_backup_time(plan_id)
+            .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
+
+        let now_ms_raw = now_utc.timestamp_millis();
+        let now_ms = if now_ms_raw <= 0 {
+            0
+        } else {
+            now_ms_raw as u64
+        };
+        let now_local = now_utc.with_timezone(&Local);
+
+        if let Some(period_due) = latest_period_due_time(&policies, now_local) {
+            if period_due <= now_ms
+                && period_due > last_created.unwrap_or(0)
+                && period_due >= plan.create_time
+            {
+                return Ok(true);
+            }
+        }
+
+        for policy in policies.iter() {
+            if let PlanPolicyRule::Event(event) = policy {
+                if is_event_policy_due(last_completed, now_ms, event, plan.create_time) {
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
     pub async fn register_backup_chunk_source_provider(
         &self,
         desc: BackupSourceProviderDesc,
@@ -381,14 +518,30 @@ impl BackupEngine {
     }
 
     pub async fn is_plan_have_runable_backup_task(&self, plan_id: &str) -> bool {
-        let all_tasks = self.all_tasks.lock().await;
-        for (task_id, task) in all_tasks.iter() {
-            let real_task = task.lock().await;
-            if real_task.owner_plan_id == plan_id && real_task.task_type == TaskType::Backup && real_task.state != TaskState::Done {
-                return true;
+        {
+            let all_tasks = self.all_tasks.lock().await;
+            for task in all_tasks.values() {
+                let real_task = task.lock().await;
+                if real_task.owner_plan_id == plan_id
+                    && real_task.task_type == TaskType::Backup
+                    && real_task.state != TaskState::Done
+                    && real_task.state != TaskState::Remove
+                {
+                    return true;
+                }
             }
         }
-        false
+
+        match self.task_db.plan_has_runable_backup_task(plan_id) {
+            Ok(result) => result,
+            Err(err) => {
+                warn!(
+                    "failed to check runable backup tasks for plan {}: {}",
+                    plan_id, err
+                );
+                false
+            }
+        }
     }
 
     pub async fn is_restoring_task_dup(&self, plan_id: &str, check_point_id: &str, cfg: &RestoreConfig) -> bool {
@@ -2255,6 +2408,227 @@ impl BackupEngine {
     pub async fn cancel_backup_task(&self, taskid: &str) -> BackupResult<()> {
         unimplemented!()
     }
+}
+
+fn parse_plan_policies(plan_id: &str, policy_value: &Value) -> Vec<PlanPolicyRule> {
+    let raw = match policy_value {
+        Value::Array(_) => policy_value.clone(),
+        _ => {
+            debug!(
+                "plan {} has policy in unexpected format (expect array): {}",
+                plan_id, policy_value
+            );
+            return vec![];
+        }
+    };
+
+    let parsed: Vec<PlanPolicyRule> = match serde_json::from_value(raw) {
+        Ok(policies) => policies,
+        Err(err) => {
+            warn!(
+                "failed to parse policy for plan {}: {}",
+                plan_id, err
+            );
+            vec![]
+        }
+    };
+
+    parsed
+        .into_iter()
+        .filter(|rule| match rule {
+            PlanPolicyRule::Period(period) => {
+                if period.minutes >= 24 * 60 {
+                    debug!(
+                        "ignore invalid period policy (minutes >= 1440) for plan {}",
+                        plan_id
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+            PlanPolicyRule::Event(event) => {
+                if event.update_delay == 0 {
+                    debug!(
+                        "ignore event policy without positive update_delay for plan {}",
+                        plan_id
+                    );
+                    false
+                } else {
+                    true
+                }
+            }
+        })
+        .collect()
+}
+
+fn latest_period_due_time(
+    policies: &[PlanPolicyRule],
+    now_local: DateTime<Local>,
+) -> Option<u64> {
+    policies
+        .iter()
+        .filter_map(|policy| match policy {
+            PlanPolicyRule::Period(period) => latest_period_occurrence(period, now_local),
+            _ => None,
+        })
+        .max()
+}
+
+fn latest_period_occurrence(
+    period: &PlanPolicyPeriod,
+    now_local: DateTime<Local>,
+) -> Option<u64> {
+    if period.minutes >= 24 * 60 {
+        return None;
+    }
+    let hour = (period.minutes / 60) as u32;
+    let minute = (period.minutes % 60) as u32;
+
+    if let Some(date) = period.date {
+        return latest_monthly_occurrence(date, hour, minute, now_local);
+    }
+
+    if let Some(week) = period.week {
+        return latest_weekly_occurrence(week, hour, minute, now_local);
+    }
+
+    latest_daily_occurrence(hour, minute, now_local)
+}
+
+fn latest_daily_occurrence(
+    hour: u32,
+    minute: u32,
+    now_local: DateTime<Local>,
+) -> Option<u64> {
+    let today = now_local.date_naive();
+    let mut candidate = combine_date_time(today, hour, minute)?;
+    if candidate > now_local {
+        let yesterday = today - ChronoDuration::days(1);
+        candidate = combine_date_time(yesterday, hour, minute)?;
+    }
+    Some(datetime_to_timestamp(candidate))
+}
+
+fn latest_weekly_occurrence(
+    week: u32,
+    hour: u32,
+    minute: u32,
+    now_local: DateTime<Local>,
+) -> Option<u64> {
+    let target_weekday = policy_weekday(week)?;
+    let today = now_local.date_naive();
+    let current_weekday = now_local.weekday();
+    let mut diff = current_weekday.num_days_from_monday() as i32
+        - target_weekday.num_days_from_monday() as i32;
+    if diff < 0 {
+        diff += 7;
+    }
+    let mut target_date = today - ChronoDuration::days(diff as i64);
+    let mut candidate = combine_date_time(target_date, hour, minute)?;
+    if candidate > now_local {
+        target_date = target_date - ChronoDuration::days(7);
+        candidate = combine_date_time(target_date, hour, minute)?;
+    }
+    Some(datetime_to_timestamp(candidate))
+}
+
+fn latest_monthly_occurrence(
+    date: u32,
+    hour: u32,
+    minute: u32,
+    now_local: DateTime<Local>,
+) -> Option<u64> {
+    if date == 0 {
+        return None;
+    }
+    let today = now_local.date_naive();
+    let mut year = today.year();
+    let mut month = today.month();
+    let mut candidate = build_monthly_datetime(year, month, date, hour, minute)?;
+    if candidate > now_local {
+        if month == 1 {
+            year -= 1;
+            month = 12;
+        } else {
+            month -= 1;
+        }
+        candidate = build_monthly_datetime(year, month, date, hour, minute)?;
+    }
+    Some(datetime_to_timestamp(candidate))
+}
+
+fn build_monthly_datetime(
+    year: i32,
+    month: u32,
+    date: u32,
+    hour: u32,
+    minute: u32,
+) -> Option<DateTime<Local>> {
+    let clamped_day = clamp_day(year, month, date);
+    let naive = NaiveDate::from_ymd_opt(year, month, clamped_day)?;
+    combine_date_time(naive, hour, minute)
+}
+
+fn combine_date_time(date: NaiveDate, hour: u32, minute: u32) -> Option<DateTime<Local>> {
+    match Local.with_ymd_and_hms(date.year(), date.month(), date.day(), hour, minute, 0) {
+        LocalResult::Single(dt) => Some(dt),
+        _ => None,
+    }
+}
+
+fn clamp_day(year: i32, month: u32, desired_day: u32) -> u32 {
+    if desired_day == 0 {
+        return 1;
+    }
+    let last_day = last_day_of_month(year, month);
+    desired_day.min(last_day)
+}
+
+fn last_day_of_month(year: i32, month: u32) -> u32 {
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let first_next = NaiveDate::from_ymd_opt(next_year, next_month, 1)
+        .expect("invalid date while computing last day of month");
+    let last = first_next - ChronoDuration::days(1);
+    last.day()
+}
+
+fn datetime_to_timestamp(dt: DateTime<Local>) -> u64 {
+    let utc_time = dt.with_timezone(&Utc).timestamp_millis();
+    if utc_time <= 0 {
+        0
+    } else {
+        utc_time as u64
+    }
+}
+
+fn policy_weekday(week: u32) -> Option<Weekday> {
+    match week {
+        1 => Some(Weekday::Mon),
+        2 => Some(Weekday::Tue),
+        3 => Some(Weekday::Wed),
+        4 => Some(Weekday::Thu),
+        5 => Some(Weekday::Fri),
+        6 => Some(Weekday::Sat),
+        7 => Some(Weekday::Sun),
+        0 => Some(Weekday::Sun),
+        _ => None,
+    }
+}
+
+fn is_event_policy_due(
+    last_completed: Option<u64>,
+    now_ms: u64,
+    event: &PlanPolicyEvent,
+    baseline_ms: u64,
+) -> bool {
+    let delay_ms = event.update_delay.saturating_mul(1000);
+    let anchor = last_completed.unwrap_or(baseline_ms);
+    now_ms.saturating_sub(anchor) >= delay_ms
 }
 
 //impl kRPC for BackupEngine
