@@ -30,6 +30,7 @@ rusqlite = { version = "*", features = ["bundled"] }
 url = "2.5.0"
 dyn-clone = "*"
 crossbeam = "*"
+notify = "6"
 
 buckyos-backup-lib = { path = "../components/backup-lib" }
 ndn-lib = { git = "https://github.com/buckyos/cyfs-ndn",branch = "beta1" }
@@ -50,4 +51,3 @@ features = [
 
 [dev-dependencies]
 tempfile = "*"
-

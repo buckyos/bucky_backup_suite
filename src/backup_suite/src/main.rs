@@ -1,4 +1,5 @@
 mod engine;
+mod file_system_monitor;
 mod task_db;
 mod web_control;
 mod work_task;
