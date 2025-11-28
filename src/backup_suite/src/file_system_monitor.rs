@@ -284,8 +284,6 @@ fn is_relevant_event(kind: &EventKind) -> bool {
         EventKind::Create(_)
             | EventKind::Modify(_)
             | EventKind::Remove(_)
-            | EventKind::Any
-            | EventKind::Other
     )
 }
 
