@@ -16,8 +16,8 @@ use ndn_lib::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::fs;
 use std::collections::HashMap;
+use std::env;
 use std::future::Future;
 use std::io::Cursor;
 use std::io::SeekFrom;
@@ -26,6 +26,7 @@ use std::pin::Pin;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use tokio::fs;
 use tokio::io::AsyncRead;
 use tokio::io::BufWriter;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
@@ -36,6 +37,7 @@ use url::Url;
 
 use std::result::Result as StdResult;
 
+use crate::file_system_monitor::FileSystemMonitor;
 use crate::task_db::*;
 use crate::work_task::*;
 use crate::*;
@@ -111,6 +113,8 @@ pub struct BackupEngine {
     >,
     lock_create_task: Arc<Mutex<()>>,
     cleanup_removed_task_lock: Arc<Mutex<()>>,
+    fs_monitor: Option<Arc<FileSystemMonitor>>,
+    event_watch_registry: Arc<Mutex<EventWatchRegistry>>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -144,9 +148,61 @@ struct PlanPolicyEvent {
     update_delay: u64,
 }
 
+#[derive(Default)]
+struct EventWatchRegistry {
+    plan_paths: HashMap<String, PathBuf>,
+    path_ref_counts: HashMap<PathBuf, usize>,
+}
+
+impl EventWatchRegistry {
+    fn plan_path(&self, plan_id: &str) -> Option<PathBuf> {
+        self.plan_paths.get(plan_id).cloned()
+    }
+
+    fn has_path(&self, path: &PathBuf) -> bool {
+        self.path_ref_counts.contains_key(path)
+    }
+
+    fn detach_plan(&mut self, plan_id: &str) -> Option<(PathBuf, bool)> {
+        self.plan_paths.remove(plan_id).map(|path| {
+            let should_remove = match self.path_ref_counts.get_mut(&path) {
+                Some(count) => {
+                    if *count <= 1 {
+                        self.path_ref_counts.remove(&path);
+                        true
+                    } else {
+                        *count -= 1;
+                        false
+                    }
+                }
+                None => true,
+            };
+            (path, should_remove)
+        })
+    }
+
+    fn attach_plan(&mut self, plan_id: &str, path: PathBuf) -> bool {
+        let counter = self.path_ref_counts.entry(path.clone()).or_insert(0);
+        let need_add = *counter == 0;
+        *counter += 1;
+        self.plan_paths.insert(plan_id.to_string(), path);
+        need_add
+    }
+}
+
 impl BackupEngine {
     pub fn new() -> Self {
         let task_db_path = get_buckyos_service_data_dir("backup_suite").join("bucky_backup.db");
+        let fs_monitor = match FileSystemMonitor::new() {
+            Ok(monitor) => Some(Arc::new(monitor)),
+            Err(err) => {
+                warn!(
+                    "failed to initialize file system monitor, event policies disabled: {}",
+                    err
+                );
+                None
+            }
+        };
 
         let result = Self {
             all_plans: Arc::new(Mutex::new(HashMap::new())),
@@ -161,6 +217,8 @@ impl BackupEngine {
             all_chunk_target_providers: Arc::new(Mutex::new(HashMap::new())),
             lock_create_task: Arc::new(Mutex::new(())),
             cleanup_removed_task_lock: Arc::new(Mutex::new(())),
+            fs_monitor,
+            event_watch_registry: Arc::new(Mutex::new(EventWatchRegistry::default())),
         };
 
         return result;
@@ -239,11 +297,14 @@ impl BackupEngine {
         })?;
         for plan in plans {
             let plan_key = plan.get_plan_key();
-            self.all_plans
-                .lock()
-                .await
-                .insert(plan_key.clone(), Arc::new(Mutex::new(plan)));
+            {
+                let mut all_plans = self.all_plans.lock().await;
+                all_plans.insert(plan_key.clone(), Arc::new(Mutex::new(plan.clone())));
+            }
             info!("load backup plan: {}", plan_key);
+            let policies = parse_plan_policies(&plan_key, &plan.policy);
+            self.sync_event_watch_for_plan(&plan_key, &plan, &policies)
+                .await;
         }
 
         let scheduler_engine = self.clone();
@@ -459,15 +520,124 @@ impl BackupEngine {
             }
         }
 
+        let mut latest_update = None;
         for policy in policies.iter() {
             if let PlanPolicyRule::Event(event) = policy {
-                if is_event_policy_due(last_completed, now_ms, event, plan.create_time) {
+                if latest_update.is_none() {
+                    latest_update = self.latest_monitored_update(plan_id).await;
+                }
+                if is_event_policy_due(
+                    last_completed,
+                    now_ms,
+                    event,
+                    plan.create_time,
+                    latest_update,
+                ) {
                     return Ok(true);
                 }
             }
         }
 
         Ok(false)
+    }
+
+    async fn sync_event_watch_for_plan(
+        &self,
+        plan_id: &str,
+        plan: &BackupPlanConfig,
+        policies: &[PlanPolicyRule],
+    ) {
+        if !policies_contain_event(policies) {
+            self.clear_event_watch_for_plan(plan_id).await;
+            return;
+        }
+
+        let monitor = match &self.fs_monitor {
+            Some(monitor) => monitor.clone(),
+            None => return,
+        };
+
+        let Some(path) = resolve_plan_source_path(plan_id, plan) else {
+            self.clear_event_watch_for_plan(plan_id).await;
+            return;
+        };
+
+        let mut registry = self.event_watch_registry.lock().await;
+        if registry
+            .plan_path(plan_id)
+            .as_ref()
+            .map(|current| current == &path)
+            .unwrap_or(false)
+        {
+            return;
+        }
+
+        let need_add_new = !registry.has_path(&path);
+        if need_add_new {
+            if let Err(err) = monitor.add_path(&path) {
+                warn!(
+                    "plan {} failed to add filesystem watch for {}: {}",
+                    plan_id,
+                    path.display(),
+                    err
+                );
+                return;
+            }
+        }
+
+        let previous = registry.detach_plan(plan_id);
+        registry.attach_plan(plan_id, path.clone());
+        drop(registry);
+
+        if let Some((old_path, should_remove)) = previous {
+            if should_remove {
+                if let Err(err) = monitor.remove_path(&old_path) {
+                    warn!(
+                        "plan {} failed to remove filesystem watch for {}: {}",
+                        plan_id,
+                        old_path.display(),
+                        err
+                    );
+                }
+            }
+        }
+
+        debug!(
+            "plan {} event policy now watches {}",
+            plan_id,
+            path.display()
+        );
+    }
+
+    async fn clear_event_watch_for_plan(&self, plan_id: &str) {
+        let monitor = self.fs_monitor.as_ref().cloned();
+        let mut registry = self.event_watch_registry.lock().await;
+        let removed = registry.detach_plan(plan_id);
+        drop(registry);
+
+        if let Some((path, should_remove)) = removed {
+            if should_remove {
+                if let Some(monitor) = monitor {
+                    if let Err(err) = monitor.remove_path(&path) {
+                        warn!(
+                            "plan {} failed to remove filesystem watch for {}: {}",
+                            plan_id,
+                            path.display(),
+                            err
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    async fn latest_monitored_update(&self, plan_id: &str) -> Option<u64> {
+        let monitor = self.fs_monitor.as_ref()?.clone();
+        let path = {
+            let registry = self.event_watch_registry.lock().await;
+            registry.plan_path(plan_id)
+        }?;
+        monitor.get_last_update_time(&path)
     }
 
     pub async fn register_backup_chunk_source_provider(
@@ -578,7 +748,12 @@ impl BackupEngine {
 
         self.task_db.create_backup_plan(&plan_config)?;
         info!("create backup plan: [{}] {:?}", plan_key, plan_config);
+        let plan_snapshot = plan_config.clone();
         all_plans.insert(plan_key.clone(), Arc::new(Mutex::new(plan_config)));
+        drop(all_plans);
+        let policies = parse_plan_policies(&plan_key, &plan_snapshot.policy);
+        self.sync_event_watch_for_plan(&plan_key, &plan_snapshot, &policies)
+            .await;
         Ok(plan_key)
     }
 
@@ -630,8 +805,11 @@ impl BackupEngine {
 
         self.task_db.delete_backup_plan(plan_id)?;
 
-        let mut all_plans = self.all_plans.lock().await;
-        all_plans.remove(plan_id);
+        {
+            let mut all_plans = self.all_plans.lock().await;
+            all_plans.remove(plan_id);
+        }
+        self.clear_event_watch_for_plan(plan_id).await;
         Ok(())
     }
 
@@ -671,7 +849,13 @@ impl BackupEngine {
         plan.update_time = Utc::now().timestamp_millis() as u64;
 
         self.task_db.update_backup_plan(&plan)?;
-        Ok(plan.clone())
+        let plan_snapshot = plan.clone();
+        drop(plan);
+        drop(plan_arc);
+        let policies = parse_plan_policies(plan_id, &plan_snapshot.policy);
+        self.sync_event_watch_for_plan(plan_id, &plan_snapshot, &policies)
+            .await;
+        Ok(plan_snapshot)
     }
 
     pub async fn list_backup_plans(&self) -> BackupResult<Vec<String>> {
@@ -2462,6 +2646,12 @@ fn parse_plan_policies(plan_id: &str, policy_value: &Value) -> Vec<PlanPolicyRul
         .collect()
 }
 
+fn policies_contain_event(policies: &[PlanPolicyRule]) -> bool {
+    policies
+        .iter()
+        .any(|policy| matches!(policy, PlanPolicyRule::Event(_)))
+}
+
 fn latest_period_due_time(
     policies: &[PlanPolicyRule],
     now_local: DateTime<Local>,
@@ -2625,10 +2815,42 @@ fn is_event_policy_due(
     now_ms: u64,
     event: &PlanPolicyEvent,
     baseline_ms: u64,
+    source_update: Option<u64>,
 ) -> bool {
+    let latest_update = match source_update {
+        Some(ts) => ts,
+        None => return false,
+    };
+
+    let last_backup = last_completed.unwrap_or(baseline_ms);
+    if latest_update <= last_backup {
+        return false;
+    }
+
     let delay_ms = event.update_delay.saturating_mul(1000);
-    let anchor = last_completed.unwrap_or(baseline_ms);
-    now_ms.saturating_sub(anchor) >= delay_ms
+    now_ms >= latest_update.saturating_add(delay_ms)
+}
+
+fn resolve_plan_source_path(plan_id: &str, plan: &BackupPlanConfig) -> Option<PathBuf> {
+    let source_url = plan.source.get_source_url();
+    let raw_path = match translate_local_path_from_url(source_url) {
+        Ok(path) => path,
+        Err(err) => {
+            warn!(
+                "plan {} failed to translate source url {}: {}",
+                plan_id, source_url, err
+            );
+            return None;
+        }
+    };
+
+    let mut path = PathBuf::from(raw_path);
+    if !path.is_absolute() {
+        if let Ok(cwd) = env::current_dir() {
+            path = cwd.join(path);
+        }
+    }
+    Some(path)
 }
 
 //impl kRPC for BackupEngine
