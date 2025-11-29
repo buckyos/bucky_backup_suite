@@ -24,6 +24,7 @@ num_cpus = "*"
 time = { version = "^0.3", features = ["formatting"] }
 sysinfo = "*"
 anyhow = "*"
+walkdir = "2"
 base64 = "*"
 sha2 = "*"
 rusqlite = { version = "*", features = ["bundled"] }

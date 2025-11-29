@@ -281,9 +281,7 @@ fn matches_watch(watch_path: &Path, is_dir: bool, candidate: &Path) -> bool {
 fn is_relevant_event(kind: &EventKind) -> bool {
     matches!(
         kind,
-        EventKind::Create(_)
-            | EventKind::Modify(_)
-            | EventKind::Remove(_)
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
     )
 }
 

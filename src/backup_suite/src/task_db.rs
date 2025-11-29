@@ -161,6 +161,16 @@ pub struct BackupPlanConfig {
     pub update_time: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct TaskSnapshotRecord {
+    pub task_id: String,
+    pub plan_id: String,
+    pub source_url: String,
+    pub snapshot_path: String,
+    pub create_time: u64,
+    pub update_time: u64,
+}
+
 impl BackupPlanConfig {
     pub fn get_checkpiont_type(&self) -> String {
         return self.type_str.clone();
@@ -599,6 +609,18 @@ impl BackupTaskDb {
             "CREATE TABLE IF NOT EXISTS settings (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS task_snapshots (
+                task_id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                source_url TEXT NOT NULL,
+                snapshot_path TEXT NOT NULL,
+                create_time INTEGER NOT NULL,
+                update_time INTEGER NOT NULL
             )",
             [],
         )?;
@@ -1365,6 +1387,87 @@ impl BackupTaskDb {
         if rows_affected == 0 {
             return Err(BackupDbError::NotFound(plan_id.to_string()));
         }
+        Ok(())
+    }
+
+    pub fn upsert_task_snapshot(&self, snapshot: &TaskSnapshotRecord) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let create_time = if snapshot.create_time == 0 {
+            now
+        } else {
+            i64::try_from(snapshot.create_time).map_err(|_| {
+                BackupDbError::DataFormatError("snapshot.create_time exceeds i64 range".to_string())
+            })?
+        };
+        let update_time = if snapshot.update_time == 0 {
+            now
+        } else {
+            i64::try_from(snapshot.update_time).map_err(|_| {
+                BackupDbError::DataFormatError("snapshot.update_time exceeds i64 range".to_string())
+            })?
+        };
+
+        conn.execute(
+            "INSERT INTO task_snapshots (task_id, plan_id, source_url, snapshot_path, create_time, update_time)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(task_id) DO UPDATE SET
+                 plan_id = excluded.plan_id,
+                 source_url = excluded.source_url,
+                 snapshot_path = excluded.snapshot_path,
+                 update_time = excluded.update_time",
+            params![
+                snapshot.task_id,
+                snapshot.plan_id,
+                snapshot.source_url,
+                snapshot.snapshot_path,
+                create_time,
+                update_time,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn get_task_snapshot(&self, task_id: &str) -> Result<Option<TaskSnapshotRecord>> {
+        let conn = Connection::open(&self.db_path)?;
+        let mut stmt = conn.prepare(
+            "SELECT task_id, plan_id, source_url, snapshot_path, create_time, update_time
+             FROM task_snapshots WHERE task_id = ?",
+        )?;
+
+        let mut rows = stmt.query(params![task_id])?;
+        if let Some(row) = rows.next()? {
+            let create_time: i64 = row.get(4)?;
+            let update_time: i64 = row.get(5)?;
+            let record = TaskSnapshotRecord {
+                task_id: row.get(0)?,
+                plan_id: row.get(1)?,
+                source_url: row.get(2)?,
+                snapshot_path: row.get(3)?,
+                create_time: if create_time < 0 {
+                    0
+                } else {
+                    create_time as u64
+                },
+                update_time: if update_time < 0 {
+                    0
+                } else {
+                    update_time as u64
+                },
+            };
+            Ok(Some(record))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn delete_task_snapshot(&self, task_id: &str) -> Result<()> {
+        let conn = Connection::open(&self.db_path)?;
+        conn.execute(
+            "DELETE FROM task_snapshots WHERE task_id = ?",
+            params![task_id],
+        )?;
         Ok(())
     }
 
