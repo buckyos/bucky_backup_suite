@@ -1,7 +1,9 @@
+use async_trait::async_trait;
 use buckyos_backup_lib::{BackupResult, BuckyBackupError};
 use buckyos_kit::get_buckyos_service_data_dir;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
@@ -11,6 +13,59 @@ const META_SUFFIX: &str = "meta";
 pub struct SnapshotInfo {
     pub final_path: PathBuf,
     pub root_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct SnapshotCreateContext<'a> {
+    pub plan_id: &'a str,
+    pub task_id: &'a str,
+    pub source_path: &'a Path,
+    pub candidate_root: PathBuf,
+}
+
+#[derive(Debug)]
+struct BackendSnapshot {
+    info: SnapshotInfo,
+    metadata: Value,
+}
+
+#[async_trait]
+trait SnapshotBackend: Sync + Send {
+    fn id(&self) -> &'static str;
+    fn description(&self) -> &'static str;
+    fn platform(&self) -> SnapshotPlatform;
+
+    fn is_supported(&self) -> bool {
+        true
+    }
+
+    async fn create_snapshot(
+        &self,
+        ctx: SnapshotCreateContext<'_>,
+    ) -> BackupResult<BackendSnapshot>;
+
+    async fn cleanup_snapshot(&self, root: &Path, metadata: Value) -> BackupResult<()>;
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SnapshotPlatform {
+    Linux,
+    Windows,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedSnapshotMetadata {
+    backend: String,
+    data: Value,
+}
+
+impl PersistedSnapshotMetadata {
+    fn new(backend: &dyn SnapshotBackend, data: Value) -> Self {
+        Self {
+            backend: backend.id().to_string(),
+            data,
+        }
+    }
 }
 
 pub async fn create_snapshot(
@@ -26,20 +81,17 @@ pub async fn create_snapshot(
         sanitized_task,
         short_id()
     ));
-    #[cfg(target_os = "linux")]
-    {
-        return linux::create_snapshot(candidate_root, source_path).await;
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return windows::create_snapshot(candidate_root, source_path).await;
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    {
-        Err(BuckyBackupError::Failed(
-            "snapshot is only supported on Linux and Windows hosts".to_string(),
-        ))
-    }
+    let backend = select_backend()?;
+    let ctx = SnapshotCreateContext {
+        plan_id,
+        task_id,
+        source_path,
+        candidate_root,
+    };
+    let backend_result = backend.create_snapshot(ctx).await?;
+    let persisted = PersistedSnapshotMetadata::new(backend, backend_result.metadata);
+    write_metadata(&backend_result.info.root_path, &persisted).await?;
+    Ok(backend_result.info)
 }
 
 pub async fn remove_snapshot_dir(snapshot_path: &Path) -> BackupResult<()> {
@@ -60,14 +112,15 @@ pub async fn remove_snapshot_dir(snapshot_path: &Path) -> BackupResult<()> {
         }
     };
 
-    match metadata {
-        #[cfg(target_os = "linux")]
-        SnapshotMetadata::Lvm(detail) => linux::cleanup_snapshot(&root_path, detail).await?,
-        #[cfg(target_os = "windows")]
-        SnapshotMetadata::Vss(detail) => windows::cleanup_snapshot(&root_path, detail).await?,
-        #[allow(unreachable_patterns)]
-        _ => {}
-    }
+    let backend = backend_by_id(&metadata.backend).ok_or_else(|| {
+        BuckyBackupError::Failed(format!(
+            "snapshot backend {} unavailable on current platform",
+            metadata.backend
+        ))
+    })?;
+    backend
+        .cleanup_snapshot(&root_path, metadata.data.clone())
+        .await?;
 
     if let Err(err) = remove_metadata_file(&root_path).await {
         warn!(
@@ -130,13 +183,13 @@ async fn remove_metadata_file(root: &Path) -> std::io::Result<()> {
     }
 }
 
-async fn locate_snapshot_root(path: &Path) -> Option<(PathBuf, SnapshotMetadata)> {
+async fn locate_snapshot_root(path: &Path) -> Option<(PathBuf, PersistedSnapshotMetadata)> {
     let mut current = path.to_path_buf();
     loop {
         let meta_path = metadata_path_for_root(&current);
         match fs::read_to_string(&meta_path).await {
             Ok(content) => {
-                match serde_json::from_str::<SnapshotMetadata>(&content) {
+                match serde_json::from_str::<PersistedSnapshotMetadata>(&content) {
                     Ok(metadata) => return Some((current.clone(), metadata)),
                     Err(err) => {
                         warn!(
@@ -195,28 +248,43 @@ async fn reset_mount_dir(path: &Path) -> BackupResult<()> {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "backend", rename_all = "snake_case")]
-enum SnapshotMetadata {
+fn select_backend() -> BackupResult<&'static dyn SnapshotBackend> {
+    for backend in available_backends().iter().copied() {
+        if backend.is_supported() {
+            return Ok(backend);
+        }
+    }
+    Err(BuckyBackupError::Failed(
+        "no snapshot backend available on this platform".to_string(),
+    ))
+}
+
+fn backend_by_id(id: &str) -> Option<&'static dyn SnapshotBackend> {
+    available_backends()
+        .iter()
+        .copied()
+        .find(|backend| backend.id() == id && backend.is_supported())
+}
+
+fn available_backends() -> &'static [&'static dyn SnapshotBackend] {
     #[cfg(target_os = "linux")]
-    Lvm(LvmSnapshotMetadata),
+    {
+        static BACKENDS: [&'static dyn SnapshotBackend; 1] = [&LINUX_LVM_BACKEND];
+        &BACKENDS
+    }
     #[cfg(target_os = "windows")]
-    Vss(VssSnapshotMetadata),
+    {
+        static BACKENDS: [&'static dyn SnapshotBackend; 1] = [&WINDOWS_VSS_BACKEND];
+        &BACKENDS
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    {
+        static BACKENDS: [&'static dyn SnapshotBackend; 0] = [];
+        &BACKENDS
+    }
 }
 
-#[cfg(target_os = "linux")]
-#[derive(Debug, Serialize, Deserialize)]
-struct LvmSnapshotMetadata {
-    snapshot_lv_path: String,
-}
-
-#[cfg(target_os = "windows")]
-#[derive(Debug, Serialize, Deserialize)]
-struct VssSnapshotMetadata {
-    shadow_id: String,
-}
-
-async fn write_metadata(root: &Path, metadata: &SnapshotMetadata) -> BackupResult<()> {
+async fn write_metadata(root: &Path, metadata: &PersistedSnapshotMetadata) -> BackupResult<()> {
     let meta_path = metadata_path_for_root(root);
     let content = serde_json::to_string_pretty(metadata)
         .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
@@ -237,6 +305,13 @@ mod linux {
     use std::path::Path;
     use tokio::process::Command;
 
+    pub(super) struct LinuxLvmBackend;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct LvmSnapshotMetadata {
+        snapshot_lv_path: String,
+    }
+
     #[derive(Debug)]
     struct MountInfo {
         source: String,
@@ -252,68 +327,89 @@ mod linux {
 
     const SNAPSHOT_EXTENTS: &str = "20%ORIGIN";
 
-    pub async fn create_snapshot(
-        mount_root: PathBuf,
-        source_path: &Path,
-    ) -> BackupResult<SnapshotInfo> {
-        let canonical = tokio::fs::canonicalize(source_path)
-            .await
-            .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
-        let mount_info = find_mount_point(&canonical).await?;
-        let lvm_info = describe_lv(&mount_info.source).await?;
-
-        ensure_clean_dir(&mount_root).await?;
-        let relative = canonical
-            .strip_prefix(&mount_info.target)
-            .unwrap_or(Path::new(""));
-
-        let snapshot_name = format!("bksnap_{}", short_id());
-        let snapshot_lv_path = format!("/dev/{}/{}", lvm_info.vg_name, snapshot_name);
-
-        create_lvm_snapshot(&lvm_info.lv_path, &snapshot_name).await?;
-        if let Err(err) = mount_snapshot(&snapshot_lv_path, &mount_root).await {
-            let _ = remove_snapshot_lv(&snapshot_lv_path).await;
-            let _ = reset_mount_dir(&mount_root).await;
-            return Err(err);
+    #[async_trait]
+    impl SnapshotBackend for LinuxLvmBackend {
+        fn id(&self) -> &'static str {
+            "linux:lvm"
         }
 
-        let final_path = if relative.as_os_str().is_empty() {
-            mount_root.clone()
-        } else {
-            mount_root.join(relative)
-        };
+        fn description(&self) -> &'static str {
+            "Linux LVM snapshots"
+        }
 
-        let metadata =
-            SnapshotMetadata::Lvm(LvmSnapshotMetadata { snapshot_lv_path: snapshot_lv_path.clone() });
-        write_metadata(&mount_root, &metadata).await?;
-        info!(
-            "created LVM snapshot {} for {} mounted at {}",
-            snapshot_lv_path,
-            source_path.display(),
-            mount_root.display()
-        );
-        Ok(SnapshotInfo {
-            final_path,
-            root_path: mount_root,
-        })
-    }
+        fn platform(&self) -> SnapshotPlatform {
+            SnapshotPlatform::Linux
+        }
 
-    pub async fn cleanup_snapshot(
-        root: &Path,
-        metadata: LvmSnapshotMetadata,
-    ) -> BackupResult<()> {
-        if root.exists() {
-            if let Err(err) = run_command("umount", &[root.to_string_lossy().as_ref()]).await {
-                warn!("failed to unmount snapshot at {}: {}", root.display(), err);
+        async fn create_snapshot(
+            &self,
+            ctx: SnapshotCreateContext<'_>,
+        ) -> BackupResult<BackendSnapshot> {
+            let mount_root = ctx.candidate_root;
+            let canonical = tokio::fs::canonicalize(ctx.source_path)
+                .await
+                .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
+            let mount_info = find_mount_point(&canonical).await?;
+            let lvm_info = describe_lv(&mount_info.source).await?;
+
+            ensure_clean_dir(&mount_root).await?;
+            let relative = canonical
+                .strip_prefix(&mount_info.target)
+                .unwrap_or(Path::new(""));
+
+            let snapshot_name = format!("bksnap_{}", short_id());
+            let snapshot_lv_path = format!("/dev/{}/{}", lvm_info.vg_name, snapshot_name);
+
+            create_lvm_snapshot(&lvm_info.lv_path, &snapshot_name).await?;
+            if let Err(err) = mount_snapshot(&snapshot_lv_path, &mount_root).await {
+                let _ = remove_snapshot_lv(&snapshot_lv_path).await;
+                let _ = reset_mount_dir(&mount_root).await;
+                return Err(err);
             }
-        }
-        if let Err(err) = remove_snapshot_lv(&metadata.snapshot_lv_path).await {
-            warn!(
-                "failed to remove snapshot logical volume {}: {}",
-                metadata.snapshot_lv_path, err
+
+            let final_path = if relative.as_os_str().is_empty() {
+                mount_root.clone()
+            } else {
+                mount_root.join(relative)
+            };
+
+            let metadata = serde_json::to_value(LvmSnapshotMetadata {
+                snapshot_lv_path: snapshot_lv_path.clone(),
+            })
+            .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
+
+            info!(
+                "created LVM snapshot {} for {} mounted at {}",
+                snapshot_lv_path,
+                ctx.source_path.display(),
+                mount_root.display()
             );
+
+            Ok(BackendSnapshot {
+                info: SnapshotInfo {
+                    final_path,
+                    root_path: mount_root,
+                },
+                metadata,
+            })
         }
-        reset_mount_dir(root).await
+
+        async fn cleanup_snapshot(&self, root: &Path, metadata: Value) -> BackupResult<()> {
+            let detail: LvmSnapshotMetadata = serde_json::from_value(metadata)
+                .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
+            if root.exists() {
+                if let Err(err) = run_command("umount", &[root.to_string_lossy().as_ref()]).await {
+                    warn!("failed to unmount snapshot at {}: {}", root.display(), err);
+                }
+            }
+            if let Err(err) = remove_snapshot_lv(&detail.snapshot_lv_path).await {
+                warn!(
+                    "failed to remove snapshot logical volume {}: {}",
+                    detail.snapshot_lv_path, err
+                );
+            }
+            reset_mount_dir(root).await
+        }
     }
 
     async fn ensure_clean_dir(path: &Path) -> BackupResult<()> {
@@ -453,64 +549,94 @@ mod windows {
     use std::path::{Component, Path, Prefix};
     use tokio::process::Command;
 
+    pub(super) struct WindowsVssBackend;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct VssSnapshotMetadata {
+        shadow_id: String,
+    }
+
     #[derive(Debug)]
     struct ShadowInfo {
         shadow_id: String,
         shadow_volume_path: PathBuf,
     }
 
-    pub async fn create_snapshot(
-        mount_root: PathBuf,
-        source_path: &Path,
-    ) -> BackupResult<SnapshotInfo> {
-        let absolute = absolute_path(source_path)?;
-        let normalized = normalize_drive_path(&absolute);
-        let (volume_label, volume_root) = volume_from_path(&normalized)?;
-        ensure_clean_dir(&mount_root).await?;
-
-        let shadow = create_shadow_copy(&volume_label).await?;
-        let target = ensure_trailing_separator(&shadow.shadow_volume_path);
-        if let Err(err) = symlink_dir(&target, &mount_root) {
-            let _ = delete_shadow_copy(&shadow.shadow_id).await;
-            return Err(BuckyBackupError::Failed(format!(
-                "failed to link VSS snapshot to {}: {}",
-                mount_root.display(),
-                err
-            )));
+    #[async_trait]
+    impl SnapshotBackend for WindowsVssBackend {
+        fn id(&self) -> &'static str {
+            "windows:vss"
         }
-        let relative = normalized
-            .strip_prefix(&volume_root)
+
+        fn description(&self) -> &'static str {
+            "Windows VSS snapshots"
+        }
+
+        fn platform(&self) -> SnapshotPlatform {
+            SnapshotPlatform::Windows
+        }
+
+        async fn create_snapshot(
+            &self,
+            ctx: SnapshotCreateContext<'_>,
+        ) -> BackupResult<BackendSnapshot> {
+            let mount_root = ctx.candidate_root;
+            let absolute = absolute_path(ctx.source_path)?;
+            let normalized = normalize_drive_path(&absolute);
+            let (volume_label, volume_root) = volume_from_path(&normalized)?;
+            ensure_clean_dir(&mount_root).await?;
+
+            let shadow = create_shadow_copy(&volume_label).await?;
+            let target = ensure_trailing_separator(&shadow.shadow_volume_path);
+            if let Err(err) = symlink_dir(&target, &mount_root) {
+                let _ = delete_shadow_copy(&shadow.shadow_id).await;
+                return Err(BuckyBackupError::Failed(format!(
+                    "failed to link VSS snapshot to {}: {}",
+                    mount_root.display(),
+                    err
+                )));
+            }
+            let relative = normalized
+                .strip_prefix(&volume_root)
+                .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
+            let final_path = if relative.as_os_str().is_empty() {
+                mount_root.clone()
+            } else {
+                mount_root.join(relative)
+            };
+
+            let metadata = serde_json::to_value(VssSnapshotMetadata {
+                shadow_id: shadow.shadow_id.clone(),
+            })
             .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
-        let final_path = if relative.as_os_str().is_empty() {
-            mount_root.clone()
-        } else {
-            mount_root.join(relative)
-        };
 
-        let metadata = SnapshotMetadata::Vss(VssSnapshotMetadata {
-            shadow_id: shadow.shadow_id.clone(),
-        });
-        write_metadata(&mount_root, &metadata).await?;
-        info!(
-            "created VSS snapshot {} mounted at {}",
-            shadow.shadow_id,
-            mount_root.display()
-        );
-        Ok(SnapshotInfo {
-            final_path,
-            root_path: mount_root,
-        })
-    }
-
-    pub async fn cleanup_snapshot(root: &Path, metadata: VssSnapshotMetadata) -> BackupResult<()> {
-        if let Err(err) = delete_shadow_copy(&metadata.shadow_id).await {
-            warn!(
-                "failed to delete VSS snapshot {}: {}",
-                metadata.shadow_id, err
+            info!(
+                "created VSS snapshot {} mounted at {}",
+                shadow.shadow_id,
+                mount_root.display()
             );
+
+            Ok(BackendSnapshot {
+                info: SnapshotInfo {
+                    final_path,
+                    root_path: mount_root,
+                },
+                metadata,
+            })
         }
 
-        reset_mount_dir(root).await
+        async fn cleanup_snapshot(&self, root: &Path, metadata: Value) -> BackupResult<()> {
+            let detail: VssSnapshotMetadata = serde_json::from_value(metadata)
+                .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
+            if let Err(err) = delete_shadow_copy(&detail.shadow_id).await {
+                warn!(
+                    "failed to delete VSS snapshot {}: {}",
+                    detail.shadow_id, err
+                );
+            }
+
+            reset_mount_dir(root).await
+        }
     }
 
     fn absolute_path(path: &Path) -> BackupResult<PathBuf> {
@@ -642,3 +768,9 @@ mod windows {
         PathBuf::from(text)
     }
 }
+
+#[cfg(target_os = "linux")]
+static LINUX_LVM_BACKEND: linux::LinuxLvmBackend = linux::LinuxLvmBackend;
+
+#[cfg(target_os = "windows")]
+static WINDOWS_VSS_BACKEND: windows::WindowsVssBackend = windows::WindowsVssBackend;
