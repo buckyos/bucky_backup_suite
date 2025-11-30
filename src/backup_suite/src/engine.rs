@@ -38,7 +38,7 @@ use url::Url;
 use std::result::Result as StdResult;
 
 use crate::file_system_monitor::FileSystemMonitor;
-use crate::snapshot::{create_directory_snapshot, path_to_file_url, remove_snapshot_dir};
+use crate::snapshot::{self, remove_snapshot_dir};
 use crate::task_db::*;
 use crate::work_task::*;
 use crate::*;
@@ -2703,41 +2703,51 @@ impl BackupEngine {
             ))
         })?;
 
-        let snapshot_root = get_buckyos_service_data_dir("backup_suite").join("snapshots");
-        fs::create_dir_all(&snapshot_root).await.map_err(|err| {
-            BuckyBackupError::Failed(format!(
-                "failed to prepare snapshot root {}: {}",
-                snapshot_root.display(),
-                err
-            ))
-        })?;
-
         if let Some(snapshot) = self
             .task_db
             .get_task_snapshot(task_id)
             .map_err(|e| BuckyBackupError::Failed(e.to_string()))?
         {
             let existing_path = PathBuf::from(&snapshot.snapshot_path);
-            return Ok(Some(path_to_file_url(&existing_path)?));
+            let file_url = Url::from_file_path(&existing_path).map_err(|_| {
+                BuckyBackupError::Failed(format!(
+                    "failed to convert snapshot path {} to url",
+                    existing_path.display()
+                ))
+            })?;
+            return Ok(Some(file_url.to_string()));
         }
 
-        let snapshot_path = snapshot_root.join(task_id);
-        create_directory_snapshot(&source_path, &snapshot_path).await?;
-        let now = chrono::Utc::now().timestamp_millis();
-        let snapshot_record = TaskSnapshotRecord {
+        let snapshot_info = snapshot::create_snapshot(plan_id, task_id, &source_path).await?;
+        let file_url = Url::from_file_path(&snapshot_info.final_path).map_err(|_| {
+            BuckyBackupError::Failed(format!(
+                "failed to convert snapshot path {} to url",
+                snapshot_info.final_path.display()
+            ))
+        })?;
+
+        let record = TaskSnapshotRecord {
             task_id: task_id.to_string(),
             plan_id: plan_id.to_string(),
             source_url: plan.source.get_source_url().to_string(),
-            snapshot_path: snapshot_path.to_string_lossy().to_string(),
-            create_time: if now < 0 { 0 } else { now as u64 },
-            update_time: if now < 0 { 0 } else { now as u64 },
+            snapshot_path: snapshot_info
+                .final_path
+                .to_string_lossy()
+                .to_string(),
+            create_time: 0,
+            update_time: 0,
         };
-        self.task_db
-            .upsert_task_snapshot(&snapshot_record)
-            .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
 
-        let snapshot_url = path_to_file_url(&snapshot_path)?;
-        Ok(Some(snapshot_url))
+        if let Err(err) = self.task_db.upsert_task_snapshot(&record) {
+            warn!(
+                "failed to persist snapshot metadata for task {}, cleaning up snapshot: {}",
+                task_id, err
+            );
+            let _ = snapshot::remove_snapshot_dir(&snapshot_info.final_path).await;
+            return Err(BuckyBackupError::Failed(err.to_string()));
+        }
+
+        Ok(Some(file_url.to_string()))
     }
 
     async fn remove_task_from_memory(&self, taskid: &str, checkpoint_id: &str) {
