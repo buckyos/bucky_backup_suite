@@ -1336,8 +1336,22 @@ impl BackupEngine {
                     let checkpoint = engine
                         .task_db
                         .load_checkpoint_by_id(checkpoint_id.as_str())?;
+                    let checkpoint_items = engine
+                        .task_db
+                        .load_backup_chunk_items_by_checkpoint(
+                            checkpoint_id.as_str(),
+                            None,
+                            None,
+                            None,
+                        )?;
+                    let mut chunk_list = SimpleChunkList::new();
+                    for item in checkpoint_items.iter() {
+                        chunk_list
+                            .append_chunk(item.chunk_id.clone())
+                            .map_err(|e| BuckyBackupError::Failed(e.to_string()))?;
+                    }
                     //let target check there is enough free space to allocate checkpoint
-                    let alloc_result = target.alloc_checkpoint(&checkpoint).await;
+                    let alloc_result = target.alloc_checkpoint(checkpoint_id.as_str(), &checkpoint, chunk_list).await;
                     if alloc_result.is_err() {
                         let err_string = alloc_result.err().unwrap().to_string();
                         warn!(

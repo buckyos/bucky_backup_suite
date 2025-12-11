@@ -1,6 +1,8 @@
 use crate::{BackupCheckpoint, BackupChunkItem, BackupResult, RemoteBackupCheckPointItemStatus};
 use async_trait::async_trait;
-use ndn_lib::{ChunkId, ChunkReadSeek, ChunkReader, ChunkWriter, NdnProgressCallback, ObjId};
+use ndn_lib::{
+    ChunkId, ChunkReadSeek, ChunkReader, ChunkWriter, NdnProgressCallback, ObjId, SimpleChunkList,
+};
 use rusqlite::types::{FromSql, ToSql, ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -94,7 +96,12 @@ pub trait IBackupChunkTargetProvider {
 
     //下面的接口将要成为通用的http based的chunk操作接口
     //async fn get_support_chunkid_types(&self)->Result<Vec<String>>;
-    async fn alloc_checkpoint(&self, checkpoint: &BackupCheckpoint) -> BackupResult<()>;
+    async fn alloc_checkpoint(
+        &self,
+        checkpoint_id: &str,
+        checkpoint: &BackupCheckpoint,
+        chunk_list: SimpleChunkList,
+    ) -> BackupResult<()>;
     async fn add_backup_item(
         &self,
         checkpoint_id: &str,

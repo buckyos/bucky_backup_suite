@@ -455,10 +455,33 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         Ok(())
     }
 
-    async fn alloc_checkpoint(&self, checkpoint: &BackupCheckpoint) -> BackupResult<()> {
+    async fn alloc_checkpoint(
+        &self,
+        checkpoint_id: &str,
+        checkpoint: &BackupCheckpoint,
+        chunk_list: SimpleChunkList,
+    ) -> BackupResult<()> {
+        let (chunk_list_id, chunk_list_str) = chunk_list.gen_obj_id();
+        store_content_to_ndn_mgr(
+            Some(self.named_mgr_id.as_str()),
+            ContentToStore::Object(chunk_list_id.clone(), chunk_list_str),
+            StoreMode::StoreInNamedMgr,
+        )
+        .await
+        .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
+
+        NamedDataMgr::set_file(
+            Some(self.named_mgr_id.as_str()),
+            format!("/{}", checkpoint_id).as_str(),
+            &chunk_list_id,
+            "",
+            "",
+        )
+        .await
+        .map_err(|err| BuckyBackupError::Failed(err.to_string()))
         //check free space
         //if free space is not enough, return error
-        return Ok(());
+        // return Ok(());
     }
 
     async fn add_backup_item(
@@ -532,19 +555,7 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
             .map_err(|e| {
                 warn!("complete_chunk_writer error:{}", e.to_string());
                 BuckyBackupError::TryLater(e.to_string())
-            })?;
-        NamedDataMgr::set_file(
-            Some(self.named_mgr_id.as_str()),
-            format!("/{}/{}", checkpoint_id, chunk_id.to_base32()).as_str(),
-            &chunk_id.to_obj_id(),
-            "",
-            "",
-        )
-        .await
-        .map_err(|e| {
-            warn!("complete_chunk_writer failed when set file: {:?}", e);
-            BuckyBackupError::TryLater(e.to_string())
-        })
+            })
     }
 
     async fn open_chunk_reader_for_restore(
