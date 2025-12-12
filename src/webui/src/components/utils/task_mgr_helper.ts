@@ -112,8 +112,9 @@ export class TaskMgrHelper {
                 now.getHours() * 3600 +
                 now.getMinutes() * 60 +
                 now.getSeconds();
+            const weekIdx = period.week - 1;
             const secondsUntilNext =
-                ((period.week + 7) * 86400 +
+                ((weekIdx + 7) * 86400 +
                     period.minutes * 60 -
                     (nowWeek % (7 * 86400))) %
                     (7 * 86400) || 7 * 86400; // 计算到下一个指定星期几的秒数
@@ -172,7 +173,7 @@ export class TaskMgrHelper {
                     ];
                     result.push(
                         `每周: ${
-                            weekDays[p.week]
+                            weekDays[p.week - 1]
                         } ${TaskMgrHelper.formatMinutesToHHMM(p.minutes)}`
                     );
                 } else if ("date" in p) {

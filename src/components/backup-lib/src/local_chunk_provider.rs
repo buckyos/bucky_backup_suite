@@ -468,7 +468,10 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
             StoreMode::StoreInNamedMgr,
         )
         .await
-        .map_err(|err| BuckyBackupError::Failed(err.to_string()))?;
+        .map_err(|err| {
+            error!("alloc checkpoint failed for store: {:?}", err);
+            BuckyBackupError::Failed(err.to_string())
+        })?;
 
         NamedDataMgr::set_file(
             Some(self.named_mgr_id.as_str()),
@@ -478,7 +481,10 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
             "",
         )
         .await
-        .map_err(|err| BuckyBackupError::Failed(err.to_string()))
+        .map_err(|err| {
+            error!("alloc checkpoint failed for set-file: {:?}", err);
+            BuckyBackupError::Failed(err.to_string())
+        })
         //check free space
         //if free space is not enough, return error
         // return Ok(());
@@ -497,11 +503,31 @@ impl IBackupChunkTargetProvider for LocalChunkTargetProvider {
         checkpoint_id: &str,
     ) -> BackupResult<(BackupCheckpoint, RemoteBackupCheckPointItemStatus)> {
         //return Ok((BackupCheckpoint::new(), RemoteBackupCheckPointItemStatus::NotSupport));
+        let is_alloc = NamedDataMgr::get_obj_id_by_path(
+            Some(self.named_mgr_id.as_str()),
+            format!("/{}", checkpoint_id).as_str(),
+        )
+        .await
+        .is_ok();
+        // .map_or_else(
+        //     |err| {
+        //         if let NdnError::NotFound(_) = &err {
+        //             return Ok(CheckPointState::New);
+        //         }
+        //         Err(BuckyBackupError::Failed(err.to_string()))
+        //     },
+        //     |_| Ok(CheckPointState::Working),
+        // )?;
+
         let checkpoint = BackupCheckpoint {
             checkpoint_type: CHECKPOINT_TYPE_CHUNK.to_string(),
             checkpoint_name: checkpoint_id.to_string(),
             prev_checkpoint_id: None,
-            state: CheckPointState::Working,
+            state: if is_alloc {
+                CheckPointState::Working
+            } else {
+                CheckPointState::New
+            },
             extra_info: "".to_string(),
             create_time: 0,
             last_update_time: 0,

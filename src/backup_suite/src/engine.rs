@@ -504,8 +504,11 @@ impl BackupEngine {
             now_ms_raw as u64
         };
         let now_local = now_utc.with_timezone(&Local);
+        let period_due = latest_period_due_time(&policies, now_local);
 
-        if let Some(period_due) = latest_period_due_time(&policies, now_local) {
+        debug!("check auto run, plan-id: {}, now: {}, period_due: {:?}, now-ms: {}, last-created-ms: {:?}, plan-create-ms: {}", plan_id, now_local, period_due, now_ms, last_created, plan.create_time);
+
+        if let Some(period_due) = period_due {
             if period_due <= now_ms
                 && period_due > last_created.unwrap_or(0)
                 && period_due >= plan.create_time

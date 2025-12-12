@@ -213,13 +213,6 @@ export function CreatePlanWizard({
         setErrors(newErrors);
     };
 
-    const handleSelectCurrentDirectory = () => {
-        if (!currentDirectoryPath) {
-            return;
-        }
-        updatePlanData({ directories: [currentDirectoryPath] });
-    };
-
     useEffect(() => {
         let updated = false;
         setPlanData((prev) => {

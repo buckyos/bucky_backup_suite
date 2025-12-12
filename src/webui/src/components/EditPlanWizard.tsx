@@ -19,12 +19,13 @@ import { toast } from "sonner";
 import { ArrowLeft, ChevronLeft, ChevronRight, Check } from "lucide-react";
 import {
     BackupPlanInfo,
+    BackupPlanType,
     BackupTargetInfo,
     DirectoryPurpose,
     PlanPolicy,
     SourceType,
 } from "./utils/task_mgr";
-import { TaskMgrHelper,taskManager } from "./utils/task_mgr_helper";
+import { TaskMgrHelper, taskManager } from "./utils/task_mgr_helper";
 
 interface EditPlanWizardProps {
     onBack: () => void;
@@ -125,14 +126,14 @@ function planFromData(
 ): BackupPlanInfo {
     console.log("Converting PlanData to BackupPlanInfo:", plan);
     let policy: PlanPolicy[] = [];
-    if (plan.scheduleTime) {
+    if (plan.triggerTypes.find((t) => t === "scheduled") && plan.scheduleTime) {
         const minutes = TaskMgrHelper.minutesFromHHMM(plan.scheduleTime!);
-        if (plan.scheduleDay) {
+        if (plan.scheduleType === "weekly") {
             policy.push({
                 minutes: minutes!,
                 week: parseInt(plan.scheduleDay!),
             });
-        } else if (plan.scheduleDate) {
+        } else if (plan.scheduleType === "monthly") {
             policy.push({
                 minutes: minutes!,
                 date: parseInt(plan.scheduleDate!),
@@ -141,7 +142,7 @@ function planFromData(
             policy.push({ minutes: minutes! });
         }
     }
-    if (plan.eventDelay) {
+    if (plan.triggerTypes.find((t) => t === "event") && plan.eventDelay) {
         policy.push({
             update_delay: parseInt(plan.eventDelay!),
         });
@@ -151,7 +152,7 @@ function planFromData(
         plan_id: plan.id,
         title: plan.name,
         description: plan.description,
-        type_str: "",
+        type_str: BackupPlanType.C2C,
         last_checkpoint_index: plan.last_checkpoint_index,
         source_type: SourceType.DIRECTORY,
         source: plan.directories[0],
