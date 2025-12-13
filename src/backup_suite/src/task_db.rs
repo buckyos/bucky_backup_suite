@@ -254,12 +254,8 @@ impl TaskState {
 
     pub fn is_resumable(&self) -> bool {
         match self {
-            TaskState::Running
-            | TaskState::Pending
-            | TaskState::Pausing
-            | TaskState::Done
-            | TaskState::Remove => false,
-            TaskState::Paused | TaskState::Failed(_) => true,
+            TaskState::Running | TaskState::Pausing | TaskState::Done | TaskState::Remove => false,
+            TaskState::Paused | TaskState::Failed(_) | TaskState::Pending => true,
         }
     }
 

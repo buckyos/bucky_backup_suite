@@ -23,9 +23,9 @@ use std::io::Cursor;
 use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncRead;
 use tokio::io::BufWriter;
@@ -372,15 +372,12 @@ impl BackupEngine {
                             }
 
                             let current_state = {
-                                let maybe_task = {
-                                    let all_tasks = self.all_tasks.lock().await;
-                                    all_tasks.get(&task.taskid).cloned()
+                                let task_arc = {
+                                    let mut all_tasks = self.all_tasks.lock().await;
+                                    all_tasks.entry(task.taskid.clone()).or_insert(Arc::new(Mutex::new(task.clone()))).clone()
                                 };
-                                if let Some(task_arc) = maybe_task {
-                                    task_arc.lock().await.state.clone()
-                                } else {
-                                    TaskState::Pending
-                                }
+                                let task_guard = task_arc.lock().await;
+                                task_guard.state.clone()
                             };
 
                             if !matches!(current_state, TaskState::Pending | TaskState::Failed(_)) {
