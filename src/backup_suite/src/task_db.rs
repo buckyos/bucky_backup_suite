@@ -2331,7 +2331,7 @@ mod tests {
         // Test cancel
         db.cancel_task(&task_id).unwrap();
         let cancelled_task = db.load_task_by_id(&task_id).unwrap();
-        assert_eq!(cancelled_task.state, TaskState::Failed);
+        assert!(matches!(cancelled_task.state, TaskState::Failed(_)));
         //db.delete_task(&task_id).unwrap();
     }
 

@@ -2706,9 +2706,9 @@ impl BackupEngine {
         task_id: &str,
         plan: &BackupPlanConfig,
     ) -> BackupResult<Option<String>> {
-        if !matches!(plan.source, BackupSource::Directory(_)) {
-            return Ok(None);
-        }
+        // if !matches!(plan.source, BackupSource::Directory(_)) {
+        //     return Ok(None);
+        // }
 
         let source_path = resolve_plan_source_path(plan_id, plan).ok_or_else(|| {
             BuckyBackupError::Failed(format!(
