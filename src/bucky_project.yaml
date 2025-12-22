@@ -1,0 +1,48 @@
+name: backup-suite
+base_dir: "."
+
+modules:
+  backup_suite:
+    type: rust
+    name: backup_suite
+  backup-lib:
+    type: rust
+    name: backup-lib
+    src_dir: components/backup-lib
+  dir-source:
+    type: rust
+    name: dir-source
+    src_dir: components/dir-source
+  sector:
+    type: rust
+    name: sector
+    src_dir: components/sector
+  webui:
+    type: web
+    name: webui
+    src_dir: webui/
+
+apps:
+  backup_suite:
+    name: backup_suite
+    rootfs: rootfs/
+    default_target_rootfs: "/opt/buckyos/bin/backup_suite"
+    # 安装模式
+    # - update 覆盖安装，当目标目录不存在时，会触发重新安装(install_data,update)
+    # - install 全新安装，相当于先卸载后安装 (clean,install_data,update)
+    
+    # 模块指向的 文件/文件夹，每次update的时候都会覆盖更新 
+    modules:
+      backup_suite: bin/backup_suite/
+      webui: bin/backup_suite/
+    # 数据路径，update的时候如果目标存在，则不会更新
+    data_paths:
+    - data/backup_suite/
+    - logs/backup_suite/
+    # 清理路径，install的时候会删除
+    clean_paths: 
+    - data/backup_suite/ #  TODO:用户数据不应该被删除，这个需要调整服务的可卸载数据到 local/目录
+    - logs/backup_suite/
+
+rust_env:
+  OPENSSL_STATIC: '1'
